@@ -1,0 +1,64 @@
+# IPLAN-01 — Access Surface & Authorization. Upstream: SPEC-01, TDD-01.
+metadata: { schema_version: "1.0", document_type: "iplan-document", layer: 8, total_sections: 6, c4_level: { value: none }, tags: [iplan-document, layer-8-artifact, shared-architecture] }
+
+document_control:
+  iplan_id: "IPLAN-01"
+  subtype: code_build
+  source_spec: "@spec: SPEC-01"
+  status: Draft
+  version: "1.0"
+  date_created: "2026-06-22T00:00:00"
+  last_updated: "2026-06-22T00:00:00"
+  author: "Engramory team"
+  complexity: 4
+  estimated_files: 5
+  session_count: 0
+
+file_manifest:
+  files:
+    - { path: "tests/unit/test_authz.py", order: 1, status: NOT_STARTED, session: null, verified: false }
+    - { path: "src/engramory/access/authz.py", order: 2, status: NOT_STARTED, session: null, verified: false }
+    - { path: "src/engramory/access/surface.py", order: 3, status: NOT_STARTED, session: null, verified: false }
+    - { path: "tests/integration/test_access_surface.py", order: 4, status: NOT_STARTED, session: null, verified: false }
+    - { path: "tests/e2e/test_scope_isolation.py", order: 5, status: NOT_STARTED, session: null, verified: false }
+
+execution_commands:
+  setup:
+    - "source .venv/bin/activate"
+    - "mkdir -p src/engramory/access tests/unit tests/integration tests/e2e tests/security"
+  implementation:
+    - "# TDD: write tests/unit/test_authz.py (default-deny) FIRST"
+    - "# Implement src/engramory/access/authz.py then surface.py (MCP tools, audit, fail-closed)"
+  validation:
+    - "python -m pytest tests/unit/test_authz.py tests/integration/test_access_surface.py tests/e2e/test_scope_isolation.py -v"
+    - "python -m ruff check src/engramory/access"
+
+implementation_contracts:
+  provided:
+    contracts:
+      - { name: "AuthzService", type: "Protocol Interface", note: "authorize(ctx, action, scope) -> AuthzDecision; default deny" }
+      - { name: "AccessSurface tools", type: "DI Interface", note: "memory_search/add, knowledge_ingest exposed over MCP" }
+  consumed:
+    dependencies:
+      - { name: "MemoryPort / StoragePort", from: "@spec: SPEC-06", note: "scoped reads/writes" }
+      - { name: "MemoryStore", from: "@spec: SPEC-02", note: "episode/memory persistence" }
+
+session_handoff:
+  sessions:
+    - date: "2026-06-22"
+      agent: "(unstarted)"
+      files_touched: []
+      partial_work: "None — not started."
+      blockers: "Depends on IPLAN-06 (ports) and IPLAN-02 (store)."
+      next_session_directive: "Begin file order 1: tests/unit/test_authz.py (TDD-01.04.a100 default-deny)."
+      validation_results: { tests_passing: null, coverage: null, lint_clean: false }
+
+traceability:
+  upstream:
+    spec_references: ["@spec: SPEC-01"]
+    tdd_references: ["@tdd: TDD-01"]
+  downstream:
+    code_paths: ["@code: src/engramory/access/"]
+    test_paths: ["@tests: tests/unit/test_authz.py", "@tests: tests/e2e/test_scope_isolation.py"]
+  code_inventory:
+    files: []

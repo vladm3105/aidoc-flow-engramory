@@ -1,0 +1,126 @@
+# ADR-04 — LiteLLM as the single model gateway. Conformant form of docs/adr/0004.
+id: ADR-04
+title: "LiteLLM as the single model gateway"
+
+metadata:
+  schema_version: "1.0"
+  document_type: "adr-document"
+  layer: 5
+  lifecycle: mvp-prod-newmvp
+  id_standard: { format: "{doc_type}.{doc_id}.{section_id}.{hash}", hash_algorithm: SHA256, hash_length: 4 }
+
+document_control:
+  status: Accepted
+  date: "2026-06-22"
+  decision_makers: ["Technical Lead"]
+  author: "Engramory team"
+  version: "1.0"
+  originating_topic: "@prd: PRD.01.09.b200"
+  brd_reference: "@brd: BRD.01.08.f600"
+  spec_ready_score: "[Pending]/100"
+  revision_history:
+    - { version: "1.0", date: "2026-06-22T00:00:00", author: "Engramory team", changes: "Initial ADR (from docs/adr/0004)." }
+
+context:
+  problem_statement: |
+    Retrieval and the distillation loop need embeddings + generation without binding
+    to a provider; dev should be free/local, cloud should use managed models (PRD AI/ML topic).
+  business_driver: "Provider portability; $0 dev model cost."
+  key_constraints: ["Dev = local models", "Cloud = Vertex or Azure OpenAI"]
+  technical_context: "EARS.01.03.a100/d400 (retrieval/distillation) consume models; must record embedding model+dims for re-embedding (ADR-05)."
+
+decision:
+  chosen_solution:
+    id: "ADR.04.03.a100"
+    title: "Route all model calls through a self-hosted LiteLLM gateway (LLMPort)"
+    description: |
+      All embedding/generation calls go through a self-hosted LiteLLM proxy
+      (OpenAI-compatible) behind LLMPort. Dev points it at Ollama; cloud points it at
+      Vertex AI or Azure OpenAI — a config change, not a code change.
+  key_components:
+    - { name: "LiteLLM proxy", role: "Single OpenAI-compatible model endpoint" }
+    - { name: "LLMPort", role: "Core interface to the gateway" }
+  implementation_approach:
+    mvp_scope: "LiteLLM + Ollama (local) for embeddings + generation."
+    next_cycle_scope: "Point gateway at Vertex/Azure (BRD-02)."
+  reversibility: "two-way"
+
+alternatives:
+  options:
+    - id: "ADR.04.04.a100"
+      name: "LiteLLM gateway"
+      selected: true
+      description: "One OpenAI-compatible endpoint routing to any provider."
+      pros: ["Provider swap by config", "Local in dev (free)", "Cost tracking/budgets/keys"]
+      cons: ["One more service to run"]
+      estimated_cost: "$0 dev"
+      fit: Best
+    - id: "ADR.04.04.b200"
+      name: "Direct provider SDKs"
+      selected: false
+      description: "Call OpenAI/Vertex/Azure SDKs directly."
+      pros: ["Fewer moving parts"]
+      cons: ["Provider lock-in; code change to switch; no central budgets"]
+      rejection_reason: "Couples core to a provider — conflicts with portability (ADR-02)."
+      estimated_cost: "$ varies"
+      fit: Poor
+
+consequences:
+  positive_outcomes:
+    - { id: "ADR.04.05.a100", outcome: "Dev→cloud model switch is configuration; central cost/budget control." }
+  tradeoffs_and_risks:
+    - { id: "ADR.04.05.b200", tradeoff: "Gateway is a dependency on the call path", impact: Low, mitigation: "Run gateway co-located; health-check; it's stateless." }
+  what_breaks_if_wrong: "If the gateway is down, retrieval/distillation that need models stall — fail closed (ADR-06), retryable."
+  cost_estimate: { mvp_cost: "$0", ongoing_monthly: "$0 dev", notes: "Model cost on cloud only." }
+
+architecture_flow:
+  decision_sequence:
+    intent: { diagram_type: sequence, scope_boundary: "core ↔ LLMPort ↔ gateway", upstream_refs: "BDD.01.03.d400", downstream_refs: "SPEC distillation + embedding" }
+    tag: "@diagram: sequence-sync"
+    diagram:
+      type: sequenceDiagram
+      content: |
+        sequenceDiagram
+            participant Core
+            participant LLMPort
+            participant LiteLLM
+            participant Model as Ollama | Vertex | Azure
+            Core->>LLMPort: embed(text) / generate(prompt)
+            LLMPort->>LiteLLM: OpenAI-format request
+            LiteLLM->>Model: provider call
+            Model-->>LiteLLM: response
+            LiteLLM-->>Core: embedding / completion
+  integration_points:
+    - { system: "Model providers", integration_type: "REST", purpose: "Embeddings + generation via gateway." }
+
+implementation_assessment:
+  mvp_phases:
+    - { phase: "LiteLLM + Ollama", scope: "embed + chat models", risk: "Local model quality" }
+  rollback_plan: { strategy: "Repoint gateway config to a different provider/model", trigger: "Provider outage/quality", estimated_effort: "Config change" }
+  monitoring_baseline:
+    - { metric: "gateway error rate", target: "<1%", alert_threshold: ">1%" }
+
+verification:
+  success_criteria:
+    - { criterion: "Provider switch needs no core code change", measurement: "Swap dev→mock cloud via config" }
+  bdd_scenario_refs: { scenarios: ["@bdd: BDD.01.03.d400"] }
+
+traceability:
+  tags: ["@adr: ADR-04"]
+  originating_topic: "@prd: PRD.01.09.b200"
+  upstream:
+    bdd_references: ["@bdd: BDD.01.03.d400", "@bdd: BDD.01.03.a100"]
+    ears_references: ["@ears: EARS.01.03.a100", "@ears: EARS.01.03.d400"]
+  downstream_expected:
+    - { type: SPEC, layer: 6, description: "LLMPort contract + distillation/embedding specs." }
+  cross_links: { depends: [], discoverability: ["@discoverability: ADR-02 (ports)"] }
+  health_score: { spec_ready: "[Pending]%", target_score: ">=90/100" }
+
+related_decisions:
+  dependencies:
+    - { adr: "ADR-02", relationship: "Depends on", rationale: "Gateway sits behind LLMPort." }
+  supersedes: { items: [] }
+
+glossary:
+  terms:
+    - { term: "LiteLLM", definition: "Self-hosted OpenAI-compatible gateway routing to 100+ model providers." }

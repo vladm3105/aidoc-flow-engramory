@@ -1,0 +1,60 @@
+# IPLAN-03 — Retrieval & Graph. Upstream: SPEC-03, TDD-03.
+metadata: { schema_version: "1.0", document_type: "iplan-document", layer: 8, total_sections: 6, c4_level: { value: none }, tags: [iplan-document, layer-8-artifact, shared-architecture] }
+
+document_control:
+  iplan_id: "IPLAN-03"
+  subtype: code_build
+  source_spec: "@spec: SPEC-03"
+  status: Draft
+  version: "1.0"
+  date_created: "2026-06-22T00:00:00"
+  last_updated: "2026-06-22T00:00:00"
+  author: "Engramory team"
+  complexity: 3
+  estimated_files: 4
+  session_count: 0
+
+file_manifest:
+  files:
+    - { path: "tests/unit/test_ranking.py", order: 1, status: NOT_STARTED, session: null, verified: false }
+    - { path: "src/engramory/core/retrieval.py", order: 2, status: NOT_STARTED, session: null, verified: false }
+    - { path: "tests/integration/test_retrieval_failclosed.py", order: 3, status: NOT_STARTED, session: null, verified: false }
+    - { path: "tests/e2e/test_retrieval_latency.py", order: 4, status: NOT_STARTED, session: null, verified: false }
+
+execution_commands:
+  setup: ["source .venv/bin/activate"]
+  implementation:
+    - "# TDD: tests/unit/test_ranking.py (fusion + advisory exclusion) FIRST"
+    - "# Implement src/engramory/core/retrieval.py (vector + GraphPort fusion, fail-closed)"
+  validation:
+    - "python -m pytest tests/unit/test_ranking.py tests/integration/test_retrieval_failclosed.py tests/e2e/test_retrieval_latency.py -v"
+    - "python -m ruff check src/engramory/core/retrieval.py"
+
+implementation_contracts:
+  provided:
+    contracts:
+      - { name: "RetrievalService", type: "Protocol Interface", note: "retrieve(scope, query, k); traverse(scope, entity, hops)" }
+  consumed:
+    dependencies:
+      - { name: "VectorPort / GraphPort", from: "@spec: SPEC-06", note: "similarity + traversal" }
+      - { name: "Repository (MemoryStore)", from: "@spec: SPEC-02", note: "candidate memories" }
+
+session_handoff:
+  sessions:
+    - date: "2026-06-22"
+      agent: "(unstarted)"
+      files_touched: []
+      partial_work: "None."
+      blockers: "Depends on IPLAN-02 (store) and IPLAN-06 (ports)."
+      next_session_directive: "File order 1: tests/unit/test_ranking.py (TDD-03.04.a100)."
+      validation_results: { tests_passing: null, coverage: null, lint_clean: false }
+
+traceability:
+  upstream:
+    spec_references: ["@spec: SPEC-03"]
+    tdd_references: ["@tdd: TDD-03"]
+  downstream:
+    code_paths: ["@code: src/engramory/core/retrieval.py"]
+    test_paths: ["@tests: tests/e2e/test_retrieval_latency.py"]
+  code_inventory:
+    files: []

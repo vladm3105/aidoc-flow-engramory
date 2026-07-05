@@ -1,0 +1,48 @@
+# BRD-06 — Observability & Operations  (DRAFT SKETCH — scope only)
+# SKETCH: business scope only. NO downstream layers until MVP-6 begins.
+id: BRD-06
+title: "Observability & Operations"
+
+metadata:
+  schema_version: "1.0"
+  document_type: "brd-document"
+  layer: 1
+  brd_type: { value: feature }
+  status_marker: sketch
+  c4_level: { value: context }
+
+document_control:
+  project_name: "Engramory (aidoc-flow-engramory)"
+  version: "0.1"
+  status: Draft
+  date_created: "2026-06-22T00:00:00"
+  author: "Engramory team"
+
+introduction:
+  business_context: |
+    Running Engramory as a shared service needs operator-grade visibility and a human-facing way
+    to inspect memory provenance and audits.
+  purpose: "Define requirements for observability (metrics/logs/traces, SLOs, alerting) and an audit/provenance browser."
+  document_scope:
+    in_scope: ["SLOs + dashboards", "Alerting on memory/retrieval/distillation health", "Provenance/audit browser (read-only)", "Operator runbooks"]
+    out_of_scope: ["Baseline OTel hooks (BRD-01)", "Security controls (BRD-05)"]
+
+business_objectives:
+  hypothesis:
+    statement: "Operators can run Engramory confidently with SLO dashboards and a provenance/audit view."
+  goals:
+    - { statement: "SLOs defined + monitored", target: "Retrieval p95, distillation health, availability" }
+    - { statement: "Human audit of memory provenance", target: "Any memory traceable to source via UI" }
+
+project_scope:
+  core_features:
+    p1_must_have: ["SLO dashboards", "Alerting + on-call runbooks", "Provenance/audit browser", "Health metrics for distillation/retrieval"]
+    p2_should_have: ["Usage analytics per agent/project", "Capacity forecasting"]
+  out_of_scope: { items: ["Brain export tooling (BRD-07)"] }
+
+traceability:
+  tags: ["@brd: BRD-06"]
+  cross_links: { depends: ["@depends: BRD-01"] }
+  downstream_expected: []
+
+_sketch_note: "Draft sketch. Expand to full BRD when MVP-6 begins."

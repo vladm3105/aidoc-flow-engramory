@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Env / secrets
+.env
+*.local
+secrets/
+*.key
+*.pem
+
+# Data / volumes
+data/
+volumes/
+*.dump
+*.sqlite
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Build
+dist/
+build/
+node_modules/

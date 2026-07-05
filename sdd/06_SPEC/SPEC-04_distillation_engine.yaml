@@ -1,0 +1,97 @@
+# SPEC-04 — Distillation Engine (C4-L3). Upstream: ADR-04, ADR-05.
+metadata:
+  schema_version: "1.0"
+  document_type: "spec-document"
+  layer: 6
+  total_sections: 8
+  deliverable_type: code
+  c4_level: { value: component }
+  id_standard: { format: "{doc_type}.{doc_id}.{section_id}.{hash}", hash_algorithm: SHA256, hash_length: 4 }
+  tags: [spec-document, layer-6-artifact, shared-architecture]
+
+id: SPEC-04
+title: "Distillation Engine"
+
+document_control:
+  status: Draft
+  version: "1.0"
+  date_created: "2026-06-22T00:00:00"
+  last_updated: "2026-06-22T00:00:00"
+  author: "Engramory team"
+  component: "DistillationEngine"
+  tdd_ready_score: "[Pending]/100"
+
+component_overview:
+  description: |
+    Background worker that runs reflection (episodes → long-term memory) and consolidation
+    (merge, generalize, end-date, quarantine low-confidence). Uses LLMPort for summarization/
+    embedding. Emits observable consolidation_run records. May wrap an external memory engine
+    (LangMem/Cipher/Mem0) as the MemoryPort adapter, with Postgres canonical.
+  architecture_decision: "@adr: ADR-05"
+  diagram:
+    tags: ["@diagram: c4-l3", "@diagram: dfd-l3"]
+    mermaid: |
+      flowchart LR
+        Scheduler --> DistillationEngine
+        DistillationEngine --> MemoryStore
+        DistillationEngine --> LLMPort
+        DistillationEngine --> AuditSink
+  language: "Python"
+  dependencies:
+    - { name: "LLMPort (SPEC-06)", version: "internal", purpose: "Summarize/embed via gateway" }
+    - { name: "MemoryStore (SPEC-02)", version: "internal", purpose: "Read episodes / write memories" }
+
+interfaces:
+  exports:
+    - name: "reflect"
+      type: "async function"
+      signature: "async def reflect(agent_id: str, project_id: str | None) -> int"
+      description: "Promote recent episodes into distilled long-term memories. Returns count."
+      errors: ["LLMUnavailable: retryable"]
+    - name: "consolidate"
+      type: "async function"
+      signature: "async def consolidate(agent_id: str) -> ConsolidationStats"
+      description: "Compact long-term memory: merge/generalize/end-date/quarantine."
+      errors: ["LLMUnavailable: retryable"]
+
+data_models:
+  models:
+    - name: "ConsolidationStats"
+      type: "dataclass"
+      fields:
+        - { name: "merged", type: "int", required: true, description: "Memories merged" }
+        - { name: "expired", type: "int", required: true, description: "End-dated facts" }
+        - { name: "quarantined", type: "int", required: true, description: "Low-confidence lessons" }
+        - { name: "run_id", type: "str", required: true, description: "Observable consolidation_run id" }
+
+behavior:
+  validation_rules:
+    - { rule: "Consolidation runs every @threshold:PRD.01.rate.consolidation_cadence (20 new memories)", source: "@ears: EARS.01.03.d400" }
+    - { rule: "Low-confidence lessons marked advisory-only, provenance retained", source: "@ears: EARS.01.03.b800" }
+  state_transitions:
+    - { from: "Episodes", to: "DistilledMemory", trigger: "reflection pass", source: "@bdd: BDD.01.03.d400" }
+    - { from: "Lesson", to: "AdvisoryOnly", trigger: "confidence < floor", source: "@bdd: BDD.01.03.a700" }
+  error_handling:
+    - { condition: "LLM gateway unavailable", response: "Retry with backoff; no partial writes (at-least-once per episode, idempotent)", source: "@bdd: BDD.01.03.d400" }
+
+implementation_notes:
+  constraints: ["Idempotent per episode (content hash)", "No deletes — end-date/supersede", "Keep content_raw for re-embedding"]
+  patterns: ["Reflection then periodic consolidation ('sleep')", "Pluggable MemoryPort engine over Postgres canonical"]
+  performance_considerations: ["Batch LLM calls; cap consolidation working set"]
+
+tdd_contracts:
+  tdd_document: "@tdd: TDD-04"
+  test_files:
+    - { path: "tests/unit/test_consolidation.py", covers: "merge/expire/quarantine logic" }
+    - { path: "tests/integration/test_reflection.py", covers: "episode → memory + cadence" }
+
+traceability:
+  tags: ["@spec: SPEC-04"]
+  upstream:
+    adr_references: ["@adr: ADR.04.03.a100", "@adr: ADR.05.03.a100"]
+    bdd_references: ["@bdd: BDD.01.03.d400", "@bdd: BDD.01.03.a700"]
+    ears_references: ["@ears: EARS.01.03.d400", "@ears: EARS.01.03.b800", "@ears: EARS.01.03.e500"]
+  downstream:
+    - { type: TDD, layer: 7, description: "Distillation/consolidation tests" }
+    - { type: IPLAN, layer: 8, description: "Worker implementation" }
+  health_score: { tdd_ready: "[Pending]%", target_score: ">=90/100" }

@@ -1,0 +1,112 @@
+# SPEC-05 — Framework KB Compatibility / ucx_kb replacement (C4-L3). Upstream: ADR-06.
+metadata:
+  schema_version: "1.0"
+  document_type: "spec-document"
+  layer: 6
+  total_sections: 8
+  deliverable_type: code
+  c4_level: { value: component }
+  id_standard: { format: "{doc_type}.{doc_id}.{section_id}.{hash}", hash_algorithm: SHA256, hash_length: 4 }
+  tags: [spec-document, layer-6-artifact, shared-architecture]
+
+id: SPEC-05
+title: "Framework KB Compatibility (ucx_kb replacement)"
+
+document_control:
+  status: Draft
+  version: "1.0"
+  date_created: "2026-06-22T00:00:00"
+  last_updated: "2026-06-22T00:00:00"
+  author: "Engramory team"
+  component: "KBCompatibility"
+  tdd_ready_score: "[Pending]/100"
+
+component_overview:
+  description: |
+    Replaces ucx_kb: represents SDD artifacts (BRD…IPLAN, decisions) as KB entries,
+    enforces KB coverage rules, maintains the cumulative-tag traceability graph, performs
+    governed ingestion/maintenance (writes only on approved evidence), and exposes Hermes-
+    compatible skills (kb-context retrieval enrichment, kb-maintenance). Advisory for SDD
+    artifacts — lifecycle gates remain source of truth.
+  architecture_decision: "@adr: ADR-06"
+  diagram:
+    tags: ["@diagram: c4-l3", "@diagram: dfd-l3"]
+    mermaid: |
+      flowchart LR
+        Hermes --> KBCompatibility
+        KBCompatibility --> MemoryStore
+        KBCompatibility --> GraphPort
+        KBCompatibility --> AccessSurface
+  language: "Python"
+  dependencies:
+    - { name: "MemoryStore (SPEC-02)", version: "internal", purpose: "KB section persistence" }
+    - { name: "GraphPort (SPEC-06)", version: "internal", purpose: "Traceability lineage graph" }
+
+interfaces:
+  exports:
+    - name: "ingest_artifact"
+      type: "async function"
+      signature: "async def ingest_artifact(entry: SDDArtifactEntry, evidence_ref: str) -> EntryId"
+      description: "Create/update an SDD-artifact KB entry + traceability links (governed; requires evidence_ref)."
+      errors: ["GovernedWriteRejected: missing/invalid evidence_ref"]
+    - name: "check_coverage"
+      type: "function"
+      signature: "def check_coverage(project: str) -> CoverageReport"
+      description: "Enforce ucx_kb coverage rules; report missing KB representation."
+      errors: []
+    - name: "kb_context"
+      type: "async function"
+      signature: "async def kb_context(scope: Scope, query: str) -> list[KBHit]"
+      description: "Hermes ucx-kb-context parity: retrieval enrichment before create/review/remediate."
+      errors: []
+    - name: "kb_maintain"
+      type: "async function"
+      signature: "async def kb_maintain(update: KBUpdate, evidence_ref: str) -> None"
+      description: "Hermes ucx-kb-maintenance parity: governed KB update after approved IPLAN evidence."
+      errors: ["GovernedWriteRejected"]
+
+data_models:
+  models:
+    - name: "SDDArtifactEntry"
+      type: "dataclass"
+      fields:
+        - { name: "artifact_id", type: "str", required: true, description: "e.g., BRD-01, SPEC-03" }
+        - { name: "layer", type: "int", required: true, description: "1..8" }
+        - { name: "tags", type: "list[str]", required: true, description: "Cumulative @-tags" }
+        - { name: "text", type: "str", required: true, description: "Entry content" }
+    - name: "CoverageReport"
+      type: "dataclass"
+      fields:
+        - { name: "missing", type: "list[str]", required: true, description: "Artifacts lacking KB representation" }
+        - { name: "ok", type: "bool", required: true, description: "All coverage rules satisfied" }
+
+behavior:
+  validation_rules:
+    - { rule: "SDD-artifact KB writes require approved-evidence reference", source: "@ears: EARS.01.03.a700" }
+    - { rule: "Approved artifacts must have KB representation (coverage rules)", source: "@ears: EARS.01.03.c300" }
+  state_transitions:
+    - { from: "ApprovedArtifact", to: "KBEntry", trigger: "ingest_artifact with evidence", source: "@bdd: BDD.01.03.c300" }
+  error_handling:
+    - { condition: "Write without evidence", response: "Reject + audit (governed write)", source: "@bdd: BDD.01.03.f600" }
+
+implementation_notes:
+  constraints: ["Advisory for SDD artifacts — never overrides lifecycle gates", "Traceability graph mirrors cumulative @-tags"]
+  patterns: ["Hermes skill adapters (kb-context, kb-maintenance)", "Coverage as a conformance check"]
+  performance_considerations: ["Incremental coverage checks per artifact"]
+
+tdd_contracts:
+  tdd_document: "@tdd: TDD-05"
+  test_files:
+    - { path: "tests/integration/test_coverage_rules.py", covers: "ucx_kb coverage parity" }
+    - { path: "tests/integration/test_governed_ingest.py", covers: "BDD.01.03.f600 governed write" }
+
+traceability:
+  tags: ["@spec: SPEC-05"]
+  upstream:
+    adr_references: ["@adr: ADR.06.03.a100"]
+    bdd_references: ["@bdd: BDD.01.03.c300", "@bdd: BDD.01.03.f600"]
+    ears_references: ["@ears: EARS.01.03.c300", "@ears: EARS.01.03.a700"]
+  downstream:
+    - { type: TDD, layer: 7, description: "ucx_kb parity + governed-ingest tests" }
+    - { type: IPLAN, layer: 8, description: "KB compatibility + Hermes skill adapters" }
+  health_score: { tdd_ready: "[Pending]%", target_score: ">=90/100" }

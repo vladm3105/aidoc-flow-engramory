@@ -1,0 +1,65 @@
+# IPLAN-02 — Knowledge & Memory Store. Upstream: SPEC-02, TDD-02.
+metadata: { schema_version: "1.0", document_type: "iplan-document", layer: 8, total_sections: 6, c4_level: { value: none }, tags: [iplan-document, layer-8-artifact, shared-architecture] }
+
+document_control:
+  iplan_id: "IPLAN-02"
+  subtype: code_build
+  source_spec: "@spec: SPEC-02"
+  status: Draft
+  version: "1.0"
+  date_created: "2026-06-22T00:00:00"
+  last_updated: "2026-06-22T00:00:00"
+  author: "Engramory team"
+  complexity: 4
+  estimated_files: 5
+  session_count: 0
+
+file_manifest:
+  files:
+    - { path: "tests/unit/test_models.py", order: 1, status: NOT_STARTED, session: null, verified: false }
+    - { path: "src/engramory/core/models.py", order: 2, status: NOT_STARTED, session: null, verified: false }
+    - { path: "db/migrations/0001_init_memory.sql", order: 3, status: DONE, session: "scaffold", verified: false }
+    - { path: "src/engramory/core/repository.py", order: 4, status: NOT_STARTED, session: null, verified: false }
+    - { path: "tests/integration/test_repository.py", order: 5, status: NOT_STARTED, session: null, verified: false }
+
+execution_commands:
+  setup:
+    - "source .venv/bin/activate"
+    - "docker compose up -d postgres"
+    - "make migrate   # applies db/migrations/0001_init_memory.sql"
+  implementation:
+    - "# TDD: write tests/unit/test_models.py (provenance + idempotency) FIRST"
+    - "# Implement src/engramory/core/models.py then repository.py over StoragePort/VectorPort"
+  validation:
+    - "python -m pytest tests/unit/test_models.py tests/integration/test_repository.py -v"
+    - "python -m mypy src/engramory/core --strict && python -m ruff check src/engramory/core"
+
+implementation_contracts:
+  provided:
+    contracts:
+      - { name: "Episode/Memory/KBSection/AgentProfile", type: "Data Model", note: "typed contracts; Memory keeps content_raw+provenance+embedding_model" }
+      - { name: "Repository", type: "Protocol Interface", note: "add_episode (idempotent), get_memories, upsert_memory (soft-supersede), upsert_kb_section" }
+  consumed:
+    dependencies:
+      - { name: "StoragePort / VectorPort", from: "@spec: SPEC-06", note: "persistence + vector index" }
+
+session_handoff:
+  sessions:
+    - date: "2026-06-22"
+      agent: "(unstarted)"
+      files_touched: []
+      partial_work: "Schema scaffold exists (db/migrations/0001_init_memory.sql); models/repository not implemented."
+      blockers: "Depends on IPLAN-06 (StoragePort/VectorPort)."
+      next_session_directive: "File order 1: tests/unit/test_models.py (TDD-02.04.a100/a200)."
+      validation_results: { tests_passing: null, coverage: null, lint_clean: false }
+
+traceability:
+  upstream:
+    spec_references: ["@spec: SPEC-02"]
+    tdd_references: ["@tdd: TDD-02"]
+  downstream:
+    code_paths: ["@code: src/engramory/core/", "@code: db/migrations/"]
+    test_paths: ["@tests: tests/unit/test_models.py", "@tests: tests/integration/test_repository.py"]
+  code_inventory:
+    files:
+      - { path: "db/migrations/0001_init_memory.sql", status: created, session: "scaffold", verified: false }

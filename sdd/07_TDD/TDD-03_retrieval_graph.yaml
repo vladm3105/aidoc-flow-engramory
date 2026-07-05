@@ -1,0 +1,85 @@
+# TDD-03 — Retrieval & Graph. Upstream: SPEC-03, ADR-03, BDD, EARS.
+metadata: { schema_version: "1.0", document_type: "tdd-document", layer: 7, total_sections: 7, deliverable_type: code, c4_level: { value: none }, id_standard: { format: "{doc_type}.{doc_id}.{section_id}.{hash}", hash_algorithm: SHA256, hash_length: 4 }, tags: [tdd-document, layer-7-artifact, shared-architecture] }
+id: TDD-03
+title: "Retrieval & Graph — Test Guide"
+
+document_control: { status: Draft, version: "1.0", date_created: "2026-06-22T00:00:00", last_updated: "2026-06-22T00:00:00", author: "Engramory team", component: "RetrievalService", iplan_ready_score: "[Pending]/100" }
+
+test_pyramid: { distribution: { unit: 55, integration: 20, e2e: 25 } }
+
+test_mapping:
+  scenarios:
+    - bdd_scenario: "@bdd: BDD.01.03.a100"
+      description: "Scoped retrieval within p95 with provenance"
+      tests:
+        - { type: unit, file: "tests/unit/test_ranking.py", function: "test_fusion_and_advisory_exclusion", status: pending }
+        - { type: e2e, file: "tests/e2e/test_retrieval_latency.py", function: "test_retrieve_p95_e2e", status: pending }
+    - bdd_scenario: "@bdd: BDD.01.03.b800"
+      description: "Fail closed on store unavailable"
+      tests: [{ type: integration, file: "tests/integration/test_retrieval_failclosed.py", function: "test_failclosed", status: pending }]
+    - bdd_scenario: "@bdd: BDD.01.03.e500"
+      description: "Out-of-scope target denied"
+      tests: [{ type: e2e, file: "tests/e2e/test_scope_isolation.py", function: "test_retrieve_out_of_scope_denied", status: pending }]
+  coverage_table:
+    columns: [BDD Scenario, Unit, Integration, E2E, Total]
+    rows: [["BDD.01.03.a100", 1, 0, 1, 2], ["BDD.01.03.b800", 0, 1, 0, 1], ["BDD.01.03.e500", 0, 0, 1, 1]]
+
+test_cases:
+  unit_tests:
+    cases:
+      - id: "TDD.03.04.a100"
+        name: "advisory-only memories excluded by default; fusion ranks hits"
+        spec_ref: "@spec: SPEC-03"
+        target: "retrieve"
+        test_file: "tests/unit/test_ranking.py"
+        test_function: "test_fusion_and_advisory_exclusion"
+        inputs: [{ name: "candidates", type: "list[Memory]", value: "1 advisory-only + 2 confirmed" }]
+        expected_output: { type: "list[MemoryHit]", value: "advisory excluded; ranked by fused score" }
+        edge_cases: [{ condition: "empty corpus", expected: "[]" }]
+  integration_tests:
+    cases:
+      - id: "TDD.03.04.b100"
+        name: "fail closed when canonical store unavailable"
+        spec_ref: "@spec: SPEC-03"
+        contract: "retrieve fails closed"
+        test_file: "tests/integration/test_retrieval_failclosed.py"
+        test_function: "test_failclosed"
+        setup: ["inject StoreUnavailable"]
+        action: { description: "call retrieve" }
+        expected_state: ["retryable error within 500 ms", "no stale/unscoped data"]
+        error_paths: [{ condition: "store down", expected_error: "StoreUnavailable" }]
+  e2e_tests:
+    cases:
+      - id: "TDD.03.04.c100"
+        name: "retrieval p95 within threshold"
+        bdd_ref: "@bdd: BDD.01.03.a100"
+        spec_ref: "@spec: SPEC-03"
+        test_file: "tests/e2e/test_retrieval_latency.py"
+        test_function: "test_retrieve_p95_e2e"
+        workflow:
+          - { step: 1, action: "issue 200 scoped retrievals", expected: "p95 < 800 ms" }
+        timeout_seconds: 120
+        cleanup: "reset corpus"
+
+thresholds:
+  unit: { coverage_target: ">=90%", pass_criteria: ["All pass"], fail_action: "Block merge" }
+  integration: { coverage_target: ">=85%", pass_criteria: ["Fail-closed verified"], fail_action: "Block merge" }
+  e2e: { coverage_target: ">=75% happy paths", timeout_budget: "<=300s", pass_criteria: ["p95 within @threshold:PRD.01.perf.retrieval_p95"], fail_action: "Block deploy to staging" }
+
+tdd_order:
+  phases:
+    - { phase: 1, name: "Write Tests", action: "Tests first", output: "Test files" }
+    - { phase: 2, name: "Red", action: "Confirm fail", output: "Failure report" }
+    - { phase: 3, name: "Implement", action: "Make pass", output: "Implementation" }
+    - { phase: 4, name: "Green", action: "All pass", output: "Pass report" }
+    - { phase: 5, name: "Refactor", action: "Stay green", output: "Refactored code" }
+
+traceability:
+  tags: ["@tdd: TDD-03"]
+  upstream:
+    spec_references: ["@spec: SPEC-03"]
+    adr_references: ["@adr: ADR.03.03.a100"]
+    bdd_references: ["@bdd: BDD.01.03.a100", "@bdd: BDD.01.03.b800", "@bdd: BDD.01.03.e500"]
+    ears_references: ["@ears: EARS.01.03.a100", "@ears: EARS.01.03.c900", "@ears: EARS.01.03.f600"]
+  downstream: [{ type: IPLAN, layer: 8, description: "Retrieval service implementation plan" }]
+  health_score: { iplan_ready: "[Pending]%", target_score: ">=90/100" }

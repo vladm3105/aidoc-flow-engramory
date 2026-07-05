@@ -1,0 +1,81 @@
+# TDD-02 — Knowledge & Memory Store. Upstream: SPEC-02, ADR-01/05, BDD, EARS.
+metadata: { schema_version: "1.0", document_type: "tdd-document", layer: 7, total_sections: 7, deliverable_type: code, c4_level: { value: none }, id_standard: { format: "{doc_type}.{doc_id}.{section_id}.{hash}", hash_algorithm: SHA256, hash_length: 4 }, tags: [tdd-document, layer-7-artifact, shared-architecture] }
+id: TDD-02
+title: "Knowledge & Memory Store — Test Guide"
+
+document_control: { status: Draft, version: "1.0", date_created: "2026-06-22T00:00:00", last_updated: "2026-06-22T00:00:00", author: "Engramory team", component: "MemoryStore", iplan_ready_score: "[Pending]/100" }
+
+test_pyramid: { distribution: { unit: 70, integration: 25, e2e: 5 } }
+
+test_mapping:
+  scenarios:
+    - bdd_scenario: "@bdd: BDD.01.03.b200"
+      description: "Episode capture acknowledged"
+      tests: [{ type: integration, file: "tests/integration/test_repository.py", function: "test_add_episode", status: pending }]
+    - bdd_scenario: "@bdd: BDD.01.03.c900"
+      description: "Idempotent episode persistence"
+      tests: [{ type: unit, file: "tests/unit/test_models.py", function: "test_idempotent_episode", status: pending }]
+    - bdd_scenario: "@bdd: BDD.01.03.d010"
+      description: "Canonical store remains source of truth (accelerator cache-only)"
+      tests: [{ type: integration, file: "tests/integration/test_repository.py", function: "test_canonical_truth", status: pending }]
+  coverage_table:
+    columns: [BDD Scenario, Unit, Integration, E2E, Total]
+    rows: [["BDD.01.03.b200", 0, 1, 0, 1], ["BDD.01.03.c900", 1, 0, 0, 1], ["BDD.01.03.d010", 0, 1, 0, 1]]
+
+test_cases:
+  unit_tests:
+    cases:
+      - id: "TDD.02.04.a100"
+        name: "Memory requires provenance + embedding_model"
+        spec_ref: "@spec: SPEC-02"
+        target: "Memory"
+        test_file: "tests/unit/test_models.py"
+        test_function: "test_memory_invariants"
+        inputs: [{ name: "memory", type: "Memory", value: "provenance={}, embedding_model=None" }]
+        expected_output: { type: "ValidationError", value: "provenance and embedding_model required" }
+        edge_cases: [{ condition: "missing content_raw", expected: "ValidationError" }]
+      - id: "TDD.02.04.a200"
+        name: "Idempotent episode by content hash"
+        spec_ref: "@spec: SPEC-02"
+        target: "add_episode"
+        test_file: "tests/unit/test_models.py"
+        test_function: "test_idempotent_episode"
+        inputs: [{ name: "episode", type: "EpisodeIn", value: "same content+scope x3" }]
+        expected_output: { type: "int", value: "1 stored" }
+        edge_cases: [{ condition: "different scope same content", expected: "2 stored" }]
+  integration_tests:
+    cases:
+      - id: "TDD.02.04.b100"
+        name: "supersede end-dates predecessor, keeps content_raw"
+        spec_ref: "@spec: SPEC-02"
+        contract: "upsert_memory soft-supersede"
+        test_file: "tests/integration/test_repository.py"
+        test_function: "test_supersede"
+        setup: ["seed memory M1"]
+        action: { description: "upsert correction M2 supersedes M1" }
+        expected_state: ["M1.valid_to set", "M1.content_raw retained", "M2.supersedes=M1"]
+        error_paths: [{ condition: "store down", expected_error: "StoreUnavailable" }]
+  e2e_tests: { cases: [] }
+
+thresholds:
+  unit: { coverage_target: ">=90%", pass_criteria: ["All pass"], fail_action: "Block merge" }
+  integration: { coverage_target: ">=85%", pass_criteria: ["Contract validation passes"], fail_action: "Block merge" }
+  e2e: { coverage_target: "N/A", timeout_budget: "<=300s", pass_criteria: ["N/A"], fail_action: "N/A" }
+
+tdd_order:
+  phases:
+    - { phase: 1, name: "Write Tests", action: "Generate test files first", output: "Test files" }
+    - { phase: 2, name: "Run (Red)", action: "Confirm failure", output: "Failure report" }
+    - { phase: 3, name: "Implement", action: "Make pass", output: "Implementation" }
+    - { phase: 4, name: "Verify (Green)", action: "All pass", output: "Pass report" }
+    - { phase: 5, name: "Refactor", action: "Stay green", output: "Refactored code" }
+
+traceability:
+  tags: ["@tdd: TDD-02"]
+  upstream:
+    spec_references: ["@spec: SPEC-02"]
+    adr_references: ["@adr: ADR.01.03.a100", "@adr: ADR.05.03.a100"]
+    bdd_references: ["@bdd: BDD.01.03.b200", "@bdd: BDD.01.03.c900", "@bdd: BDD.01.03.d010"]
+    ears_references: ["@ears: EARS.01.03.f030", "@ears: EARS.01.03.a040", "@ears: EARS.01.03.e500"]
+  downstream: [{ type: IPLAN, layer: 8, description: "Schema migration + repository implementation plan" }]
+  health_score: { iplan_ready: "[Pending]%", target_score: ">=90/100" }

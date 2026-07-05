@@ -1,0 +1,81 @@
+# TDD-06 — Ports & Portability. Upstream: SPEC-06, ADR-02/05, BDD, EARS.
+metadata: { schema_version: "1.0", document_type: "tdd-document", layer: 7, total_sections: 7, deliverable_type: code, c4_level: { value: none }, id_standard: { format: "{doc_type}.{doc_id}.{section_id}.{hash}", hash_algorithm: SHA256, hash_length: 4 }, tags: [tdd-document, layer-7-artifact, shared-architecture] }
+id: TDD-06
+title: "Ports & Portability — Test Guide"
+
+document_control: { status: Draft, version: "1.0", date_created: "2026-06-22T00:00:00", last_updated: "2026-06-22T00:00:00", author: "Engramory team", component: "PortsAndAdapters", iplan_ready_score: "[Pending]/100" }
+
+test_pyramid: { distribution: { unit: 40, integration: 45, e2e: 15 } }
+
+test_mapping:
+  scenarios:
+    - bdd_scenario: "@bdd: BDD.01.03.d010"
+      description: "Managed accelerator used as cache only; canonical source of truth"
+      tests: [{ type: integration, file: "tests/conformance/test_adapters.py", function: "test_accelerator_cache_only", status: pending }]
+    - bdd_scenario: "@bdd: BDD.01.03.b800"
+      description: "Adapter unavailable fails closed"
+      tests: [{ type: integration, file: "tests/conformance/test_adapters.py", function: "test_adapter_failclosed", status: pending }]
+  coverage_table:
+    columns: [BDD Scenario, Unit, Integration, E2E, Total]
+    rows: [["BDD.01.03.d010", 0, 1, 0, 1], ["BDD.01.03.b800", 0, 1, 0, 1]]
+
+test_cases:
+  unit_tests:
+    cases:
+      - id: "TDD.06.04.a100"
+        name: "core imports no vendor SDKs (only ports)"
+        spec_ref: "@spec: SPEC-06"
+        target: "engramory.core"
+        test_file: "tests/unit/test_no_vendor_imports.py"
+        test_function: "test_core_has_no_vendor_imports"
+        inputs: [{ name: "module_tree", type: "package", value: "engramory.core" }]
+        expected_output: { type: "assert", value: "no imports from adapters/vendor packages" }
+        edge_cases: [{ condition: "new module added", expected: "still no vendor imports" }]
+  integration_tests:
+    cases:
+      - id: "TDD.06.04.b100"
+        name: "all ports satisfy conformance against dev adapter; accelerator is cache-only"
+        spec_ref: "@spec: SPEC-06"
+        contract: "port x adapter conformance"
+        test_file: "tests/conformance/test_adapters.py"
+        test_function: "test_accelerator_cache_only"
+        setup: ["wire dev adapters", "enable managed-accelerator stub"]
+        action: { description: "read through accelerator then reconcile" }
+        expected_state: ["canonical store authoritative", "accelerator never source of truth"]
+        error_paths: [{ condition: "adapter unavailable", expected_error: "fail closed retryable" }]
+  e2e_tests:
+    cases:
+      - id: "TDD.06.04.c100"
+        name: "re-embed + re-project migration reproduces retrievable memory"
+        bdd_ref: "@bdd: BDD.01.03.d010"
+        spec_ref: "@spec: SPEC-06"
+        test_file: "tests/integration/test_migration.py"
+        test_function: "test_reembed_reproject"
+        workflow:
+          - { step: 1, action: "change embedding model + reembed_and_reproject()", expected: "MigrationReport.reembedded>0, graph_rebuilt=True" }
+          - { step: 2, action: "retrieve after migration", expected: "memory still retrievable from content_raw" }
+        timeout_seconds: 180
+        cleanup: "restore profile=dev"
+
+thresholds:
+  unit: { coverage_target: ">=90%", pass_criteria: ["No vendor imports in core"], fail_action: "Block merge" }
+  integration: { coverage_target: ">=85%", pass_criteria: ["All ports pass conformance"], fail_action: "Block merge" }
+  e2e: { coverage_target: "migration path", timeout_budget: "<=300s", pass_criteria: ["Re-embed + re-project reproduces memory"], fail_action: "Block deploy" }
+
+tdd_order:
+  phases:
+    - { phase: 1, name: "Write Tests", action: "Tests first", output: "Test files" }
+    - { phase: 2, name: "Red", action: "Confirm fail", output: "Failure report" }
+    - { phase: 3, name: "Implement", action: "Make pass", output: "Implementation" }
+    - { phase: 4, name: "Green", action: "All pass", output: "Pass report" }
+    - { phase: 5, name: "Refactor", action: "Stay green", output: "Refactored code" }
+
+traceability:
+  tags: ["@tdd: TDD-06"]
+  upstream:
+    spec_references: ["@spec: SPEC-06"]
+    adr_references: ["@adr: ADR.02.03.a100", "@adr: ADR.05.03.a100"]
+    bdd_references: ["@bdd: BDD.01.03.d010", "@bdd: BDD.01.03.b800"]
+    ears_references: ["@ears: EARS.01.03.d010", "@ears: EARS.01.03.a040"]
+  downstream: [{ type: IPLAN, layer: 8, description: "Port interfaces + dev adapters + migration tool plan" }]
+  health_score: { iplan_ready: "[Pending]%", target_score: ">=90/100" }

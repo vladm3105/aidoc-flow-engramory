@@ -1,0 +1,64 @@
+# IPLAN-05 — Framework KB Compatibility (ucx_kb replacement). Upstream: SPEC-05, TDD-05.
+metadata: { schema_version: "1.0", document_type: "iplan-document", layer: 8, total_sections: 6, c4_level: { value: none }, tags: [iplan-document, layer-8-artifact, shared-architecture] }
+
+document_control:
+  iplan_id: "IPLAN-05"
+  subtype: code_build
+  source_spec: "@spec: SPEC-05"
+  status: Draft
+  version: "1.0"
+  date_created: "2026-06-22T00:00:00"
+  last_updated: "2026-06-22T00:00:00"
+  author: "Engramory team"
+  complexity: 4
+  estimated_files: 5
+  session_count: 0
+
+file_manifest:
+  files:
+    - { path: "tests/unit/test_coverage.py", order: 1, status: NOT_STARTED, session: null, verified: false }
+    - { path: "src/engramory/core/kb_compat.py", order: 2, status: NOT_STARTED, session: null, verified: false }
+    - { path: "src/engramory/skills/kb_context.py", order: 3, status: NOT_STARTED, session: null, verified: false }
+    - { path: "src/engramory/skills/kb_maintenance.py", order: 4, status: NOT_STARTED, session: null, verified: false }
+    - { path: "tests/integration/test_governed_ingest.py", order: 5, status: NOT_STARTED, session: null, verified: false }
+
+execution_commands:
+  setup: ["source .venv/bin/activate", "mkdir -p src/engramory/skills tests/e2e"]
+  implementation:
+    - "# TDD: tests/unit/test_coverage.py (coverage rules) FIRST"
+    - "# Implement kb_compat.py (ingest_artifact governed, check_coverage, traceability graph)"
+    - "# Implement Hermes skill adapters kb_context.py / kb_maintenance.py (ucx-kb-* parity)"
+  validation:
+    - "python -m pytest tests/unit/test_coverage.py tests/integration/test_governed_ingest.py tests/e2e/test_ucx_kb_parity.py -v"
+    - "python -m ruff check src/engramory/core/kb_compat.py src/engramory/skills"
+
+implementation_contracts:
+  provided:
+    contracts:
+      - { name: "KBCompatibility", type: "Protocol Interface", note: "ingest_artifact(entry, evidence_ref); check_coverage(project); kb_context; kb_maintain" }
+      - { name: "Hermes skill adapters", type: "DI Interface", note: "ucx-kb-context + ucx-kb-maintenance parity" }
+  consumed:
+    dependencies:
+      - { name: "Repository (MemoryStore)", from: "@spec: SPEC-02", note: "KB section persistence" }
+      - { name: "GraphPort", from: "@spec: SPEC-06", note: "traceability lineage graph" }
+      - { name: "AccessSurface governed-write gate", from: "@spec: SPEC-01", note: "evidence-gated writes" }
+
+session_handoff:
+  sessions:
+    - date: "2026-06-22"
+      agent: "(unstarted)"
+      files_touched: []
+      partial_work: "None."
+      blockers: "Depends on IPLAN-02 (store) and IPLAN-01 (governed-write gate). Parity suite is the ucx_kb cutover gate."
+      next_session_directive: "File order 1: tests/unit/test_coverage.py (TDD-05.04.a100)."
+      validation_results: { tests_passing: null, coverage: null, lint_clean: false }
+
+traceability:
+  upstream:
+    spec_references: ["@spec: SPEC-05"]
+    tdd_references: ["@tdd: TDD-05"]
+  downstream:
+    code_paths: ["@code: src/engramory/core/kb_compat.py", "@code: src/engramory/skills/"]
+    test_paths: ["@tests: tests/e2e/test_ucx_kb_parity.py"]
+  code_inventory:
+    files: []

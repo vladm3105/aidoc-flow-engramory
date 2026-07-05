@@ -1,0 +1,126 @@
+# SPEC-06 — Ports & Portability (C4-L3). Upstream: ADR-02, ADR-05.
+metadata:
+  schema_version: "1.0"
+  document_type: "spec-document"
+  layer: 6
+  total_sections: 8
+  deliverable_type: code
+  c4_level: { value: component }
+  id_standard: { format: "{doc_type}.{doc_id}.{section_id}.{hash}", hash_algorithm: SHA256, hash_length: 4 }
+  tags: [spec-document, layer-6-artifact, shared-architecture]
+
+id: SPEC-06
+title: "Ports & Portability"
+
+document_control:
+  status: Draft
+  version: "1.0"
+  date_created: "2026-06-22T00:00:00"
+  last_updated: "2026-06-22T00:00:00"
+  author: "Engramory team"
+  component: "PortsAndAdapters"
+  tdd_ready_score: "[Pending]/100"
+
+component_overview:
+  description: |
+    The vendor-neutral interfaces the core depends on, their per-environment adapters
+    (dev/gcp/azure) selected by ENGRAMORY_PROFILE, and the migration/re-projection path
+    (re-embed from canonical text, rebuild graph). Guarantees cloud portability.
+  architecture_decision: "@adr: ADR-02"
+  diagram:
+    tags: ["@diagram: c4-l3", "@diagram: dfd-l3"]
+    mermaid: |
+      flowchart LR
+        Core --> Ports
+        Ports --> DevAdapters
+        Ports --> GcpAdapters
+        Ports --> AzureAdapters
+  language: "Python"
+  dependencies: []
+
+interfaces:
+  exports:
+    - name: "StoragePort"
+      type: "class"
+      signature: "class StoragePort(Protocol): ..."
+      description: "Relational persistence (canonical)."
+      errors: []
+    - name: "VectorPort"
+      type: "class"
+      signature: "class VectorPort(Protocol): ..."
+      description: "Vector index (rebuildable projection)."
+      errors: []
+    - name: "GraphPort"
+      type: "class"
+      signature: "class GraphPort(Protocol): ..."
+      description: "Graph traversal (pure-Postgres | Neo4j)."
+      errors: []
+    - name: "CachePort"
+      type: "class"
+      signature: "class CachePort(Protocol): ..."
+      description: "Session/L1 cache (Redis|Memorystore|Azure Cache)."
+      errors: []
+    - name: "LLMPort"
+      type: "class"
+      signature: "class LLMPort(Protocol): ..."
+      description: "Embeddings/generation via gateway (Ollama|Vertex|Azure)."
+      errors: []
+    - name: "SecretsPort"
+      type: "class"
+      signature: "class SecretsPort(Protocol): ..."
+      description: "Secrets (SOPS|Secret Manager|Key Vault)."
+      errors: []
+    - name: "EventsPort"
+      type: "class"
+      signature: "class EventsPort(Protocol): ..."
+      description: "Events (Redis Streams|Pub/Sub|Service Bus)."
+      errors: []
+    - name: "MemoryPort"
+      type: "class"
+      signature: "class MemoryPort(Protocol): ..."
+      description: "Pluggable memory engine (LangMem|Cipher|Mem0) over Postgres canonical."
+      errors: []
+    - name: "reembed_and_reproject"
+      type: "async function"
+      signature: "async def reembed_and_reproject(profile: str) -> MigrationReport"
+      description: "Re-embed from content_raw and rebuild graph after model/platform migration."
+      errors: []
+
+data_models:
+  models:
+    - name: "MigrationReport"
+      type: "dataclass"
+      fields:
+        - { name: "reembedded", type: "int", required: true, description: "Memories re-embedded" }
+        - { name: "graph_rebuilt", type: "bool", required: true, description: "Graph re-projected" }
+
+behavior:
+  validation_rules:
+    - { rule: "Managed accelerator used as cache only; canonical store remains source of truth", source: "@ears: EARS.01.03.d010" }
+    - { rule: "Embeddings/graph are rebuildable projections of canonical text", source: "@ears: EARS.01.03.a040" }
+  state_transitions:
+    - { from: "Profile=dev", to: "Profile=gcp|azure", trigger: "adapter selection at migration", source: "@bdd: BDD.01.03.d010" }
+  error_handling:
+    - { condition: "Adapter unavailable", response: "Fail closed; surface retryable error", source: "@bdd: BDD.01.03.b800" }
+
+implementation_notes:
+  constraints: ["Core imports only ports — no vendor SDKs", "Adapter set chosen by ENGRAMORY_PROFILE"]
+  patterns: ["Hexagonal ports & adapters", "Adapter conformance test suite shared across environments"]
+  performance_considerations: ["Adapters must meet retrieval p95 budget"]
+
+tdd_contracts:
+  tdd_document: "@tdd: TDD-06"
+  test_files:
+    - { path: "tests/conformance/test_adapters.py", covers: "all ports x dev adapter parity" }
+    - { path: "tests/integration/test_migration.py", covers: "re-embed + re-project" }
+
+traceability:
+  tags: ["@spec: SPEC-06"]
+  upstream:
+    adr_references: ["@adr: ADR.02.03.a100", "@adr: ADR.05.03.a100"]
+    bdd_references: ["@bdd: BDD.01.03.d010", "@bdd: BDD.01.03.b800"]
+    ears_references: ["@ears: EARS.01.03.d010", "@ears: EARS.01.03.a040"]
+  downstream:
+    - { type: TDD, layer: 7, description: "Adapter conformance + migration tests" }
+    - { type: IPLAN, layer: 8, description: "Port interfaces + dev adapters + migration tool" }
+  health_score: { tdd_ready: "[Pending]%", target_score: ">=90/100" }

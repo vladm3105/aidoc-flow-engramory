@@ -1,0 +1,48 @@
+# BRD-03 — Advanced Distillation & Learning  (DRAFT SKETCH — scope only)
+# SKETCH: business scope only. NO downstream layers until MVP-3 begins.
+id: BRD-03
+title: "Advanced Distillation & Learning"
+
+metadata:
+  schema_version: "1.0"
+  document_type: "brd-document"
+  layer: 1
+  brd_type: { value: feature }
+  status_marker: sketch
+  c4_level: { value: context }
+
+document_control:
+  project_name: "Engramory (aidoc-flow-engramory)"
+  version: "0.1"
+  status: Draft
+  date_created: "2026-06-22T00:00:00"
+  author: "Engramory team"
+
+introduction:
+  business_context: |
+    BRD-01 ships a baseline distillation loop. This cycle improves the quality of what is kept and
+    how lessons generalize — the core differentiator of "human-like" memory.
+  purpose: "Define requirements for higher-quality distillation: confidence scoring, drift detection, smarter reflection/consolidation."
+  document_scope:
+    in_scope: ["Confidence scoring for distilled lessons", "Memory drift/staleness detection", "Smarter merge/generalize/quarantine", "Optional ML-assisted reflection"]
+    out_of_scope: ["Baseline distillation (BRD-01)", "Cloud infra (BRD-02)"]
+
+business_objectives:
+  hypothesis:
+    statement: "Better distillation measurably increases the rate at which recalled lessons improve outcomes."
+  goals:
+    - { statement: "Lesson confidence scoring drives retrieval inclusion", target: "Advisory vs confirmed separation measurable" }
+    - { statement: "Stale/contradicted memories detected and retired", target: "Reduced wrong-lesson recall" }
+
+project_scope:
+  core_features:
+    p1_must_have: ["Confidence scoring + thresholds", "Drift/staleness detection", "Generalization of repeated lessons", "Consolidation quality metrics"]
+    p2_should_have: ["ML-assisted reflection", "Per-agent learning curves"]
+  out_of_scope: { items: ["Consumer integrations (BRD-04)"] }
+
+traceability:
+  tags: ["@brd: BRD-03"]
+  cross_links: { depends: ["@depends: BRD-01"] }
+  downstream_expected: []
+
+_sketch_note: "Draft sketch. Expand to full BRD when MVP-3 begins."

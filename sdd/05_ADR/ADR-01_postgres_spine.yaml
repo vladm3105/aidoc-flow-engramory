@@ -1,0 +1,139 @@
+# ADR-01 — PostgreSQL as the canonical spine
+# Authored to framework/layers/05_ADR/ADR-TEMPLATE.yaml (fw v0.23.0).
+# Conformant form of docs/adr/0001-postgres-as-spine.md. Upstream: BRD/PRD/EARS/BDD.
+id: ADR-01
+title: "PostgreSQL as the canonical spine"
+
+metadata:
+  schema_version: "1.0"
+  document_type: "adr-document"
+  layer: 5
+  lifecycle: mvp-prod-newmvp
+  id_standard: { format: "{doc_type}.{doc_id}.{section_id}.{hash}", hash_algorithm: SHA256, hash_length: 4 }
+
+document_control:
+  status: Accepted
+  date: "2026-06-22"
+  decision_makers: ["Technical Lead"]
+  author: "Engramory team"
+  version: "1.0"
+  originating_topic: "@prd: PRD.01.09.e500"
+  brd_reference: "@brd: BRD.01.08.b200"
+  spec_ready_score: "[Pending]/100"
+  revision_history:
+    - { version: "1.0", date: "2026-06-22T00:00:00", author: "Engramory team", changes: "Initial ADR (converted from docs/adr/0001)." }
+
+context:
+  problem_statement: |
+    The platform needs one store for relational data, vectors, and distilled memory
+    that exists identically self-hosted and on GCP/Azure, to keep the canonical
+    brain portable (BRD-01 portability goal; PRD data-architecture topic).
+  business_driver: "Portability and replaceability; avoid vendor lock-in of the canonical store."
+  key_constraints:
+    - "Self-hosted dev at $0; managed equivalents on either cloud later."
+    - "Must back vector retrieval and relationship queries."
+  technical_context: |
+    EARS.01.03.a040 requires the canonical store to be the source of truth and
+    embeddings/graph to be rebuildable; EARS.01.03.c900 requires fail-closed on store loss.
+
+decision:
+  chosen_solution:
+    id: "ADR.01.03.a100"
+    title: "Adopt PostgreSQL 16 + pgvector as the single canonical store"
+    description: |
+      Use PostgreSQL (with pgvector) as the canonical source of truth for relational
+      data, vectors, and distilled memory. Derived stores (graph, managed accelerators)
+      are projections rebuilt from it.
+  key_components:
+    - { name: "PostgreSQL + pgvector", role: "Canonical relational + vector store" }
+  implementation_approach:
+    mvp_scope: "Single Postgres instance (Docker) holds episodes, memories, KB sections, vectors."
+    next_cycle_scope: "Managed Postgres (Cloud SQL/AlloyDB or Azure Flexible) via adapter (BRD-02)."
+  reversibility: "one-way-heavy"  # migrating the canonical store is costly but standard (pg_dump)
+
+alternatives:
+  options:
+    - id: "ADR.01.04.a100"
+      name: "PostgreSQL + pgvector (canonical)"
+      selected: true
+      description: "One engine for relational + vectors; portable across self-host and both clouds."
+      pros: ["Portable (pg_dump); managed on every cloud", "One store to operate/back up", "pgvector mature"]
+      cons: ["Vector scale ceiling vs dedicated vector DBs at very large scale"]
+      estimated_cost: "$0 dev"
+      fit: Best
+    - id: "ADR.01.04.b200"
+      name: "Dedicated vector DB + separate relational DB"
+      selected: false
+      description: "Specialized vector store (e.g., Qdrant) alongside a relational DB."
+      pros: ["Higher vector scale/perf"]
+      cons: ["Two stores to operate; split canonical truth; portability harder"]
+      rejection_reason: "Splits the canonical store and complicates portability — violates the own-your-store principle."
+      estimated_cost: "$ varies"
+      fit: Good
+
+consequences:
+  positive_outcomes:
+    - { id: "ADR.01.05.a100", outcome: "Canonical data migrates via standard dump/restore to any managed Postgres." }
+    - { id: "ADR.01.05.b200", outcome: "One store to secure, back up, and reason about." }
+  tradeoffs_and_risks:
+    - { id: "ADR.01.05.c300", tradeoff: "pgvector scale ceiling at very large corpora", impact: Medium, mitigation: "Add managed vector search as a rebuildable projection behind VectorPort if needed." }
+  what_breaks_if_wrong: "If Postgres can't scale for retrieval, latency SLOs (PRD.01.perf.retrieval_p95) degrade; mitigated by a projection layer."
+  cost_estimate: { mvp_cost: "$0", ongoing_monthly: "$0 dev", notes: "Cloud cost on migration only." }
+
+architecture_flow:
+  decision_sequence:
+    intent: { diagram_type: sequence, scope_boundary: "retrieval ↔ canonical store", upstream_refs: "BDD.01.03.a100", downstream_refs: "SPEC storage/vector components" }
+    tag: "@diagram: sequence-sync"
+    diagram:
+      type: sequenceDiagram
+      content: |
+        sequenceDiagram
+            participant Agent
+            participant Retrieval
+            participant Postgres as PostgreSQL+pgvector (canonical)
+            Agent->>Retrieval: request scoped context
+            Retrieval->>Postgres: query relational + vector
+            Postgres-->>Retrieval: rows + nearest vectors
+            Retrieval-->>Agent: results + provenance
+  integration_points:
+    - { system: "Object storage", integration_type: "REST", purpose: "Large blobs referenced from Postgres rows." }
+
+implementation_assessment:
+  mvp_phases:
+    - { phase: "Stand up Postgres+pgvector", scope: "Schema + vector index", risk: "Index dimension fixed per embedding model" }
+  rollback_plan:
+    strategy: "Restore from dump to a prior instance; re-embed from canonical text."
+    trigger: "Unrecoverable store corruption."
+    estimated_effort: "Hours (dump/restore)."
+  monitoring_baseline:
+    - { metric: "retrieval p95", target: "<800 ms", alert_threshold: ">800 ms sustained" }
+
+verification:
+  success_criteria:
+    - { criterion: "Dump+restore preserves canonical data", measurement: "Round-trip restore test" }
+  bdd_scenario_refs:
+    scenarios: ["@bdd: BDD.01.03.a100", "@bdd: BDD.01.03.b800"]
+
+traceability:
+  tags: ["@adr: ADR-01"]
+  originating_topic: "@prd: PRD.01.09.e500"
+  upstream:
+    bdd_references: ["@bdd: BDD.01.03.a100", "@bdd: BDD.01.03.b800"]
+    ears_references: ["@ears: EARS.01.03.a040", "@ears: EARS.01.03.c900"]
+  downstream_expected:
+    - { type: SPEC, layer: 6, description: "Storage + vector component specs." }
+  cross_links:
+    depends: []
+    discoverability: ["@discoverability: ADR-05 (canonical-memory principle)"]
+  health_score: { spec_ready: "[Pending]%", target_score: ">=90/100" }
+
+related_decisions:
+  dependencies:
+    - { adr: "ADR-05", relationship: "Extends", rationale: "Canonical-memory principle builds on the Postgres spine." }
+    - { adr: "ADR-03", relationship: "Constrains", rationale: "Graph engine is a projection of canonical Postgres data." }
+  supersedes: { items: [] }
+
+glossary:
+  terms:
+    - { term: "pgvector", definition: "PostgreSQL extension for vector similarity search." }
+    - { term: "canonical store", definition: "The source of truth; projections are rebuildable from it." }

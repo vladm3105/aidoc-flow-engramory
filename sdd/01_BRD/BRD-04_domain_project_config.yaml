@@ -1,0 +1,69 @@
+# BRD-04 — Domain & Project Configuration  (DRAFT SKETCH — scope only)
+# SKETCH: business scope only. NO downstream layers until MVP-4 begins.
+id: BRD-04
+title: "Domain & Project Configuration"
+
+metadata:
+  schema_version: "1.0"
+  document_type: "brd-document"
+  layer: 1
+  brd_type: { value: feature }
+  status_marker: sketch
+  c4_level: { value: context }
+
+document_control:
+  project_name: "Engramory (aidoc-flow-engramory)"
+  version: "0.1"
+  status: Draft
+  date_created: "2026-06-22T00:00:00"
+  author: "Engramory team"
+
+introduction:
+  business_context: |
+    Engramory must serve any project. Projects group into knowledge domains (verticals):
+    several projects can belong to one domain and share its taxonomy, defaults, and knowledge.
+    This cycle delivers the two-tier configuration hierarchy and the domain scope.
+  purpose: "Define requirements for domain config (shared across projects in a domain) and project config (per-project, inheriting/overriding the domain), plus domain-shared vs project-scoped memory."
+  document_scope:
+    in_scope:
+      - "Domain config: terminology, entity/document types, default models/embeddings, verification rules, compliance baseline"
+      - "Project config: namespace, data sources, scopes/quotas, members, overrides of domain defaults"
+      - "Config inheritance/override: Platform → Domain → Project → Agent"
+      - "Domain-shared memory/knowledge vs project-scoped memory (new `domain` scope level)"
+      - "Onboard projects as domain members (e.g., Trading: Tradegent; Remittance: BeeLocal)"
+    out_of_scope:
+      - "Baseline project scoping (BRD-01)"
+      - "Multi-project operations / instance tuning (BRD-08)"
+      - "Tenant security hardening (BRD-05)"
+
+business_objectives:
+  hypothesis:
+    statement: "Projects sharing a domain reuse its taxonomy and knowledge while staying isolated across domains, configured by inheritance/override rather than duplication."
+  goals:
+    - { statement: "Two-tier config (domain + project) with inheritance/override", target: "Project overrides only what differs from its domain" }
+    - { statement: "Domain-shared memory works across projects in a domain", target: "A domain lesson is retrievable by all its projects; never by other domains" }
+    - { statement: "Onboard a domain with >=2 projects", target: "e.g., Trading domain with 2 projects sharing config + knowledge" }
+
+project_scope:
+  core_features:
+    p1_must_have:
+      - "Domain config schema + registry"
+      - "Project config schema (inherits domain; overrides)"
+      - "`domain` scope level in memory/knowledge (agent → project → domain → shared)"
+      - "Domain-shared knowledge/memory namespace"
+      - "Config resolution (Platform → Domain → Project → Agent)"
+    p2_should_have:
+      - "Reusable domain templates (shared verticals projects reference)"
+      - "Per-project overrides UI/API"
+  out_of_scope: { items: ["Multi-project ops & tuning (BRD-08)"] }
+
+traceability:
+  tags: ["@brd: BRD-04"]
+  cross_links: { depends: ["@depends: BRD-01"] }
+  downstream_expected: []
+
+_open_decisions:
+  - "Are domains global/shared taxonomies (cross-tenant) or tenant-owned? (Lead ADR for this cycle; default: reusable domain templates extensible privately per tenant.)"
+  - "Relationship Tenant ↔ Domain ↔ Project (proposed: Tenant owns Projects; each Project belongs to a Domain; Domains are reusable verticals)."
+
+_sketch_note: "Draft sketch. Expand to full BRD when MVP-4 begins. Replaces the earlier 'Consumer-Project Integration' framing — onboarding named consumers is just configuring projects/domains."

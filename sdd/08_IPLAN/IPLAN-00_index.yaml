@@ -1,0 +1,93 @@
+# IPLAN-00_index.yaml — Implementation Plan Registry for Engramory
+# SDD Layer 8. One permanent IPLAN per SPEC component.
+metadata:
+  schema_version: "1.0"
+  document_type: "iplan-registry"
+  layer: 8
+  total_plans: 6
+  last_updated: "2026-06-22"
+
+registry:
+  plans:
+    - id: "IPLAN-01"
+      title: "Access Surface & Authorization"
+      source_spec: "@spec: SPEC-01"
+      scope: "MCP access surface, per-call authz/scoping, audit, governed-write gate, fail-closed"
+      status: "Draft"
+      status_date: "2026-06-22"
+      complexity: 4
+      session_count: 0
+      sessions_completed: 0
+      files_declared: 5
+      files_done: 0
+      skipped: []
+      depends_on: ["IPLAN-06", "IPLAN-02"]
+    - id: "IPLAN-02"
+      title: "Knowledge & Memory Store"
+      source_spec: "@spec: SPEC-02"
+      scope: "Postgres schema (episodes, memories, kb_sections, agent_profiles) + repository"
+      status: "Draft"
+      status_date: "2026-06-22"
+      complexity: 4
+      session_count: 0
+      sessions_completed: 0
+      files_declared: 5
+      files_done: 0
+      skipped: []
+      depends_on: ["IPLAN-06"]
+    - id: "IPLAN-03"
+      title: "Retrieval & Graph"
+      source_spec: "@spec: SPEC-03"
+      scope: "Scoped hybrid retrieval + GraphPort traversal + fail-closed"
+      status: "Draft"
+      status_date: "2026-06-22"
+      complexity: 3
+      session_count: 0
+      sessions_completed: 0
+      files_declared: 4
+      files_done: 0
+      skipped: []
+      depends_on: ["IPLAN-02", "IPLAN-06"]
+    - id: "IPLAN-04"
+      title: "Distillation Engine"
+      source_spec: "@spec: SPEC-04"
+      scope: "Reflection + consolidation worker; MemoryPort engine over Postgres canonical"
+      status: "Draft"
+      status_date: "2026-06-22"
+      complexity: 5
+      session_count: 0
+      sessions_completed: 0
+      files_declared: 4
+      files_done: 0
+      skipped: []
+      depends_on: ["IPLAN-02", "IPLAN-06"]
+    - id: "IPLAN-05"
+      title: "Framework KB Compatibility (ucx_kb replacement)"
+      source_spec: "@spec: SPEC-05"
+      scope: "SDD-artifact entries, coverage rules, traceability graph, governed ingest, Hermes skills"
+      status: "Draft"
+      status_date: "2026-06-22"
+      complexity: 4
+      session_count: 0
+      sessions_completed: 0
+      files_declared: 5
+      files_done: 0
+      skipped: []
+      depends_on: ["IPLAN-02", "IPLAN-01"]
+    - id: "IPLAN-06"
+      title: "Ports & Portability"
+      source_spec: "@spec: SPEC-06"
+      scope: "8 port interfaces + dev adapters + migration/re-embed tool"
+      status: "Draft"
+      status_date: "2026-06-22"
+      complexity: 3
+      session_count: 0
+      sessions_completed: 0
+      files_declared: 6
+      files_done: 0
+      skipped: []
+      depends_on: []
+
+# Build order (topological): IPLAN-06 (ports) → IPLAN-02 (store) →
+# IPLAN-03/04 (retrieval/distillation) → IPLAN-01 (access) → IPLAN-05 (KB compat).
+build_order: ["IPLAN-06", "IPLAN-02", "IPLAN-03", "IPLAN-04", "IPLAN-01", "IPLAN-05"]

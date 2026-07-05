@@ -1,0 +1,69 @@
+# TDD-04 — Distillation Engine. Upstream: SPEC-04, ADR-04/05, BDD, EARS.
+metadata: { schema_version: "1.0", document_type: "tdd-document", layer: 7, total_sections: 7, deliverable_type: code, c4_level: { value: none }, id_standard: { format: "{doc_type}.{doc_id}.{section_id}.{hash}", hash_algorithm: SHA256, hash_length: 4 }, tags: [tdd-document, layer-7-artifact, shared-architecture] }
+id: TDD-04
+title: "Distillation Engine — Test Guide"
+
+document_control: { status: Draft, version: "1.0", date_created: "2026-06-22T00:00:00", last_updated: "2026-06-22T00:00:00", author: "Engramory team", component: "DistillationEngine", iplan_ready_score: "[Pending]/100" }
+
+test_pyramid: { distribution: { unit: 65, integration: 30, e2e: 5 } }
+
+test_mapping:
+  scenarios:
+    - bdd_scenario: "@bdd: BDD.01.03.d400"
+      description: "Consolidation runs at cadence; observable run record"
+      tests: [{ type: integration, file: "tests/integration/test_reflection.py", function: "test_consolidation_cadence", status: pending }]
+    - bdd_scenario: "@bdd: BDD.01.03.a700"
+      description: "Low-confidence lesson quarantined"
+      tests: [{ type: unit, file: "tests/unit/test_consolidation.py", function: "test_quarantine_low_confidence", status: pending }]
+  coverage_table:
+    columns: [BDD Scenario, Unit, Integration, E2E, Total]
+    rows: [["BDD.01.03.d400", 0, 1, 0, 1], ["BDD.01.03.a700", 1, 0, 0, 1]]
+
+test_cases:
+  unit_tests:
+    cases:
+      - id: "TDD.04.04.a100"
+        name: "low-confidence lesson marked advisory-only, provenance retained"
+        spec_ref: "@spec: SPEC-04"
+        target: "consolidate"
+        test_file: "tests/unit/test_consolidation.py"
+        test_function: "test_quarantine_low_confidence"
+        inputs: [{ name: "lesson", type: "Memory", value: "confidence below floor" }]
+        expected_output: { type: "ConsolidationStats", value: "quarantined>=1; provenance retained" }
+        edge_cases: [{ condition: "duplicate lessons", expected: "merged, count in stats" }]
+  integration_tests:
+    cases:
+      - id: "TDD.04.04.b100"
+        name: "consolidation fires every cadence threshold; emits run record"
+        spec_ref: "@spec: SPEC-04"
+        contract: "consolidate cadence + observability"
+        test_file: "tests/integration/test_reflection.py"
+        test_function: "test_consolidation_cadence"
+        setup: ["seed 20 new memories", "mock LLMPort"]
+        action: { description: "run worker" }
+        expected_state: ["ConsolidationStats.run_id present", "observable consolidation_run emitted"]
+        error_paths: [{ condition: "LLM gateway down", expected_error: "LLMUnavailable (retryable, idempotent)" }]
+  e2e_tests: { cases: [] }
+
+thresholds:
+  unit: { coverage_target: ">=90%", pass_criteria: ["All pass"], fail_action: "Block merge" }
+  integration: { coverage_target: ">=85%", pass_criteria: ["Cadence + idempotency verified"], fail_action: "Block merge" }
+  e2e: { coverage_target: "N/A", timeout_budget: "<=300s", pass_criteria: ["N/A"], fail_action: "N/A" }
+
+tdd_order:
+  phases:
+    - { phase: 1, name: "Write Tests", action: "Tests first", output: "Test files" }
+    - { phase: 2, name: "Red", action: "Confirm fail", output: "Failure report" }
+    - { phase: 3, name: "Implement", action: "Make pass", output: "Implementation" }
+    - { phase: 4, name: "Green", action: "All pass", output: "Pass report" }
+    - { phase: 5, name: "Refactor", action: "Stay green", output: "Refactored code" }
+
+traceability:
+  tags: ["@tdd: TDD-04"]
+  upstream:
+    spec_references: ["@spec: SPEC-04"]
+    adr_references: ["@adr: ADR.04.03.a100", "@adr: ADR.05.03.a100"]
+    bdd_references: ["@bdd: BDD.01.03.d400", "@bdd: BDD.01.03.a700"]
+    ears_references: ["@ears: EARS.01.03.d400", "@ears: EARS.01.03.b800", "@ears: EARS.01.03.e500"]
+  downstream: [{ type: IPLAN, layer: 8, description: "Distillation worker implementation plan" }]
+  health_score: { iplan_ready: "[Pending]%", target_score: ">=90/100" }

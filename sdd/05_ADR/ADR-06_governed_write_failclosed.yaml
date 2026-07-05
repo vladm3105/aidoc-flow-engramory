@@ -1,0 +1,137 @@
+# ADR-06 — Governed-write authority + fail-closed access.
+# New decision surfaced by EARS-01 / BDD-01 (security + reliability).
+id: ADR-06
+title: "Governed-write authority and fail-closed access"
+
+metadata:
+  schema_version: "1.0"
+  document_type: "adr-document"
+  layer: 5
+  lifecycle: mvp-prod-newmvp
+  id_standard: { format: "{doc_type}.{doc_id}.{section_id}.{hash}", hash_algorithm: SHA256, hash_length: 4 }
+
+document_control:
+  status: Accepted
+  date: "2026-06-22"
+  decision_makers: ["Technical Lead", "Security Engineer"]
+  author: "Engramory team"
+  version: "1.0"
+  originating_topic: "@prd: PRD.01.09.d400"
+  brd_reference: "@brd: BRD.01.08.d400"
+  spec_ready_score: "[Pending]/100"
+  revision_history:
+    - { version: "1.0", date: "2026-06-22T00:00:00", author: "Engramory team", changes: "Initial ADR (security/reliability)." }
+
+context:
+  problem_statement: |
+    SDD-artifact memory must not be written without approved evidence (lifecycle gates
+    are source of truth), prompt-injection could plant false lessons, and on store loss
+    the system must not serve stale/unscoped data. Decision needed on write authority
+    and failure behavior.
+  business_driver: "Trust: KB augments decisions but never overrides gates; protect against poisoning and leakage."
+  key_constraints: ["Gates are source of truth for SDD artifacts", "Multi-tenant isolation mandatory"]
+  technical_context: "EARS.01.03.a700 (governed-write reject), f600 (out-of-scope deny), c900 (fail-closed); BDD.01.03.e500/f600/b800."
+
+decision:
+  chosen_solution:
+    id: "ADR.06.03.a100"
+    title: "Require approved-evidence reference for SDD-artifact writes; fail closed on uncertainty"
+    description: |
+      SDD-artifact memory writes require an approved-evidence reference or are rejected
+      and audited. Engramory is advisory for SDD artifacts (gates win) and canonical for
+      agent memory. On scope-check failure or store unavailability the access layer fails
+      closed (denies) rather than serving stale or unscoped data. Low-confidence distilled
+      lessons are quarantined as advisory-only.
+  key_components:
+    - { name: "Write gate", role: "Verifies approved-evidence reference for SDD-artifact writes" }
+    - { name: "Scope enforcer", role: "Per-call agent/project/tenant authorization + audit" }
+    - { name: "Fail-closed policy", role: "Deny on store loss / scope uncertainty" }
+  implementation_approach:
+    mvp_scope: "Evidence-gated SDD writes; per-call scope checks + audit; fail-closed retrieval; low-confidence quarantine."
+    next_cycle_scope: "Richer approval workflows / quorum (BRD-05)."
+  reversibility: "two-way"
+
+alternatives:
+  options:
+    - id: "ADR.06.04.a100"
+      name: "Governed-write + fail-closed"
+      selected: true
+      description: "Evidence-gated writes; deny on uncertainty; quarantine low-confidence lessons."
+      pros: ["Prevents poisoning & leakage", "Respects gate authority", "Safe under failure"]
+      cons: ["Rejects writes lacking evidence (friction)"]
+      estimated_cost: "$0"
+      fit: Best
+    - id: "ADR.06.04.b200"
+      name: "Trust-the-agent (fail-open) writes"
+      selected: false
+      description: "Accept writes; serve best-effort under failure."
+      pros: ["Simpler; fewer rejections"]
+      cons: ["Prompt-injection poisoning; stale/unscoped data served; gate authority undermined"]
+      rejection_reason: "Unacceptable security/integrity posture for a shared brain."
+      estimated_cost: "$0"
+      fit: Poor
+
+consequences:
+  positive_outcomes:
+    - { id: "ADR.06.05.a100", outcome: "Bad/unauthorized memory is rejected and traceable; no cross-tenant leakage." }
+  tradeoffs_and_risks:
+    - { id: "ADR.06.05.b200", tradeoff: "Legitimate writes without evidence are rejected", impact: Medium, mitigation: "Clear error + guidance to attach approved evidence." }
+  failure_behavior: "fail-closed"
+  what_breaks_if_wrong: "If fail-open were chosen, a store glitch or injection could leak or poison memory ecosystem-wide."
+  cost_estimate: { mvp_cost: "$0", ongoing_monthly: "$0", notes: "Policy + audit only." }
+
+architecture_flow:
+  decision_sequence:
+    intent: { diagram_type: sequence, scope_boundary: "write/read ↔ gate/scope enforcer", upstream_refs: "BDD.01.03.f600,e500", downstream_refs: "SPEC access + governance" }
+    tag: "@diagram: sequence-error"
+    diagram:
+      type: sequenceDiagram
+      content: |
+        sequenceDiagram
+            participant Caller
+            participant Access
+            participant Gate as Write gate / Scope enforcer
+            participant Audit
+            Caller->>Access: write SDD-artifact memory (no evidence)
+            Access->>Gate: verify approved-evidence + scope
+            Gate-->>Access: reject (no evidence)
+            Access->>Audit: record denial
+            Access-->>Caller: rejected (attach approved evidence)
+  integration_points:
+    - { system: "Framework / Hermes approval evidence", integration_type: "Reference", purpose: "Approved IPLAN evidence gates SDD-artifact writes." }
+
+implementation_assessment:
+  mvp_phases:
+    - { phase: "Write gate + scope enforcer + audit", scope: "Evidence check, scope check, fail-closed", risk: "Over-blocking legitimate writes" }
+  rollback_plan: { strategy: "Tune evidence policy; keep audit", trigger: "Excessive false rejections", estimated_effort: "Policy change" }
+  monitoring_baseline:
+    - { metric: "cross-tenant leakage incidents", target: "0", alert_threshold: ">0" }
+    - { metric: "ungoverned SDD writes accepted", target: "0", alert_threshold: ">0" }
+
+verification:
+  success_criteria:
+    - { criterion: "Ungoverned SDD write rejected + audited", measurement: "BDD.01.03.f600" }
+    - { criterion: "Cross-tenant read denied + audited", measurement: "BDD.01.03.e500" }
+  bdd_scenario_refs: { scenarios: ["@bdd: BDD.01.03.f600", "@bdd: BDD.01.03.e500", "@bdd: BDD.01.03.a700"] }
+
+traceability:
+  tags: ["@adr: ADR-06"]
+  originating_topic: "@prd: PRD.01.09.d400"
+  upstream:
+    bdd_references: ["@bdd: BDD.01.03.f600", "@bdd: BDD.01.03.e500", "@bdd: BDD.01.03.a700", "@bdd: BDD.01.03.b800"]
+    ears_references: ["@ears: EARS.01.03.a700", "@ears: EARS.01.03.f600", "@ears: EARS.01.03.c900", "@ears: EARS.01.03.b800", "@ears: EARS.01.03.b050"]
+  downstream_expected:
+    - { type: SPEC, layer: 6, description: "Access-control + governance + fail-closed component specs." }
+  cross_links: { depends: [], discoverability: ["@discoverability: ADR-02 (ports)"] }
+  health_score: { spec_ready: "[Pending]%", target_score: ">=90/100" }
+
+related_decisions:
+  dependencies:
+    - { adr: "ADR-01", relationship: "Depends on", rationale: "Fail-closed protects the canonical store's integrity." }
+  supersedes: { items: [] }
+
+glossary:
+  terms:
+    - { term: "fail closed", definition: "On failure, deny rather than serve stale/unscoped data." }
+    - { term: "governed write", definition: "A write permitted only with an approved-evidence reference." }
+    - { term: "advisory-only lesson", definition: "Low-confidence memory excluded from default retrieval." }

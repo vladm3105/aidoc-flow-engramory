@@ -1,0 +1,63 @@
+# IPLAN-04 — Distillation Engine. Upstream: SPEC-04, TDD-04.
+metadata: { schema_version: "1.0", document_type: "iplan-document", layer: 8, total_sections: 6, c4_level: { value: none }, tags: [iplan-document, layer-8-artifact, shared-architecture] }
+
+document_control:
+  iplan_id: "IPLAN-04"
+  subtype: code_build
+  source_spec: "@spec: SPEC-04"
+  status: Draft
+  version: "1.0"
+  date_created: "2026-06-22T00:00:00"
+  last_updated: "2026-06-22T00:00:00"
+  author: "Engramory team"
+  complexity: 5
+  estimated_files: 4
+  session_count: 0
+
+file_manifest:
+  files:
+    - { path: "tests/unit/test_consolidation.py", order: 1, status: NOT_STARTED, session: null, verified: false }
+    - { path: "src/engramory/workers/distillation.py", order: 2, status: PARTIAL, session: "scaffold", verified: false }
+    - { path: "src/engramory/workers/memory_engine.py", order: 3, status: NOT_STARTED, session: null, verified: false }
+    - { path: "tests/integration/test_reflection.py", order: 4, status: NOT_STARTED, session: null, verified: false }
+
+execution_commands:
+  setup: ["source .venv/bin/activate", "docker compose up -d litellm ollama"]
+  implementation:
+    - "# TDD: tests/unit/test_consolidation.py (quarantine/merge/expire) FIRST"
+    - "# Implement reflection+consolidation in distillation.py; MemoryPort engine adapter in memory_engine.py (LangMem/Cipher/Mem0 over Postgres canonical)"
+  validation:
+    - "python -m pytest tests/unit/test_consolidation.py tests/integration/test_reflection.py -v"
+    - "python -m ruff check src/engramory/workers"
+
+implementation_contracts:
+  provided:
+    contracts:
+      - { name: "DistillationEngine", type: "Protocol Interface", note: "reflect(agent_id, project_id) -> int; consolidate(agent_id) -> ConsolidationStats" }
+  consumed:
+    dependencies:
+      - { name: "LLMPort", from: "@spec: SPEC-06", note: "summarize/embed via gateway" }
+      - { name: "Repository (MemoryStore)", from: "@spec: SPEC-02", note: "read episodes / write memories" }
+      - { name: "MemoryPort engine", from: "@spec: SPEC-06", note: "optional external engine over Postgres canonical" }
+
+session_handoff:
+  sessions:
+    - date: "2026-06-22"
+      agent: "(unstarted)"
+      files_touched:
+        - { path: "src/engramory/workers/distillation.py", action: created, status: PARTIAL }
+      partial_work: "distillation.py is a docstring stub from scaffolding; logic not implemented."
+      blockers: "Depends on IPLAN-02 (store) and IPLAN-06 (LLMPort/MemoryPort)."
+      next_session_directive: "File order 1: tests/unit/test_consolidation.py (TDD-04.04.a100 quarantine)."
+      validation_results: { tests_passing: null, coverage: null, lint_clean: false }
+
+traceability:
+  upstream:
+    spec_references: ["@spec: SPEC-04"]
+    tdd_references: ["@tdd: TDD-04"]
+  downstream:
+    code_paths: ["@code: src/engramory/workers/"]
+    test_paths: ["@tests: tests/integration/test_reflection.py"]
+  code_inventory:
+    files:
+      - { path: "src/engramory/workers/distillation.py", status: created, session: "scaffold", verified: false }

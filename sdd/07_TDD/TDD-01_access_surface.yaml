@@ -1,0 +1,125 @@
+# TDD-01 — Access Surface & Authorization. Upstream: SPEC-01, ADR-02/06, BDD, EARS.
+metadata:
+  schema_version: "1.0"
+  document_type: "tdd-document"
+  layer: 7
+  total_sections: 7
+  deliverable_type: code
+  c4_level: { value: none }
+  id_standard: { format: "{doc_type}.{doc_id}.{section_id}.{hash}", hash_algorithm: SHA256, hash_length: 4 }
+  tags: [tdd-document, layer-7-artifact, shared-architecture]
+
+id: TDD-01
+title: "Access Surface & Authorization — Test Guide"
+
+document_control:
+  status: Draft
+  version: "1.0"
+  date_created: "2026-06-22T00:00:00"
+  last_updated: "2026-06-22T00:00:00"
+  author: "Engramory team"
+  component: "AccessSurface"
+  iplan_ready_score: "[Pending]/100"
+
+test_pyramid:
+  distribution: { unit: 60, integration: 25, e2e: 15 }
+
+test_mapping:
+  scenarios:
+    - bdd_scenario: "@bdd: BDD.01.03.a100"
+      description: "Scoped retrieval returns results within p95"
+      tests:
+        - { type: e2e, file: "tests/e2e/test_retrieval.py", function: "test_scoped_retrieve_e2e", status: pending }
+    - bdd_scenario: "@bdd: BDD.01.03.e500"
+      description: "Cross-tenant request denied + audited"
+      tests:
+        - { type: unit, file: "tests/unit/test_authz.py", function: "test_default_deny_out_of_scope", status: pending }
+        - { type: e2e, file: "tests/e2e/test_scope_isolation.py", function: "test_cross_tenant_denied_e2e", status: pending }
+    - bdd_scenario: "@bdd: BDD.01.03.f600"
+      description: "Governed-write without evidence rejected + audited"
+      tests:
+        - { type: integration, file: "tests/integration/test_access_surface.py", function: "test_governed_write_rejected", status: pending }
+  coverage_table:
+    columns: [BDD Scenario, Unit, Integration, E2E, Total]
+    rows:
+      - ["BDD.01.03.a100", 0, 0, 1, 1]
+      - ["BDD.01.03.e500", 1, 0, 1, 2]
+      - ["BDD.01.03.f600", 0, 1, 0, 1]
+
+test_cases:
+  unit_tests:
+    cases:
+      - id: "TDD.01.04.a100"
+        name: "authorize() defaults to deny for out-of-scope target"
+        spec_ref: "@spec: SPEC-01"
+        target: "authorize"
+        test_file: "tests/unit/test_authz.py"
+        test_function: "test_default_deny_out_of_scope"
+        inputs:
+          - { name: "ctx", type: "ActorContext", value: "tenant=t-1" }
+          - { name: "target_scope", type: "Scope", value: "tenant=t-2" }
+        expected_output: { type: "AuthzDecision", value: "allowed=False, reason='out_of_scope'" }
+        edge_cases:
+          - { condition: "empty scopes", expected: "deny" }
+  integration_tests:
+    cases:
+      - id: "TDD.01.04.b200"
+        name: "governed write without evidence is rejected and audited"
+        spec_ref: "@spec: SPEC-01"
+        contract: "knowledge_ingest requires evidence_ref"
+        test_file: "tests/integration/test_access_surface.py"
+        test_function: "test_governed_write_rejected"
+        setup: ["mock MemoryStore", "capture AuditSink"]
+        action: { description: "call knowledge_ingest with evidence_ref=None" }
+        expected_state: ["GovernedWriteRejected raised", "AuditRecord(deny) emitted within 200 ms"]
+        error_paths:
+          - { condition: "missing evidence_ref", expected_error: "GovernedWriteRejected" }
+  e2e_tests:
+    cases:
+      - id: "TDD.01.04.c300"
+        name: "cross-tenant read denied end-to-end"
+        bdd_ref: "@bdd: BDD.01.03.e500"
+        spec_ref: "@spec: SPEC-01"
+        test_file: "tests/e2e/test_scope_isolation.py"
+        test_function: "test_cross_tenant_denied_e2e"
+        workflow:
+          - { step: 1, action: "agent-A (t-1) requests t-2 memory", expected: "deny, no data" }
+          - { step: 2, action: "inspect audit sink", expected: "deny AuditRecord present" }
+        timeout_seconds: 30
+        cleanup: "reset audit sink"
+  security_tests:
+    cases:
+      - id: "TDD.01.04.d400"
+        name: "fail-closed on store unavailability"
+        spec_ref: "@spec: SPEC-01"
+        threat: "availability / data-exposure under fault"
+        test_file: "tests/security/test_failclosed.py"
+        test_function: "test_failclosed_on_store_down"
+        inputs:
+          - { name: "store", type: "fault", value: "unavailable" }
+        expected_result: { type: "error", value: "retryable error, no stale/unscoped data within 500 ms" }
+
+thresholds:
+  unit: { coverage_target: ">=90%", pass_criteria: ["All unit tests pass"], fail_action: "Block merge" }
+  integration: { coverage_target: ">=85%", pass_criteria: ["Contract validation passes"], fail_action: "Block merge" }
+  e2e: { coverage_target: ">=75% of happy paths", timeout_budget: "<=300s", pass_criteria: ["Critical paths pass"], fail_action: "Block deploy to staging" }
+  security: { coverage_target: "All authz paths", pass_criteria: ["No cross-tenant leakage", "Fail-closed verified"], fail_action: "Block deploy" }
+
+tdd_order:
+  phases:
+    - { phase: 1, name: "Write Tests", action: "Generate test files first", output: "Test files" }
+    - { phase: 2, name: "Run Tests (Red)", action: "Confirm failure", output: "Failure report" }
+    - { phase: 3, name: "Implement", action: "Make tests pass", output: "Implementation" }
+    - { phase: 4, name: "Verify (Green)", action: "All pass", output: "Pass report" }
+    - { phase: 5, name: "Refactor", action: "Clean up; stay green", output: "Refactored code" }
+
+traceability:
+  tags: ["@tdd: TDD-01"]
+  upstream:
+    spec_references: ["@spec: SPEC-01"]
+    adr_references: ["@adr: ADR.02.03.a100", "@adr: ADR.06.03.a100"]
+    bdd_references: ["@bdd: BDD.01.03.a100", "@bdd: BDD.01.03.e500", "@bdd: BDD.01.03.f600"]
+    ears_references: ["@ears: EARS.01.03.e020", "@ears: EARS.01.03.f600", "@ears: EARS.01.03.a700"]
+  downstream:
+    - { type: IPLAN, layer: 8, description: "Test-first implementation plan for the access surface" }
+  health_score: { iplan_ready: "[Pending]%", target_score: ">=90/100" }

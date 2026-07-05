@@ -1,0 +1,80 @@
+# TDD-05 — KB Compatibility (ucx_kb replacement). Upstream: SPEC-05, ADR-06, BDD, EARS.
+metadata: { schema_version: "1.0", document_type: "tdd-document", layer: 7, total_sections: 7, deliverable_type: code, c4_level: { value: none }, id_standard: { format: "{doc_type}.{doc_id}.{section_id}.{hash}", hash_algorithm: SHA256, hash_length: 4 }, tags: [tdd-document, layer-7-artifact, shared-architecture] }
+id: TDD-05
+title: "KB Compatibility — Test Guide"
+
+document_control: { status: Draft, version: "1.0", date_created: "2026-06-22T00:00:00", last_updated: "2026-06-22T00:00:00", author: "Engramory team", component: "KBCompatibility", iplan_ready_score: "[Pending]/100" }
+
+test_pyramid: { distribution: { unit: 50, integration: 40, e2e: 10 } }
+
+test_mapping:
+  scenarios:
+    - bdd_scenario: "@bdd: BDD.01.03.c300"
+      description: "Approved SDD artifact creates KB entry"
+      tests: [{ type: integration, file: "tests/integration/test_governed_ingest.py", function: "test_ingest_on_approval", status: pending }]
+    - bdd_scenario: "@bdd: BDD.01.03.f600"
+      description: "Governed write without evidence rejected"
+      tests: [{ type: integration, file: "tests/integration/test_governed_ingest.py", function: "test_reject_without_evidence", status: pending }]
+  coverage_table:
+    columns: [BDD Scenario, Unit, Integration, E2E, Total]
+    rows: [["BDD.01.03.c300", 0, 1, 0, 1], ["BDD.01.03.f600", 0, 1, 0, 1]]
+
+test_cases:
+  unit_tests:
+    cases:
+      - id: "TDD.05.04.a100"
+        name: "coverage report flags missing KB representation"
+        spec_ref: "@spec: SPEC-05"
+        target: "check_coverage"
+        test_file: "tests/unit/test_coverage.py"
+        test_function: "test_coverage_flags_missing"
+        inputs: [{ name: "project", type: "str", value: "proj with 1 un-represented artifact" }]
+        expected_output: { type: "CoverageReport", value: "ok=False; missing=[artifact]" }
+        edge_cases: [{ condition: "all represented", expected: "ok=True" }]
+  integration_tests:
+    cases:
+      - id: "TDD.05.04.b100"
+        name: "ingest on approval; reject without evidence (parity gate)"
+        spec_ref: "@spec: SPEC-05"
+        contract: "ingest_artifact governed write"
+        test_file: "tests/integration/test_governed_ingest.py"
+        test_function: "test_ingest_on_approval"
+        setup: ["mock MemoryStore + GraphPort"]
+        action: { description: "ingest_artifact with evidence_ref; then without" }
+        expected_state: ["with evidence: EntryId + traceability link", "without: GovernedWriteRejected + audit"]
+        error_paths: [{ condition: "missing evidence", expected_error: "GovernedWriteRejected" }]
+  e2e_tests:
+    cases:
+      - id: "TDD.05.04.c100"
+        name: "ucx_kb coverage-rule conformance suite passes"
+        bdd_ref: "@bdd: BDD.01.03.c300"
+        spec_ref: "@spec: SPEC-05"
+        test_file: "tests/e2e/test_ucx_kb_parity.py"
+        test_function: "test_coverage_parity_e2e"
+        workflow:
+          - { step: 1, action: "run ucx_kb coverage-rule suite against Engramory", expected: "100% rules satisfied" }
+        timeout_seconds: 120
+        cleanup: "reset KB"
+
+thresholds:
+  unit: { coverage_target: ">=90%", pass_criteria: ["All pass"], fail_action: "Block merge" }
+  integration: { coverage_target: ">=85%", pass_criteria: ["Governed write enforced"], fail_action: "Block merge" }
+  e2e: { coverage_target: "100% ucx_kb coverage rules", timeout_budget: "<=300s", pass_criteria: ["Parity suite green"], fail_action: "Block ucx_kb cutover" }
+
+tdd_order:
+  phases:
+    - { phase: 1, name: "Write Tests", action: "Tests first", output: "Test files" }
+    - { phase: 2, name: "Red", action: "Confirm fail", output: "Failure report" }
+    - { phase: 3, name: "Implement", action: "Make pass", output: "Implementation" }
+    - { phase: 4, name: "Green", action: "All pass", output: "Pass report" }
+    - { phase: 5, name: "Refactor", action: "Stay green", output: "Refactored code" }
+
+traceability:
+  tags: ["@tdd: TDD-05"]
+  upstream:
+    spec_references: ["@spec: SPEC-05"]
+    adr_references: ["@adr: ADR.06.03.a100"]
+    bdd_references: ["@bdd: BDD.01.03.c300", "@bdd: BDD.01.03.f600"]
+    ears_references: ["@ears: EARS.01.03.c300", "@ears: EARS.01.03.a700"]
+  downstream: [{ type: IPLAN, layer: 8, description: "KB compatibility + Hermes skill adapters plan" }]
+  health_score: { iplan_ready: "[Pending]%", target_score: ">=90/100" }

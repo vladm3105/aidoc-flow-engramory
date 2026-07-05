@@ -1,0 +1,65 @@
+# IPLAN-06 — Ports & Portability (foundation; build first). Upstream: SPEC-06, TDD-06.
+metadata: { schema_version: "1.0", document_type: "iplan-document", layer: 8, total_sections: 6, c4_level: { value: none }, tags: [iplan-document, layer-8-artifact, shared-architecture] }
+
+document_control:
+  iplan_id: "IPLAN-06"
+  subtype: code_build
+  source_spec: "@spec: SPEC-06"
+  status: Draft
+  version: "1.0"
+  date_created: "2026-06-22T00:00:00"
+  last_updated: "2026-06-22T00:00:00"
+  author: "Engramory team"
+  complexity: 3
+  estimated_files: 6
+  session_count: 0
+
+file_manifest:
+  files:
+    - { path: "tests/unit/test_no_vendor_imports.py", order: 1, status: NOT_STARTED, session: null, verified: false }
+    - { path: "src/engramory/ports/__init__.py", order: 2, status: DONE, session: "scaffold", verified: false }
+    - { path: "src/engramory/adapters/dev/__init__.py", order: 3, status: NOT_STARTED, session: null, verified: false }
+    - { path: "src/engramory/adapters/factory.py", order: 4, status: NOT_STARTED, session: null, verified: false }
+    - { path: "tests/conformance/test_adapters.py", order: 5, status: NOT_STARTED, session: null, verified: false }
+    - { path: "tests/integration/test_migration.py", order: 6, status: NOT_STARTED, session: null, verified: false }
+
+execution_commands:
+  setup: ["source .venv/bin/activate", "mkdir -p src/engramory/adapters/dev tests/conformance"]
+  implementation:
+    - "# Ports already scaffolded in src/engramory/ports/. Confirm Protocols: Storage/Vector/Graph/Cache/LLM/Secrets/Events/Memory."
+    - "# TDD: tests/unit/test_no_vendor_imports.py (core has no vendor imports) FIRST"
+    - "# Implement dev adapters + factory(ENGRAMORY_PROFILE); reembed_and_reproject migration tool"
+  validation:
+    - "python -m pytest tests/unit/test_no_vendor_imports.py tests/conformance/test_adapters.py tests/integration/test_migration.py -v"
+    - "python -m mypy src/engramory/ports --strict && python -m ruff check src/engramory"
+
+implementation_contracts:
+  provided:
+    contracts:
+      - { name: "Ports (8 Protocols)", type: "Protocol Interface", note: "Storage/Vector/Graph/Cache/LLM/Secrets/Events/Memory — consumed by all other components" }
+      - { name: "Adapter factory", type: "DI Interface", note: "select adapter set by ENGRAMORY_PROFILE (dev|gcp|azure)" }
+      - { name: "reembed_and_reproject", type: "Data Migration", note: "re-embed from content_raw + rebuild graph" }
+  consumed:
+    dependencies: []
+
+session_handoff:
+  sessions:
+    - date: "2026-06-22"
+      agent: "(unstarted)"
+      files_touched:
+        - { path: "src/engramory/ports/__init__.py", action: created, status: DONE }
+      partial_work: "Port Protocol stubs exist from scaffolding; dev adapters + factory + migration tool not implemented."
+      blockers: "None — foundation layer; build first (build_order[0])."
+      next_session_directive: "File order 1: tests/unit/test_no_vendor_imports.py (TDD-06.04.a100)."
+      validation_results: { tests_passing: null, coverage: null, lint_clean: false }
+
+traceability:
+  upstream:
+    spec_references: ["@spec: SPEC-06"]
+    tdd_references: ["@tdd: TDD-06"]
+  downstream:
+    code_paths: ["@code: src/engramory/ports/", "@code: src/engramory/adapters/"]
+    test_paths: ["@tests: tests/conformance/test_adapters.py", "@tests: tests/integration/test_migration.py"]
+  code_inventory:
+    files:
+      - { path: "src/engramory/ports/__init__.py", status: created, session: "scaffold", verified: false }

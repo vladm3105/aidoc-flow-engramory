@@ -1,0 +1,128 @@
+# ADR-05 — Canonical memory in Postgres; projections rebuildable. Conformant form of docs/adr/0005.
+id: ADR-05
+title: "Canonical memory in Postgres; embeddings and graph are rebuildable projections"
+
+metadata:
+  schema_version: "1.0"
+  document_type: "adr-document"
+  layer: 5
+  lifecycle: mvp-prod-newmvp
+  id_standard: { format: "{doc_type}.{doc_id}.{section_id}.{hash}", hash_algorithm: SHA256, hash_length: 4 }
+
+document_control:
+  status: Accepted
+  date: "2026-06-22"
+  decision_makers: ["Technical Lead"]
+  author: "Engramory team"
+  version: "1.0"
+  originating_topic: "@prd: PRD.01.09.e500"
+  brd_reference: "@brd: BRD.01.08.a700"
+  spec_ready_score: "[Pending]/100"
+  revision_history:
+    - { version: "1.0", date: "2026-06-22T00:00:00", author: "Engramory team", changes: "Initial ADR (from docs/adr/0005)." }
+
+context:
+  problem_statement: |
+    The agent 'brain' must survive model and platform migrations (BRD-01 portability;
+    the user's primary concern). Embeddings are model-specific and the graph is engine-specific.
+  business_driver: "Portability of the distilled brain across models and clouds."
+  key_constraints: ["Embeddings change with model", "Graph engine may change (ADR-03)"]
+  technical_context: "EARS.01.03.a040 mandates canonical-store-is-truth + rebuildable projections; BDD.01.03.d010 cache-only accelerator."
+
+decision:
+  chosen_solution:
+    id: "ADR.05.03.a100"
+    title: "Store distilled memory as canonical rows (raw text + provenance); derive embeddings/graph"
+    description: |
+      Distilled memory lives in Postgres as rows with content_raw + provenance +
+      embedding_model/dims. Embeddings and the graph are projections regenerated from
+      canonical text. On any model/platform migration: re-embed from content_raw and
+      re-project the graph — no re-architecture.
+  key_components:
+    - { name: "memories table", role: "Canonical rows: content_raw, summary, provenance, embedding(+model/dims)" }
+    - { name: "Projection jobs", role: "Re-embed / re-project graph from canonical text" }
+  implementation_approach:
+    mvp_scope: "Schema keeps content_raw + provenance + embedding_model/dims; re-embed job."
+    next_cycle_scope: "Re-projection tooling for cloud migration (BRD-02)."
+  reversibility: "one-way"  # a foundational principle, not a swappable component
+
+alternatives:
+  options:
+    - id: "ADR.05.04.a100"
+      name: "Canonical text + rebuildable projections"
+      selected: true
+      description: "Own the store; embeddings/graph are derived."
+      pros: ["Brain survives model/platform change", "Vendor export not required", "Provenance traceable"]
+      cons: ["Must always keep raw text (storage)"]
+      estimated_cost: "$0"
+      fit: Best
+    - id: "ADR.05.04.b200"
+      name: "Trust a managed memory service as system-of-record"
+      selected: false
+      description: "Let a vendor memory service hold the canonical memory."
+      pros: ["Less to build"]
+      cons: ["Lock-in; export-button dependency; model-specific vectors as truth"]
+      rejection_reason: "Puts the most-migratable asset in the least-portable place."
+      estimated_cost: "$ vendor"
+      fit: Poor
+
+consequences:
+  positive_outcomes:
+    - { id: "ADR.05.05.a100", outcome: "Migration = re-embed + re-project from kept text; no data loss." }
+  tradeoffs_and_risks:
+    - { id: "ADR.05.05.b200", tradeoff: "Storing raw text increases footprint", impact: Low, mitigation: "Compress/cold-store old raw text; it's required for portability." }
+  what_breaks_if_wrong: "If raw text isn't kept, a model change orphans the embeddings and the brain can't migrate — hard requirement."
+  cost_estimate: { mvp_cost: "$0", ongoing_monthly: "$0 dev", notes: "Storage of raw text." }
+
+architecture_flow:
+  decision_sequence:
+    intent: { diagram_type: sequence, scope_boundary: "migration: canonical → projections", upstream_refs: "BDD.01.03.d010", downstream_refs: "SPEC memory schema + jobs" }
+    tag: "@diagram: sequence-async"
+    diagram:
+      type: sequenceDiagram
+      content: |
+        sequenceDiagram
+            participant Migrate as Migration job
+            participant Postgres as Canonical (content_raw)
+            participant Gateway as LLMPort
+            participant Index as Vector/Graph projection
+            Migrate->>Postgres: read content_raw + provenance
+            Migrate->>Gateway: re-embed(content_raw)
+            Gateway-->>Migrate: new vectors
+            Migrate->>Index: rebuild embeddings + graph
+  integration_points:
+    - { system: "LLMPort (ADR-04)", integration_type: "Async", purpose: "Re-embedding on migration." }
+
+implementation_assessment:
+  mvp_phases:
+    - { phase: "Schema + provenance", scope: "memories/episodes tables", risk: "Provenance completeness" }
+  rollback_plan: { strategy: "Rebuild projections from canonical text", trigger: "Projection corruption/model change", estimated_effort: "Re-embed run" }
+  monitoring_baseline:
+    - { metric: "memories missing provenance", target: "0", alert_threshold: ">0" }
+
+verification:
+  success_criteria:
+    - { criterion: "Re-embed reproduces retrievable memory from text", measurement: "Re-embed + recall test" }
+  bdd_scenario_refs: { scenarios: ["@bdd: BDD.01.03.d010", "@bdd: BDD.01.03.d400"] }
+
+traceability:
+  tags: ["@adr: ADR-05"]
+  originating_topic: "@prd: PRD.01.09.e500"
+  upstream:
+    bdd_references: ["@bdd: BDD.01.03.d010", "@bdd: BDD.01.03.d400"]
+    ears_references: ["@ears: EARS.01.03.a040", "@ears: EARS.01.03.f030"]
+  downstream_expected:
+    - { type: SPEC, layer: 6, description: "Memory schema + re-projection job specs." }
+  cross_links: { depends: [], discoverability: ["@discoverability: ADR-01 (Postgres spine)"] }
+  health_score: { spec_ready: "[Pending]%", target_score: ">=90/100" }
+
+related_decisions:
+  dependencies:
+    - { adr: "ADR-01", relationship: "Extends", rationale: "Canonical-memory principle on the Postgres spine." }
+    - { adr: "ADR-04", relationship: "Depends on", rationale: "Re-embedding uses the model gateway." }
+  supersedes: { items: [] }
+
+glossary:
+  terms:
+    - { term: "rebuildable projection", definition: "Derived store (vectors/graph) regenerable from canonical text." }
+    - { term: "provenance", definition: "Source episodes, agent, project, timestamps recorded per memory." }

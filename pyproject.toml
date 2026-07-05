@@ -1,0 +1,23 @@
+[project]
+name = "engramory"
+version = "0.1.0"
+description = "Shared agent knowledge & memory core — per-agent distilled long-term memory over MCP."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Engramory contributors" }]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["ruff", "pytest"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/engramory"]
+
+[tool.ruff]
+line-length = 100
+src = ["src"]

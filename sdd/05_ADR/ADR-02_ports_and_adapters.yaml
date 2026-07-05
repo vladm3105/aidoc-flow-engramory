@@ -1,0 +1,126 @@
+# ADR-02 — Ports & adapters (hexagonal). Conformant form of docs/adr/0002.
+id: ADR-02
+title: "Ports & adapters (hexagonal architecture)"
+
+metadata:
+  schema_version: "1.0"
+  document_type: "adr-document"
+  layer: 5
+  lifecycle: mvp-prod-newmvp
+  id_standard: { format: "{doc_type}.{doc_id}.{section_id}.{hash}", hash_algorithm: SHA256, hash_length: 4 }
+
+document_control:
+  status: Accepted
+  date: "2026-06-22"
+  decision_makers: ["Technical Lead"]
+  author: "Engramory team"
+  version: "1.0"
+  originating_topic: "@prd: PRD.01.09.e500"
+  brd_reference: "@brd: BRD.01.08.a700"
+  spec_ready_score: "[Pending]/100"
+  revision_history:
+    - { version: "1.0", date: "2026-06-22T00:00:00", author: "Engramory team", changes: "Initial ADR (from docs/adr/0002)." }
+
+context:
+  problem_statement: |
+    Engramory must run cheaply self-hosted now and migrate to GCP or Azure later
+    without rewrites (BRD-01 portability; PRD hosting/technology topics).
+  business_driver: "Cloud portability and dependency replaceability."
+  key_constraints: ["Dev = free OSS containers", "Cloud target undecided (GCP or Azure)"]
+  technical_context: "EARS.01.03.d010 (managed accelerator as cache-only) requires swappable infra behind interfaces."
+
+decision:
+  chosen_solution:
+    id: "ADR.02.03.a100"
+    title: "Depend only on ports; supply per-environment adapters"
+    description: |
+      The application core depends on interfaces (StoragePort, VectorPort, GraphPort,
+      CachePort, LLMPort, SecretsPort, EventsPort, MemoryPort). Each environment
+      provides adapters selected by an ENGRAMORY_PROFILE (dev|gcp|azure). Core code
+      never imports a vendor SDK.
+  key_components:
+    - { name: "Ports", role: "Vendor-neutral interfaces the core depends on" }
+    - { name: "Adapters", role: "Per-environment implementations (dev/gcp/azure)" }
+  implementation_approach:
+    mvp_scope: "Define all ports; ship dev adapters."
+    next_cycle_scope: "GCP/Azure adapter sets (BRD-02)."
+  reversibility: "two-way"
+
+alternatives:
+  options:
+    - id: "ADR.02.04.a100"
+      name: "Ports & adapters (hexagonal)"
+      selected: true
+      description: "Core ↔ interfaces ↔ swappable adapters."
+      pros: ["Cloud migration = adapter swap", "Testable core", "No vendor lock-in in core"]
+      cons: ["Upfront interface design overhead"]
+      estimated_cost: "$0"
+      fit: Best
+    - id: "ADR.02.04.b200"
+      name: "Direct vendor SDK calls in core"
+      selected: false
+      description: "Call managed services directly from business logic."
+      pros: ["Less initial code"]
+      cons: ["Cloud lock-in; rewrites to migrate; hard to test"]
+      rejection_reason: "Defeats the portability goal that justifies the whole platform."
+      estimated_cost: "$0"
+      fit: Poor
+
+consequences:
+  positive_outcomes:
+    - { id: "ADR.02.05.a100", outcome: "Migration GCP↔Azure↔self-host is an adapter swap, not a rewrite." }
+  tradeoffs_and_risks:
+    - { id: "ADR.02.05.b200", tradeoff: "Interface overhead / leaky abstractions", impact: Low, mitigation: "Keep ports minimal; only managed services that fit behind a port are allowed." }
+  what_breaks_if_wrong: "If a port abstraction leaks, an adapter swap may require core changes — caught by adapter conformance tests."
+  cost_estimate: { mvp_cost: "$0", ongoing_monthly: "$0", notes: "Design time only." }
+
+architecture_flow:
+  decision_sequence:
+    intent: { diagram_type: sequence, scope_boundary: "core ↔ port ↔ adapter", upstream_refs: "BDD.01.03.d010", downstream_refs: "all SPEC components" }
+    tag: "@diagram: sequence-sync"
+    diagram:
+      type: sequenceDiagram
+      content: |
+        sequenceDiagram
+            participant Core
+            participant Port as VectorPort (interface)
+            participant Adapter as Adapter (dev|gcp|azure)
+            Core->>Port: search(query, scope)
+            Port->>Adapter: delegated call
+            Adapter-->>Port: results
+            Port-->>Core: results
+  integration_points:
+    - { system: "Cloud managed services", integration_type: "Adapter", purpose: "Bound only behind a port." }
+
+implementation_assessment:
+  mvp_phases:
+    - { phase: "Define ports + dev adapters", scope: "8 port interfaces", risk: "Abstraction leakage" }
+  rollback_plan: { strategy: "Swap back to dev adapters", trigger: "Cloud adapter regression", estimated_effort: "Config change" }
+  monitoring_baseline:
+    - { metric: "adapter conformance test pass", target: "100%", alert_threshold: "<100%" }
+
+verification:
+  success_criteria:
+    - { criterion: "Core has zero vendor imports", measurement: "Static import scan" }
+  bdd_scenario_refs: { scenarios: ["@bdd: BDD.01.03.d010"] }
+
+traceability:
+  tags: ["@adr: ADR-02"]
+  originating_topic: "@prd: PRD.01.09.e500"
+  upstream:
+    bdd_references: ["@bdd: BDD.01.03.d010"]
+    ears_references: ["@ears: EARS.01.03.d010", "@ears: EARS.01.03.a040"]
+  downstream_expected:
+    - { type: SPEC, layer: 6, description: "Port interface specs + adapter contracts." }
+  cross_links: { depends: [], discoverability: ["@discoverability: ADR-04 (LLMPort gateway)"] }
+  health_score: { spec_ready: "[Pending]%", target_score: ">=90/100" }
+
+related_decisions:
+  dependencies:
+    - { adr: "ADR-01", relationship: "Depends on", rationale: "StoragePort/VectorPort back onto the Postgres spine." }
+  supersedes: { items: [] }
+
+glossary:
+  terms:
+    - { term: "Port", definition: "A vendor-neutral interface the core depends on." }
+    - { term: "Adapter", definition: "A per-environment implementation of a port." }

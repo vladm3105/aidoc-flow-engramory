@@ -1,0 +1,128 @@
+# ADR-03 — Neo4j over Apache AGE for the graph engine. Conformant form of docs/adr/0003.
+id: ADR-03
+title: "Neo4j over Apache AGE for the graph engine"
+
+metadata:
+  schema_version: "1.0"
+  document_type: "adr-document"
+  layer: 5
+  lifecycle: mvp-prod-newmvp
+  id_standard: { format: "{doc_type}.{doc_id}.{section_id}.{hash}", hash_algorithm: SHA256, hash_length: 4 }
+
+document_control:
+  status: Accepted
+  date: "2026-06-22"
+  decision_makers: ["Technical Lead"]
+  author: "Engramory team"
+  version: "1.0"
+  originating_topic: "@prd: PRD.01.09.a100"
+  brd_reference: "@brd: BRD.01.08.b200"
+  spec_ready_score: "[Pending]/100"
+  revision_history:
+    - { version: "1.0", date: "2026-06-22T00:00:00", author: "Engramory team", changes: "Initial ADR (from docs/adr/0003)." }
+
+context:
+  problem_statement: |
+    A graph is needed for relationship/multi-hop recall and traceability. Managed
+    Apache AGE exists on Azure Postgres but NOT GCP Cloud SQL/AlloyDB; the target
+    cloud is undecided (PRD data-architecture topic).
+  business_driver: "Multi-cloud portability of the graph capability + graph query power."
+  key_constraints: ["Cloud undecided", "Graph must be portable across GCP and Azure"]
+  technical_context: "EARS.01.03.a100 retrieval may use relationship traversal; graph is a rebuildable projection (ADR-05)."
+
+decision:
+  chosen_solution:
+    id: "ADR.03.03.a100"
+    title: "Default pure-Postgres graph; promote to Neo4j (Community→Aura) when needed; AGE only if Azure-committed"
+    description: |
+      Keep graph access behind GraphPort. Start with relational edge tables +
+      recursive CTEs in Postgres while needs are shallow. When real multi-hop /
+      GraphRAG is needed, use Neo4j (Community self-host → multi-cloud Aura).
+      Reserve Apache AGE as a fallback only if the project commits to Azure.
+  key_components:
+    - { name: "GraphPort", role: "Vendor-neutral graph interface" }
+    - { name: "Neo4j (Aura)", role: "Dedicated graph engine when promoted; multi-cloud managed" }
+  implementation_approach:
+    mvp_scope: "Pure-Postgres edges + recursive CTE behind GraphPort."
+    next_cycle_scope: "Neo4j adapter when graph queries demand it."
+  reversibility: "two-way"  # behind GraphPort; graph is a rebuildable projection
+
+alternatives:
+  options:
+    - id: "ADR.03.04.a100"
+      name: "Neo4j (Community → Aura) behind GraphPort"
+      selected: true
+      description: "Multi-cloud managed graph; best Cypher/GraphRAG."
+      pros: ["Aura managed on GCP AND Azure", "Mature graph + vector index", "Reuses RAC's Neo4j work"]
+      cons: ["Separate engine to operate"]
+      estimated_cost: "$0 dev (Community)"
+      fit: Best
+    - id: "ADR.03.04.b200"
+      name: "Apache AGE in Postgres"
+      selected: false
+      description: "Graph inside Postgres; one backup."
+      pros: ["Single engine; travels with pg_dump"]
+      cons: ["Managed only on Azure, not GCP; smaller ecosystem; no GDS algorithms"]
+      rejection_reason: "Not managed on GCP — breaks multi-cloud portability for an undecided target."
+      estimated_cost: "$0"
+      fit: Good
+
+consequences:
+  positive_outcomes:
+    - { id: "ADR.03.05.a100", outcome: "Graph capability portable across both clouds; deferred engine choice." }
+  tradeoffs_and_risks:
+    - { id: "ADR.03.05.b200", tradeoff: "A second store when promoted to Neo4j", impact: Medium, mitigation: "Treat graph as rebuildable projection of canonical Postgres (re-project on migration)." }
+  what_breaks_if_wrong: "If pure-Postgres can't serve deep traversals, recall quality drops until Neo4j is added — non-destructive (projection)."
+  cost_estimate: { mvp_cost: "$0", ongoing_monthly: "$0 dev", notes: "Aura cost on promotion." }
+
+architecture_flow:
+  decision_sequence:
+    intent: { diagram_type: sequence, scope_boundary: "retrieval ↔ GraphPort", upstream_refs: "BDD.01.03.a100", downstream_refs: "SPEC graph component" }
+    tag: "@diagram: sequence-sync"
+    diagram:
+      type: sequenceDiagram
+      content: |
+        sequenceDiagram
+            participant Retrieval
+            participant GraphPort
+            participant Graph as PurePG | Neo4j
+            Retrieval->>GraphPort: traverse(entity, hops)
+            GraphPort->>Graph: query
+            Graph-->>GraphPort: subgraph
+            GraphPort-->>Retrieval: related nodes
+  integration_points:
+    - { system: "Canonical Postgres", integration_type: "Re-projection", purpose: "Graph rebuilt from canonical entities/relations." }
+
+implementation_assessment:
+  mvp_phases:
+    - { phase: "GraphPort + pure-PG adapter", scope: "Edges + recursive CTE", risk: "Deep traversal performance" }
+  rollback_plan: { strategy: "Re-project graph from canonical store into chosen engine", trigger: "Engine swap", estimated_effort: "Re-run extraction" }
+  monitoring_baseline:
+    - { metric: "graph query latency", target: "within retrieval p95 budget", alert_threshold: "exceeds budget" }
+
+verification:
+  success_criteria:
+    - { criterion: "Graph reachable behind GraphPort with either backend", measurement: "Adapter conformance test" }
+  bdd_scenario_refs: { scenarios: ["@bdd: BDD.01.03.a100"] }
+
+traceability:
+  tags: ["@adr: ADR-03"]
+  originating_topic: "@prd: PRD.01.09.a100"
+  upstream:
+    bdd_references: ["@bdd: BDD.01.03.a100"]
+    ears_references: ["@ears: EARS.01.03.a100", "@ears: EARS.01.03.a040"]
+  downstream_expected:
+    - { type: SPEC, layer: 6, description: "Graph component spec + GraphPort contract." }
+  cross_links: { depends: [], discoverability: ["@discoverability: ADR-01 (Postgres spine)"] }
+  health_score: { spec_ready: "[Pending]%", target_score: ">=90/100" }
+
+related_decisions:
+  dependencies:
+    - { adr: "ADR-01", relationship: "Constrains", rationale: "Graph is a projection of the Postgres canonical store." }
+    - { adr: "ADR-02", relationship: "Depends on", rationale: "Access via GraphPort." }
+  supersedes: { items: [] }
+
+glossary:
+  terms:
+    - { term: "Apache AGE", definition: "Graph extension for PostgreSQL (managed on Azure, not GCP)." }
+    - { term: "GraphRAG", definition: "Retrieval augmented by graph traversal over entities/relations." }

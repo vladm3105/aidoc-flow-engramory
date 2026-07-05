@@ -1,0 +1,48 @@
+# BRD-05 — Multi-Tenancy, Security & Compliance Hardening  (DRAFT SKETCH — scope only)
+# SKETCH: business scope only. NO downstream layers until MVP-5 begins.
+id: BRD-05
+title: "Multi-Tenancy, Security & Compliance Hardening"
+
+metadata:
+  schema_version: "1.0"
+  document_type: "brd-document"
+  layer: 1
+  brd_type: { value: feature }
+  status_marker: sketch
+  c4_level: { value: context }
+
+document_control:
+  project_name: "Engramory (aidoc-flow-engramory)"
+  version: "0.1"
+  status: Draft
+  date_created: "2026-06-22T00:00:00"
+  author: "Engramory team"
+
+introduction:
+  business_context: |
+    BRD-01 includes baseline scoping/isolation. Regulated consumers (e.g., BeeLocal remittance)
+    require enterprise-grade tenancy, security, and compliance posture.
+  purpose: "Define requirements for enterprise multi-tenancy, security hardening, and compliance readiness."
+  document_scope:
+    in_scope: ["Enterprise SSO + RBAC", "Per-tenant residency + CMEK", "Hardened audit + retention", "SOC 2 / compliance readiness"]
+    out_of_scope: ["Baseline scoping (BRD-01)", "Observability dashboards (BRD-06)"]
+
+business_objectives:
+  hypothesis:
+    statement: "Enterprise/regulated consumers adopt Engramory once tenancy, security, and compliance meet their bar."
+  goals:
+    - { statement: "Per-tenant isolation + residency enforced", target: "No cross-tenant access; residency honored" }
+    - { statement: "Compliance posture", target: "SOC 2 Type I-ready architecture; HIPAA-ready" }
+
+project_scope:
+  core_features:
+    p1_must_have: ["SSO + RBAC", "Per-tenant residency + CMEK", "Immutable audit + retention policy", "Compliance controls mapping"]
+    p2_should_have: ["Customer-mirrored audit", "Policy-as-code governance"]
+  out_of_scope: { items: ["Observability tooling (BRD-06)"] }
+
+traceability:
+  tags: ["@brd: BRD-05"]
+  cross_links: { depends: ["@depends: BRD-01"] }
+  downstream_expected: []
+
+_sketch_note: "Draft sketch. Expand to full BRD when MVP-5 begins."

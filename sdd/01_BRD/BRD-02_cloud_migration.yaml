@@ -1,0 +1,49 @@
+# BRD-02 — Cloud Migration & Managed Operations  (DRAFT SKETCH — scope only)
+# SKETCH: business scope only. NO downstream layers (PRD/EARS/.../IPLAN) until MVP-2 begins.
+id: BRD-02
+title: "Cloud Migration & Managed Operations"
+
+metadata:
+  schema_version: "1.0"
+  document_type: "brd-document"
+  layer: 1
+  brd_type: { value: feature }
+  status_marker: sketch     # sketch | full
+  c4_level: { value: context }
+
+document_control:
+  project_name: "Engramory (aidoc-flow-engramory)"
+  version: "0.1"
+  status: Draft
+  date_created: "2026-06-22T00:00:00"
+  author: "Engramory team"
+
+introduction:
+  business_context: |
+    BRD-01 delivers a portable, self-hosted core whose portability is realized only when a
+    managed cloud adapter set exists. This cycle moves Engramory to GCP or Azure.
+  purpose: "Define the feature requirements to run Engramory on managed cloud services without re-architecture."
+  document_scope:
+    in_scope: ["GCP/Azure adapter sets behind existing ports", "Managed Postgres/graph/model endpoints", "Migration tooling (pg_dump + re-embed + re-project)", "IaC for the chosen cloud"]
+    out_of_scope: ["New memory features (other cycles)", "Multi-cloud simultaneous operation (later)"]
+
+business_objectives:
+  hypothesis:
+    statement: "Engramory migrates self-host → GCP or Azure by adapter swap + data dump, with no core changes."
+  goals:
+    - { statement: "Production-grade managed deployment on the chosen cloud", target: "Core unchanged; adapters + IaC only" }
+    - { statement: "Migration runbook proven", target: "Dump + restore + re-embed reproduces the brain" }
+
+project_scope:
+  core_features:
+    p1_must_have: ["GCP and/or Azure adapter set behind ports", "Managed Postgres + vector", "Managed model endpoint via gateway", "Secrets via cloud KMS/Key Vault", "Migration + re-embed tool"]
+    p2_should_have: ["Managed graph (Aura) adapter", "Cost/budget guardrails"]
+  out_of_scope: { items: ["Advanced ML distillation (BRD-03)", "Enterprise multi-tenancy hardening (BRD-05)"] }
+
+traceability:
+  tags: ["@brd: BRD-02"]
+  cross_links:
+    depends: ["@depends: BRD-01"]
+  downstream_expected: []   # none yet — sketch; layers authored when MVP-2 starts
+
+_sketch_note: "Draft sketch. When MVP-2 begins, expand to full BRD (5-15 FRs) then author PRD→IPLAN."

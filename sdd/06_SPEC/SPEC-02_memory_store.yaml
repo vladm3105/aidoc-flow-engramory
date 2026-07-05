@@ -1,0 +1,132 @@
+# SPEC-02 — Knowledge & Memory Store (data contracts, C4-L3). Upstream: ADR-01, ADR-05.
+metadata:
+  schema_version: "1.0"
+  document_type: "spec-document"
+  layer: 6
+  total_sections: 8
+  deliverable_type: code
+  c4_level: { value: component }
+  id_standard: { format: "{doc_type}.{doc_id}.{section_id}.{hash}", hash_algorithm: SHA256, hash_length: 4 }
+  tags: [spec-document, layer-6-artifact, shared-architecture]
+
+id: SPEC-02
+title: "Knowledge & Memory Store"
+
+document_control:
+  status: Draft
+  version: "1.0"
+  date_created: "2026-06-22T00:00:00"
+  last_updated: "2026-06-22T00:00:00"
+  author: "Engramory team"
+  component: "MemoryStore"
+  tdd_ready_score: "[Pending]/100"
+
+component_overview:
+  description: |
+    Canonical persistence for episodes, distilled memories, knowledge-base sections, and
+    agent profiles. Postgres is the source of truth; embeddings/graph are rebuildable
+    projections. Defines the typed data contracts and repository operations.
+  architecture_decision: "@adr: ADR-05"
+  diagram:
+    tags: ["@diagram: c4-l3", "@diagram: dfd-l3"]
+    mermaid: |
+      flowchart LR
+        MemoryService --> Repository
+        Repository --> StoragePort
+        Repository --> VectorPort
+  language: "Python"
+  dependencies:
+    - { name: "StoragePort (SPEC-06)", version: "internal", purpose: "Relational persistence" }
+    - { name: "VectorPort (SPEC-06)", version: "internal", purpose: "Vector index (projection)" }
+
+interfaces:
+  exports:
+    - name: "add_episode"
+      type: "async function"
+      signature: "async def add_episode(scope: Scope, episode: EpisodeIn) -> EpisodeId"
+      description: "Persist an episode idempotently by content hash within scope."
+      errors: ["StoreUnavailable"]
+    - name: "get_memories"
+      type: "async function"
+      signature: "async def get_memories(scope: Scope, query_vec: Vector, k: int) -> list[Memory]"
+      description: "Return top-k distilled memories within scope (advisory-only excluded by default)."
+      errors: ["StoreUnavailable"]
+    - name: "upsert_memory"
+      type: "async function"
+      signature: "async def upsert_memory(m: Memory) -> MemoryId"
+      description: "Insert/supersede a distilled memory (keeps content_raw + provenance)."
+      errors: []
+    - name: "upsert_kb_section"
+      type: "async function"
+      signature: "async def upsert_kb_section(s: KBSection) -> SectionId"
+      description: "Insert/update a knowledge-base section with citation anchors."
+      errors: []
+
+data_models:
+  models:
+    - name: "Episode"
+      type: "dataclass"
+      fields:
+        - { name: "agent_id", type: "str", required: true, description: "Owner agent" }
+        - { name: "project_id", type: "str", required: true, description: "Project scope" }
+        - { name: "domain_id", type: "str | None", required: false, description: "Domain grouping over projects (additive; full use in BRD-04)" }
+        - { name: "kind", type: "str", required: true, description: "decision|error|outcome|note" }
+        - { name: "content_raw", type: "str", required: true, description: "Raw experience text" }
+        - { name: "content_hash", type: "str", required: true, description: "Idempotency key" }
+    - name: "Memory"
+      type: "dataclass"
+      fields:
+        - { name: "scope", type: "str", required: true, description: "agent|project|domain|shared" }
+        - { name: "domain_id", type: "str | None", required: false, description: "Domain grouping; a domain-scoped memory is shared by all projects in this domain (additive; BRD-04)" }
+        - { name: "type", type: "str", required: true, description: "semantic|episodic|procedural" }
+        - { name: "content_raw", type: "str", required: true, description: "Source text (enables re-embedding)" }
+        - { name: "summary", type: "str", required: true, description: "Distilled form for prompts" }
+        - { name: "embedding_model", type: "str", required: true, description: "Model used (for re-embedding)" }
+        - { name: "provenance", type: "dict", required: true, description: "Source episodes, agent, project, ts" }
+        - { name: "confidence", type: "float", required: true, description: "Quarantine if below floor" }
+        - { name: "valid_from", type: "datetime", required: true, description: "Temporal validity start" }
+        - { name: "valid_to", type: "datetime | None", required: false, description: "End-dated when superseded" }
+        - { name: "supersedes", type: "MemoryId | None", required: false, description: "Corrected predecessor" }
+    - name: "KBSection"
+      type: "dataclass"
+      fields:
+        - { name: "doc_id", type: "str", required: true, description: "Source document/artifact id" }
+        - { name: "text", type: "str", required: true, description: "Section content" }
+        - { name: "citation", type: "str", required: true, description: "Citation anchor" }
+    - name: "AgentProfile"
+      type: "dataclass"
+      fields:
+        - { name: "agent_id", type: "str", required: true, description: "Agent identity" }
+        - { name: "standing_preferences", type: "dict", required: false, description: "Durable preferences" }
+
+behavior:
+  validation_rules:
+    - { rule: "Every distilled memory carries provenance + embedding_model", source: "@ears: EARS.01.03.f030" }
+    - { rule: "Canonical relational store is source of truth; embeddings/graph are projections", source: "@ears: EARS.01.03.a040" }
+  state_transitions:
+    - { from: "Episode", to: "Memory", trigger: "distillation reflection pass", source: "@bdd: BDD.01.03.d400" }
+    - { from: "Memory", to: "Superseded", trigger: "correction (valid_to set, supersedes link)", source: "@bdd: BDD.01.03.a700" }
+  error_handling:
+    - { condition: "Duplicate episode (same content+scope)", response: "Store at most once (idempotent)", source: "@bdd: BDD.01.03.c900" }
+
+implementation_notes:
+  constraints: ["Always persist content_raw + embedding_model/dims", "Vector index dimension set per embedding model", "domain_id nullable; domain-scoped memory shared across a domain's projects"]
+  patterns: ["Repository pattern over StoragePort/VectorPort", "Soft-supersede instead of delete"]
+  performance_considerations: ["HNSW/IVF vector index for retrieval; batch projection writes"]
+
+tdd_contracts:
+  tdd_document: "@tdd: TDD-02"
+  test_files:
+    - { path: "tests/unit/test_models.py", covers: "Episode/Memory invariants (provenance, hash)" }
+    - { path: "tests/integration/test_repository.py", covers: "idempotent add, supersede, scope filter" }
+
+traceability:
+  tags: ["@spec: SPEC-02"]
+  upstream:
+    adr_references: ["@adr: ADR.01.03.a100", "@adr: ADR.05.03.a100"]
+    bdd_references: ["@bdd: BDD.01.03.b200", "@bdd: BDD.01.03.c900", "@bdd: BDD.01.03.d010"]
+    ears_references: ["@ears: EARS.01.03.f030", "@ears: EARS.01.03.a040", "@ears: EARS.01.03.e500", "@ears: EARS.01.03.b200"]
+  downstream:
+    - { type: TDD, layer: 7, description: "Data-contract + repository tests" }
+    - { type: IPLAN, layer: 8, description: "Schema migration + repository implementation" }
+  health_score: { tdd_ready: "[Pending]%", target_score: ">=90/100" }

@@ -1,0 +1,49 @@
+# BRD-07 — Brain Portability & Migration Tooling  (DRAFT SKETCH — scope only)
+# SKETCH: business scope only. NO downstream layers until MVP-7 begins.
+id: BRD-07
+title: "Brain Portability & Migration Tooling"
+
+metadata:
+  schema_version: "1.0"
+  document_type: "brd-document"
+  layer: 1
+  brd_type: { value: feature }
+  status_marker: sketch
+  c4_level: { value: context }
+
+document_control:
+  project_name: "Engramory (aidoc-flow-engramory)"
+  version: "0.1"
+  status: Draft
+  date_created: "2026-06-22T00:00:00"
+  author: "Engramory team"
+
+introduction:
+  business_context: |
+    The user's primary concern is migrating an agent's "brain" across platforms/engines/versions.
+    BRD-01 keeps the canonical store portable; this cycle delivers explicit export/import and
+    cross-engine migration tooling.
+  purpose: "Define requirements for brain export/import, cross-engine migration, and automated re-embed/re-projection."
+  document_scope:
+    in_scope: ["Export/import of an agent's memory (open format)", "Cross-engine migration (e.g., swap MemoryPort engine)", "Automated re-embed + graph re-projection", "Migration verification"]
+    out_of_scope: ["Cloud infra migration (BRD-02)", "Distillation quality (BRD-03)"]
+
+business_objectives:
+  hypothesis:
+    statement: "An agent's brain can be exported, moved across engines/platforms/models, and verified intact."
+  goals:
+    - { statement: "Portable export/import of memory", target: "Open format; round-trip preserves content + provenance" }
+    - { statement: "Cross-engine/model migration verified", target: "Re-embed + re-project reproduces retrievable memory" }
+
+project_scope:
+  core_features:
+    p1_must_have: ["Brain export/import (open format)", "Re-embed + re-project automation", "Cross-engine MemoryPort migration", "Migration verification suite"]
+    p2_should_have: ["Scheduled backups/snapshots", "Selective per-agent export"]
+  out_of_scope: { items: ["Pay-memory (BRD-08, TBD by owner)"] }
+
+traceability:
+  tags: ["@brd: BRD-07"]
+  cross_links: { depends: ["@depends: BRD-01"] }
+  downstream_expected: []
+
+_sketch_note: "Draft sketch. Expand to full BRD when MVP-7 begins."

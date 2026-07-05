@@ -1,0 +1,68 @@
+# BRD-08 — Multi-Project Operations & Tuning  (DRAFT SKETCH — scope only)
+# SKETCH: business scope only. NO downstream layers until MVP-8 begins.
+# Replaces the earlier project-specific "pay-memory/Privy" idea — that is a CONSUMER
+# concern (e.g., BeeLocal's own SDD), NOT an Engramory BRD. Engramory stays domain-agnostic.
+id: BRD-08
+title: "Multi-Project Operations & Tuning"
+
+metadata:
+  schema_version: "1.0"
+  document_type: "brd-document"
+  layer: 1
+  brd_type: { value: feature }
+  status_marker: sketch
+  c4_level: { value: context }
+
+document_control:
+  project_name: "Engramory (aidoc-flow-engramory)"
+  version: "0.1"
+  status: Draft
+  date_created: "2026-06-22T00:00:00"
+  author: "Engramory team"
+
+introduction:
+  business_context: |
+    Once domains/projects are configurable (BRD-04), Engramory must be operable at scale:
+    run many projects/domains in one instance (or one instance per project), with repeatable
+    onboarding and per-project tuning — generically, for any project.
+  purpose: "Define requirements for operating multiple projects/domains: onboarding runbooks, isolation/quotas, instance tuning, and the shared-instance vs dedicated-instance topology."
+  document_scope:
+    in_scope:
+      - "Repeatable onboarding runbooks/workflows for any project/domain"
+      - "Per-project/domain instance tuning (retrieval params, distillation cadence/confidence floors, model/embedding choice, scopes, quotas)"
+      - "Multi-project-in-one-instance operations (isolation, quotas, shared vs scoped memory)"
+      - "Shared-instance vs dedicated-instance deployment topology"
+    out_of_scope:
+      - "The config model itself (BRD-04)"
+      - "Tenant security/compliance hardening (BRD-05)"
+      - "Project-specific business features (owned by consumer projects, e.g., BeeLocal pay-memory)"
+
+business_objectives:
+  hypothesis:
+    statement: "Any project can be onboarded and tuned via repeatable runbooks, and one instance can safely host many projects/domains (with a dedicated-instance option for high-isolation tenants)."
+  goals:
+    - { statement: "Generic onboarding runbook works for any project/domain", target: "New project onboarded by runbook, no bespoke work" }
+    - { statement: "Per-project tuning without affecting others", target: "Isolated tuning knobs + quotas" }
+    - { statement: "Shared instance hosts multiple projects safely", target: "Isolation verified; dedicated-instance opt-in available" }
+
+project_scope:
+  core_features:
+    p1_must_have:
+      - "Onboarding runbooks/workflows (any project/domain)"
+      - "Per-project/domain tuning knobs (retrieval, distillation, models, scopes, quotas)"
+      - "Multi-project isolation + quotas in one instance"
+      - "Deployment topology: shared instance (default) + dedicated instance (opt-in)"
+    p2_should_have:
+      - "Self-serve project provisioning"
+      - "Per-project usage/cost reporting"
+  out_of_scope: { items: ["Consumer-specific features (BeeLocal pay-memory, etc.) — owned by those projects"] }
+
+traceability:
+  tags: ["@brd: BRD-08"]
+  cross_links: { depends: ["@depends: BRD-01", "@depends: BRD-04"] }
+  downstream_expected: []
+
+_open_decisions:
+  - "Default deployment: shared multi-project instance with strict scoping vs dedicated instance per project? (Proposed: shared default, dedicated opt-in for regulated/high-isolation tenants.)"
+
+_sketch_note: "Draft sketch. Expand to full BRD when MVP-8 begins. Pay-memory/Privy is explicitly OUT of Engramory scope — it belongs to the consumer project's SDD and only consumes Engramory's generic provenance/audit memory."
