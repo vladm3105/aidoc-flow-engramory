@@ -33,6 +33,7 @@ All notable changes to Engramory are documented here. Format: [Keep a Changelog]
 - `docs/research/MEMORY_CONCEPT_REVIEW.md`: conceptual review of the agent-memory approach.
 - `docs/STRATEGY.md`: build strategy & recommendation (build the plane, adopt the engine, lead with evaluation).
 - ADR-08 + `docs/CORES.md`: single platform, two bounded cores (Memory and Knowledge) sharing the spine, with the boundary rules and revisit triggers.
+- ADR-09: independent memory storage — Engramory owns its Postgres store; the iplan execution ledger is integrated as an **episode source** (execution-events → L1 episodes via `EventsPort`) with provenance cross-linking, not a storage backend.
 - Dev tooling: ruff lint rules, pytest + mypy config, `py.typed`, CI workflow, and a test skeleton.
 
 ### Changed

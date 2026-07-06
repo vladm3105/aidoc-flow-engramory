@@ -65,6 +65,14 @@ Both cores share, and must not duplicate:
 - The cores **share the entire spine** — two projects means two copies kept in sync forever.
 - They are **coupled at runtime** — retrieval blends L0 + L2; distillation reads knowledge/episodes to write memory. A project boundary adds a network hop to the hot path and splits one scope/auth decision into two.
 
+## Related plane: the execution ledger (not a core)
+
+The iplan-runner / iplanic **execution ledger** is a *separate bounded context* — the
+execution plane's system-of-record — **not** a third Engramory core and **not** Engramory's
+storage backend. Engramory owns its own store; it **ingests** execution-events as L1 episodes
+(via `EventsPort`) and cross-links provenance by ID. Decision recorded in
+[ADR-09](../sdd/05_ADR/ADR-09_independent_memory_storage.yaml).
+
 ## When to revisit (extract a core later)
 
 The ports boundary makes a later split cheap, so it is deferred until a trigger appears:
