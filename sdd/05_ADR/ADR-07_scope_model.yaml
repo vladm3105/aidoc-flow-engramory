@@ -1,0 +1,108 @@
+# ADR-07 — Memory scope ladder and tenant isolation.
+id: ADR-07
+title: "Scope ladder (agent/project/domain/space) with tenant_id as the isolation boundary"
+
+metadata:
+  schema_version: "1.0"
+  document_type: "adr-document"
+  layer: 5
+  lifecycle: mvp-prod-newmvp
+  id_standard: { format: "{doc_type}.{doc_id}.{section_id}.{hash}", hash_algorithm: SHA256, hash_length: 4 }
+
+document_control:
+  status: Accepted
+  date: "2026-07-05"
+  decision_makers: ["Technical Lead"]
+  author: "Engramory team"
+  version: "1.0"
+  originating_topic: "@brd: BRD.01.07.4d01"
+  brd_reference: "@brd: BRD.01.07.4d01"
+  spec_ready_score: "[Pending]/100"
+  revision_history:
+    - { version: "1.0", date: "2026-07-05T00:00:00", author: "Engramory team", changes: "Reconcile the scope vocabulary that had drifted across schema (space_id), SPEC-01 (tenant_id), ARCHITECTURE ({agent,project,space,shared}) and migration 0002 ({agent,project,domain,shared})." }
+
+context:
+  problem_statement: |
+    The memory scope vocabulary drifted across artifacts: migration 0001 used
+    scope {agent,project,space,shared} with a space_id column; migration 0002 added a
+    'domain' level and dropped 'space'; SPEC-01 named the isolation column tenant_id.
+    A single authoritative model is needed before adapters and retrieval are built.
+  business_driver: "Correct, testable multi-tenant scoping is a launch-gate P1 (BRD-01 shared access + per-agent identity)."
+  key_constraints:
+    - "A memory must be scopeable from private-to-one-agent up to tenant-wide."
+    - "Multi-tenant isolation must be a hard boundary, not a scope value."
+    - "The ladder must extend additively (no destructive migration)."
+
+decision:
+  chosen_solution:
+    id: "ADR.07.03.a100"
+    title: "Four-level scope ladder within a tenant isolation boundary"
+    description: |
+      Scope ladder (narrowest -> widest), all WITHIN one tenant:
+        agent   -> visible to the owning agent (agent_id)
+        project -> shared by all agents in a project (project_id)
+        domain  -> shared across all projects in a domain (domain_id); a domain groups projects
+        space   -> shared tenant-wide (the tenant's common space); top of the ladder
+      Isolation: tenant_id is the hard boundary and is a COLUMN, not a scope value —
+      nothing crosses tenants. The earlier 'shared' scope value is retired in favor of
+      'space'; the earlier space_id column is renamed tenant_id.
+  key_components:
+    - { name: "memories.scope", role: "One of agent|project|domain|space (no CHECK: extends additively)" }
+    - { name: "tenant_id column", role: "Hard isolation key on episodes/memories (renamed from space_id)" }
+    - { name: "domain_id column", role: "Groups projects; added in migration 0002" }
+  implementation_approach:
+    mvp_scope: "0001 seeds agent|project|space + tenant_id; 0002 inserts 'domain'. GLOSSARY + SPEC-01 aligned."
+    next_cycle_scope: "Full domain config + domain-shared memory (BRD-04)."
+  reversibility: "two-way"  # scope values extend additively; renames are localized pre-release
+
+alternatives:
+  options:
+    - id: "ADR.07.04.a100"
+      name: "agent|project|domain|space + tenant_id isolation"
+      selected: true
+      description: "Keep 'space' as the tenant-wide top; retire redundant 'shared'; tenant_id isolates."
+      pros: ["No column duplicates a scope value", "Additive domain insertion", "One isolation boundary"]
+      cons: ["'space' scope vs 'tenant_id' column is a naming pairing to document"]
+      fit: Best
+    - id: "ADR.07.04.b200"
+      name: "Keep both 'space' and 'shared' scope values"
+      selected: false
+      description: "Five-level ladder agent|project|domain|space|shared."
+      cons: ["Two tenant-wide-ish levels with no distinct column to back a sub-tenant 'space'"]
+      rejection_reason: "Ambiguous overlap once space_id becomes the tenant isolation column."
+      fit: Poor
+    - id: "ADR.07.04.c300"
+      name: "'domain' replaces 'space' entirely"
+      selected: false
+      description: "Drop the tenant-wide sharing level; only agent|project|domain."
+      rejection_reason: "Loses tenant-wide shared memory, an explicit requirement."
+      fit: Poor
+
+consequences:
+  positive_outcomes:
+    - { id: "ADR.07.05.a100", outcome: "One authoritative vocabulary across schema, SPEC-01, GLOSSARY, ARCHITECTURE, and ports." }
+  tradeoffs_and_risks:
+    - { id: "ADR.07.05.b200", tradeoff: "'space' scope paired with 'tenant_id' column", impact: Low, mitigation: "Defined once in GLOSSARY; 'space' = the tenant's shared space." }
+  what_breaks_if_wrong: "Wrong-scope retrieval (cross-tenant leakage or over-narrow recall); a launch-gate authz risk."
+
+traceability:
+  tags: ["@adr: ADR-07"]
+  originating_topic: "@brd: BRD.01.07.4d01"
+  upstream:
+    ears_references: ["@ears: EARS.01.03.e020"]
+  downstream_expected:
+    - { type: SPEC, layer: 6, description: "SPEC-01 ActorContext + Scope; SPEC-02 Memory.scope." }
+  cross_links: { depends: ["ADR-01"], discoverability: ["@discoverability: ADR-06 (fail-closed access)"] }
+  health_score: { spec_ready: "[Pending]%", target_score: ">=90/100" }
+
+related_decisions:
+  dependencies:
+    - { adr: "ADR-01", relationship: "Extends", rationale: "Scope columns live on the Postgres spine." }
+    - { adr: "ADR-06", relationship: "Relates to", rationale: "Scope is enforced by the fail-closed access surface." }
+  supersedes: { items: [] }
+
+glossary:
+  terms:
+    - { term: "scope", definition: "How widely a memory is shared within a tenant: agent|project|domain|space." }
+    - { term: "tenant_id", definition: "Hard multi-tenant isolation boundary; a column, not a scope value." }
+    - { term: "space (scope)", definition: "Tenant-wide sharing; the top of the ladder (replaces 'shared')." }
