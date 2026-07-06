@@ -30,7 +30,7 @@ From the framework, `ucx_kb` is the **Knowledge Base package (RAG + Graph)** wit
 5. **Authority model** — KB **augments** decisions; the **UCX MCP lifecycle gates remain the source of truth**. The KB is advisory, never authoritative for SDD artifacts.
 6. **Traceability** — KB entries align to UCX ID-naming and cumulative `@`-tag lineage (BRD→…→IPLAN, `@depends: BRD-01`).
 
-> Note: exact `KB_ENTRY_TEMPLATE.md` and `KB_GENERAL_RULES.md` contents could not be retrieved by web fetch (GitHub JS-rendered pages returned empty). The points above are from the framework README's description of `ucx_kb` and the KB policy baseline. **Confirm the exact entry schema and coverage rules before finalizing the BRD** — easiest by connecting the `aidoc-flow-framework` repo as a local folder.
+> Note: the points above are drawn from the framework README's description of `ucx_kb` and the KB policy baseline. The exact `KB_ENTRY_TEMPLATE.md` and `KB_GENERAL_RULES.md` schemas are read from the `aidoc-flow-framework` repo (canonical templates under `framework/layers/NN_*/`) when finalizing artifacts.
 
 ---
 
@@ -56,7 +56,7 @@ What Engramory keeps from its own design and `ucx_kb` does **not** have: **L1–
 
 ## Consequence for the BRD
 
-The Engramory BRD (Standard depth) must scope, at minimum:
+The Engramory BRD (Full depth — BRD-01 is authored at full/8-layer depth per the roadmap and BRD-00) scopes, at minimum:
 
 - **Replace `ucx_kb`** as a first-class goal, with G1–G9 as requirements and a migration/cutover plan.
 - **Authority boundary**: Engramory is advisory for SDD artifacts (gates win), canonical for agent memory.
@@ -66,12 +66,12 @@ The Engramory BRD (Standard depth) must scope, at minimum:
 
 ---
 
-## To produce conforming artifacts, I need the exact specs
+## Conforming to the framework specs
 
-Web fetch could not pull the framework's internal files. To draft a BRD that truly conforms (correct template fields, ID format, traceability tags, KB entry schema), the cleanest path is to **connect the `aidoc-flow-framework` repo (and `ucx_kb`) as a local folder** so I can read:
+BRD-01 is authored (Full depth). Conforming artifacts (correct template fields, ID format, traceability tags, KB entry schema) are produced against the `aidoc-flow-framework` repo connected as a local folder, reading:
 
-- `ucx_flow_v3/01_BRD/BRD-TEMPLATE.yaml` (+ `LAYER_REGISTRY.yaml`, `ID_NAMING_STANDARDS.md`, `TRACEABILITY.md`)
-- `ucx_hermes/skills/hermes/ucx-kb-maintenance/KB_ENTRY_TEMPLATE.md` and `KB_GENERAL_RULES.md`
+- `framework/layers/01_BRD/BRD-TEMPLATE.yaml` (plus the layer registry, `ID_NAMING_STANDARDS.md`, and the generated `TRACEABILITY.md`)
+- the `ucx-kb-maintenance` skill's `KB_ENTRY_TEMPLATE.md` and `KB_GENERAL_RULES.md`
 - the `ucx_kb/` package structure
 
-With those, I can generate the Engramory BRD on the real template and lock G1–G9 to the actual KB schema.
+These lock G1–G9 to the actual KB schema. See [HOW_TO_USE_THE_FRAMEWORK.md](HOW_TO_USE_THE_FRAMEWORK.md) for the canonical template locations (`framework/layers/NN_*/`, not `ucx_flow_v3/`).

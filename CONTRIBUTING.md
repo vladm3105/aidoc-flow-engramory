@@ -11,14 +11,14 @@ Thanks for helping build Engramory. This guide keeps the codebase portable and t
 
 ## Workflow
 
-1. Open an issue / ADR for non-trivial design choices (`docs/adr/`).
+1. Open an issue / ADR for non-trivial design choices (see Architecture decisions below).
 2. Branch, implement behind the relevant port, add tests.
-3. Run `make lint test` before opening a PR.
-4. PRs require green CI and one review.
+3. Run `make lint typecheck test` before opening a PR.
+4. PRs require green CI and one review. A CI workflow (`.github/workflows/ci.yml`) and a `tests/` dir exist, so this gate is satisfiable via `make lint test` (and `make typecheck`).
 
 ## Architecture decisions
 
-Significant decisions are recorded as ADRs in `docs/adr/`. Add a new numbered file using the existing format.
+Significant decisions are recorded as ADRs. Canonical implementing decisions go in `sdd/05_ADR/`; conceptual/descriptive records live in `docs/adr/`. Add a new numbered file using the existing format.
 
 ## Code of conduct
 

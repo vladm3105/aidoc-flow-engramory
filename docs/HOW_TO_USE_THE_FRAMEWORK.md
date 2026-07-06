@@ -32,7 +32,12 @@ It sits in a multi-plane ecosystem:
 | 7 | TDD | Test-Driven Development guide | Impl bridge | `@spec` |
 | 8 | IPLAN | Implementation Plan | Impl bridge | `@tdd` |
 
-**Depth variants:** **Lite** (BRD→PRD→IPLAN) · **Standard** (+EARS/BDD/ADR) · **Full** (all 8 + CHG governance overlay). Pick by risk: regulated/fintech → Full; core infra → Standard; prototype → Lite.
+**Depth variants** (exact layers):
+- **Lite** — BRD → PRD → IPLAN (3 layers).
+- **Standard** — BRD → PRD → EARS → BDD → ADR → IPLAN (adds requirements, behavior, and architecture decisions; **no SPEC/TDD**, no CHG overlay).
+- **Full** — all 8 layers (BRD → PRD → EARS → BDD → ADR → SPEC → TDD → IPLAN), i.e. Standard **plus SPEC and TDD**, plus the CHG governance overlay and gates.
+
+Pick by risk: regulated/fintech → Full; core infra → Standard; prototype → Lite.
 
 > Legacy v2 used a 14-layer chain with SYS/REQ/CTR/TSPEC/TASKS. **Use v3.** v3 collapses SYS/REQ/CTR into **SPEC** and adds **TDD** + **IPLAN**.
 

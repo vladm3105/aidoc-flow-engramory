@@ -1,5 +1,7 @@
 # AI Agent Memory — Landscape Review & Recommendation
 
+> Historical input — decisions superseded by [docs/ARCHITECTURE.md](../ARCHITECTURE.md) and [sdd/05_ADR/](../../sdd/05_ADR/) where they conflict.
+
 *Prepared June 18, 2026 · For a small team running Codex, Claude Code, Hermes, and custom/CLI agents across software, knowledge, and business work*
 
 *Scope constraint: open-source or free solutions only. Every option below qualifies — see the Cost & licensing section.*
