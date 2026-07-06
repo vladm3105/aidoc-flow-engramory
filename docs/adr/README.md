@@ -18,3 +18,4 @@ implementing decisions in `sdd/05_ADR/`; keep this file for the conceptual summa
 | — | Governed-write authority + fail-closed access | sdd/05_ADR/ADR-06 |
 | — | Scope ladder (agent/project/domain/space) + tenant_id isolation | sdd/05_ADR/ADR-07 |
 | — | Single platform, two bounded cores — Memory and Knowledge | sdd/05_ADR/ADR-08 |
+| — | Independent memory storage; iplan ledger as an episode source (not a backend) | sdd/05_ADR/ADR-09 |

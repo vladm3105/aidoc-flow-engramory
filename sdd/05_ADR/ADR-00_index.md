@@ -35,5 +35,6 @@ Index of Architecture Decision Records for **Engramory**.
 | ADR-06 | Governed-write authority + fail-closed access | Accepted | Two-way | [ADR-06_governed_write_failclosed.yaml](ADR-06_governed_write_failclosed.yaml) |
 | ADR-07 | Scope ladder (agent/project/domain/space) + tenant_id isolation | Accepted | Two-way | [ADR-07_scope_model.yaml](ADR-07_scope_model.yaml) |
 | ADR-08 | Single platform, two bounded cores — Memory and Knowledge | Accepted | Two-way | [ADR-08_two_bounded_cores.yaml](ADR-08_two_bounded_cores.yaml) |
+| ADR-09 | Independent memory storage; integrate the iplan ledger as an episode source | Accepted | Two-way | [ADR-09_independent_memory_storage.yaml](ADR-09_independent_memory_storage.yaml) |
 
 *Last Updated: 2026-07-05*
