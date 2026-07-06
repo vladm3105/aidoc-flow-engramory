@@ -62,6 +62,8 @@ The third constraint drives everything: **portability is a first-class design go
 
 The MCP gateway means **all your agents (Codex, Claude Code, Hermes, custom)** use the same knowledge + memory through one interface. The ports layer means **the backends swap per environment** with no change to the cores.
 
+The **Knowledge core** and **Memory core** are two *bounded cores of one platform*, not two projects — they share the spine (Postgres, scope/tenant model, gateway, ports) and are separated by schema, write-governance, lifecycle, and MCP tool namespace. See [CORES.md](CORES.md) and [ADR-08](../sdd/05_ADR/ADR-08_two_bounded_cores.yaml).
+
 ---
 
 ## The portability matrix (the heart of this design)

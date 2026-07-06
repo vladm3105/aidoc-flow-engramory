@@ -3,6 +3,7 @@
 | Doc | Purpose |
 |---|---|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Target architecture, SQL schema, portability matrix, build roadmap |
+| [CORES.md](CORES.md) | The two bounded cores (Memory & Knowledge), their boundary, and the shared spine |
 | [STRATEGY.md](STRATEGY.md) | Build strategy & recommendation: build the plane, adopt the engine, lead with evaluation |
 | [MEMORY_DESIGN.md](MEMORY_DESIGN.md) | Historical design input: layered memory (L0–L3), distillation loop, portability |
 | [PORTABILITY.md](PORTABILITY.md) | Self-hosted → GCP/Azure principles and migration |

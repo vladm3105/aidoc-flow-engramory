@@ -60,6 +60,7 @@ All dev dependencies are free and open-source.
 | Doc | Purpose |
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Target architecture, portability matrix, build roadmap |
+| [docs/CORES.md](docs/CORES.md) | The two bounded cores (Memory & Knowledge), their boundary, and the shared spine |
 | [docs/STRATEGY.md](docs/STRATEGY.md) | Build strategy & recommendation (build the plane, adopt the engine, lead with evaluation) |
 | [docs/MEMORY_DESIGN.md](docs/MEMORY_DESIGN.md) | Layered memory (L0–L3), distillation loop, schema, portability |
 | [docs/PORTABILITY.md](docs/PORTABILITY.md) | Self-hosted → GCP/Azure principles and migration |

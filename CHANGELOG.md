@@ -12,6 +12,7 @@ All notable changes to Engramory are documented here. Format: [Keep a Changelog]
 - ADR-07: scope-model decision (agent/project/domain/space ladder; `tenant_id` isolation).
 - `docs/research/MEMORY_CONCEPT_REVIEW.md`: conceptual review of the agent-memory approach.
 - `docs/STRATEGY.md`: build strategy & recommendation (build the plane, adopt the engine, lead with evaluation).
+- ADR-08 + `docs/CORES.md`: single platform, two bounded cores (Memory and Knowledge) sharing the spine, with the boundary rules and revisit triggers.
 - Dev tooling: ruff lint rules, pytest + mypy config, `py.typed`, CI workflow, and a test skeleton.
 
 ### Changed

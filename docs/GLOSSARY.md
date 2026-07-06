@@ -11,6 +11,14 @@
 - **Hermes** — one of the agent runtimes in the target fleet (alongside Claude Code, Codex, custom CLI).
 - **UCX / ucx_kb** — the SDD framework (Unified Context eXcelerator) and its knowledge base that Engramory's L0 replaces for this ecosystem.
 
+## Cores
+
+Engramory is one platform with two **bounded cores** (see [CORES.md](CORES.md), ADR-08):
+
+- **Memory core** — experiential, agent-authored, distilled: L1 short-term, L2 long-term (cross-project), L3 agent identity.
+- **Knowledge core** — curated documents/sections (L0); human/governed, citable.
+- Both share the spine (Postgres canonical, scope/tenant model, MCP gateway, ports); separated by schema, write-governance, lifecycle, and MCP tool namespace.
+
 ## Memory layers
 
 - **L0 Knowledge base** — documents/plans/notes with section retrieval and citations.
