@@ -1,0 +1,34 @@
+# A domain config. A domain groups one or more consumer projects on the shared
+# Engramory core (see docs/GLOSSARY.md: agent vs project vs domain vs tenant). Each
+# consumer project (aidoc-flow, iplanic, ...) is a project under a domain; Trading is
+# one example domain.
+domain:
+  name: example-domain
+  display_name: "Example Domain"
+  version: 0.1.0
+
+  terminology:
+    entity_types: [document, decision, person, task]
+
+  document_types:
+    - type: note
+      parser: markdown
+      chunk_size: 800
+      chunk_rationale: "Mid-size chunks balance recall and context for notes"
+
+  # Projects that belong to this domain. Domain-scoped memory is shared across all of
+  # them; project-scoped memory stays within a single project.
+  projects:
+    - name: example-project
+      display_name: "Example Project"
+
+  memory:
+    # Per-agent distilled memory is on by default.
+    default_scope: project          # agent | project | domain | space
+    distillation:
+      reflection: post_session      # distill episodes -> long-term after each session
+      consolidation_frequency: 20   # compact long-term every N new memories
+
+  models:
+    chat: chat       # resolved by the LiteLLM gateway
+    embed: embed

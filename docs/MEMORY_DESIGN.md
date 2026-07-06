@@ -2,6 +2,8 @@
 
 *June 22, 2026 · Designing short-term + long-term + per-agent distilled memory on top of AI Knowledge RAC*
 
+> **Historical design input.** This document is superseded by [ARCHITECTURE.md](ARCHITECTURE.md) and the ADRs where they conflict. Note in particular: RAC has **merged into Engramory** — it is not a live separate platform; dev object storage is **MinIO**, not GCS. Scope/tenant vocabulary here predates [ADR-07](../sdd/05_ADR/ADR-07_scope_model.yaml): the current isolation column is `tenant_id`, and the current scope ladder is **agent → project → domain → space** (`space` = tenant-wide; the old `shared` scope value is retired). Read the body below as design rationale, not current spec.
+
 ---
 
 ## Is it possible? Yes — here's the honest version
@@ -12,7 +14,7 @@ All three things you want are achievable with today's open-source tools:
 2. A **knowledge base** of project docs, plans, notes, memos.
 3. **Each agent accumulates its own unique context** (experience, lessons, errors), which is **distilled** and effectively **endless**.
 
-The one expectation to set clearly: **"endless context" = compression + retrieval, not an infinite context window, and not model retraining.** The agent stores experience as text, *distills* it into dense lessons, and at each task retrieves only the relevant slice. The body of memory grows without limit; the amount loaded into the model stays small and bounded. That is precisely how human memory works — you don't reload your whole life, you carry consolidated lessons and recall what's relevant. Done well, this is indistinguishable in practice from "the agent remembers everything it has learned."
+The one expectation to set clearly: **"endless context" = compression + retrieval, not an infinite context window, and not model retraining.** The agent stores experience as text, *distills* it into dense lessons, and at each task retrieves only the relevant slice. The body of memory grows without limit; the amount loaded into the model stays small and bounded. That is precisely how human memory works — you don't reload your whole life, you carry consolidated lessons and recall what's relevant. Done well, this approximates "the agent remembers what it has learned" for the cases that matter — but it is relevant recall, not total recall: the system will sometimes fail to surface a past detail, by design.
 
 ---
 

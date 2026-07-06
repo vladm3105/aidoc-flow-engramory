@@ -1,5 +1,7 @@
 # Nexus Knowledge Platform v3 — Review (and how it relates to RAC + the memory design)
 
+> Historical input — decisions superseded by [docs/ARCHITECTURE.md](../ARCHITECTURE.md) and [sdd/05_ADR/](../../sdd/05_ADR/) where they conflict.
+
 *Reviewed June 22, 2026 · based on `Knowledge_Platform_Nexus_v3_2/` (Executive Summary, Technical Spec v3.0, Changelog v3)*
 
 ---

@@ -11,7 +11,7 @@ document_control:
   last_updated: "2026-06-22T00:00:00"
   author: "Engramory team"
   complexity: 4
-  estimated_files: 5
+  estimated_files: 6
   session_count: 0
 
 file_manifest:
@@ -21,6 +21,7 @@ file_manifest:
     - { path: "src/engramory/skills/kb_context.py", order: 3, status: NOT_STARTED, session: null, verified: false }
     - { path: "src/engramory/skills/kb_maintenance.py", order: 4, status: NOT_STARTED, session: null, verified: false }
     - { path: "tests/integration/test_governed_ingest.py", order: 5, status: NOT_STARTED, session: null, verified: false }
+    - { path: "tests/e2e/test_ucx_kb_parity.py", order: 6, status: NOT_STARTED, session: null, verified: false }
 
 execution_commands:
   setup: ["source .venv/bin/activate", "mkdir -p src/engramory/skills tests/e2e"]

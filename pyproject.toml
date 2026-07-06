@@ -6,10 +6,15 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Engramory contributors" }]
+# Runtime dependencies are added with the first concrete adapter (psycopg, redis,
+# an MCP SDK, ...). The ports layer is stdlib-only by design.
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["ruff", "pytest"]
+dev = ["ruff", "pytest", "mypy"]
+
+[project.urls]
+Repository = "https://github.com/vladm3105/aidoc-flow-engramory"
 
 [build-system]
 requires = ["hatchling"]
@@ -21,3 +26,17 @@ packages = ["src/engramory"]
 [tool.ruff]
 line-length = 100
 src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+packages = ["engramory"]
+ignore_missing_imports = true

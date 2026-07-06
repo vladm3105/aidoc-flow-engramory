@@ -51,6 +51,7 @@ interfaces:
       signature: "async def traverse(scope: Scope, entity: EntityId, hops: int) -> list[EntityId]"
       description: "Bounded relationship traversal via GraphPort."
       errors: ["StoreUnavailable"]
+      note: "Graph traversal is optional for MVP: it rides on @bdd: BDD.01.03.a100 (no dedicated EARS/BDD trace) and earns its own bounded-traversal scenario once GraphPort has a real backend."
 
 data_models:
   models:

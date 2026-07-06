@@ -1,5 +1,10 @@
 # Engramory roadmap
 
+This file is the **engineering Phase view** (Phase 0–3). The canonical plan for
+scope and sequencing is the MVP cycle plan in [`../roadmap/ROADMAP.md`](../roadmap/ROADMAP.md)
+(MVP-1..8). Approximate mapping: **Phase 0–2 ≈ MVP-1** (self-hosted memory &
+knowledge core); **Phase 3 ≈ MVP-2** (cloud migration).
+
 | Phase | Goal | Key work | Outcome |
 |---|---|---|---|
 | **0 — Dev foundation** | Cheap self-hosted base | `docker compose up`: Postgres+pgvector, Redis, MinIO, LiteLLM+Ollama, Neo4j, Keycloak. Define all Ports. Apply memory schema. | Free local platform, portable by construction |

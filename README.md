@@ -49,7 +49,8 @@ cp .env.example .env          # fill in secrets
 docker compose up -d          # Postgres+pgvector, Redis, MinIO, LiteLLM+Ollama, Neo4j, Keycloak
 make migrate                  # apply db/migrations
 make pull-models              # pull local Ollama models
-# point your agent at the MCP gateway (see docs/ARCHITECTURE.md)
+# the MCP gateway is not yet shipped (Phase 0 pending) — no gateway service
+# exists in docker-compose yet; see docs/ARCHITECTURE.md for the target design
 ```
 
 All dev dependencies are free and open-source.
@@ -59,11 +60,15 @@ All dev dependencies are free and open-source.
 | Doc | Purpose |
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Target architecture, portability matrix, build roadmap |
+| [docs/STRATEGY.md](docs/STRATEGY.md) | Build strategy & recommendation (build the plane, adopt the engine, lead with evaluation) |
 | [docs/MEMORY_DESIGN.md](docs/MEMORY_DESIGN.md) | Layered memory (L0–L3), distillation loop, schema, portability |
 | [docs/PORTABILITY.md](docs/PORTABILITY.md) | Self-hosted → GCP/Azure principles and migration |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | Phased build plan |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Engineering Phase 0–3 build plan |
+| [roadmap/ROADMAP.md](roadmap/ROADMAP.md) | Canonical MVP cycle plan (MVP-1..8) for scope and sequencing |
 | [docs/GLOSSARY.md](docs/GLOSSARY.md) | Terms |
-| [docs/adr/](docs/adr/) | Architecture decision records |
+| [sdd/](sdd/) | SDD lifecycle artifacts (BRD→IPLAN); `sdd/05_ADR/` = canonical implementing ADRs |
+| [docs/adr/](docs/adr/) | Conceptual/descriptive architecture decision records |
+| [config/](config/) | Per-project / per-domain YAML config on the shared core |
 | [docs/research/](docs/research/) | Background: memory-tool landscape, RAC & Nexus v3 reviews |
 
 ## Status

@@ -1,6 +1,8 @@
 # AI Knowledge RAC — Project Review & Cipher Comparison
 
-*Reviewed June 22, 2026 · based on the documentation in `C:\data\ai-knowledge-rac` (docs/ + rac-system/docs/)*
+> Historical input — decisions superseded by [docs/ARCHITECTURE.md](../ARCHITECTURE.md) and [sdd/05_ADR/](../../sdd/05_ADR/) where they conflict.
+
+*Reviewed June 22, 2026 · based on the RAC documentation in a private local source (`docs/` + `rac-system/docs/`)*
 
 ---
 

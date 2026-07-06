@@ -55,12 +55,12 @@ interfaces:
       type: "async function"
       signature: "async def upsert_memory(m: Memory) -> MemoryId"
       description: "Insert/supersede a distilled memory (keeps content_raw + provenance)."
-      errors: []
+      errors: ["StoreUnavailable"]
     - name: "upsert_kb_section"
       type: "async function"
       signature: "async def upsert_kb_section(s: KBSection) -> SectionId"
       description: "Insert/update a knowledge-base section with citation anchors."
-      errors: []
+      errors: ["StoreUnavailable"]
 
 data_models:
   models:
@@ -76,7 +76,7 @@ data_models:
     - name: "Memory"
       type: "dataclass"
       fields:
-        - { name: "scope", type: "str", required: true, description: "agent|project|domain|shared" }
+        - { name: "scope", type: "str", required: true, description: "agent|project|domain|space per @adr: ADR-07" }
         - { name: "domain_id", type: "str | None", required: false, description: "Domain grouping; a domain-scoped memory is shared by all projects in this domain (additive; BRD-04)" }
         - { name: "type", type: "str", required: true, description: "semantic|episodic|procedural" }
         - { name: "content_raw", type: "str", required: true, description: "Source text (enables re-embedding)" }

@@ -22,7 +22,7 @@ The third constraint drives everything: **portability is a first-class design go
 
 1. **Ports & adapters (hexagonal).** The application core talks to **interfaces** (ports); each infrastructure dependency has swappable **adapters** (self-hosted / GCP / Azure). RAC already does this for storage (local/GCS factory) — generalize it to *every* dependency. This single decision is what makes the platform cloud-migratable.
 2. **PostgreSQL is the spine.** Relational + vectors (**pgvector**) + (optionally) graph live in Postgres, which exists *identically* self-hosted, on GCP (Cloud SQL / AlloyDB), and on Azure (Flexible Server). Your canonical data never leaves Postgres, so migration = `pg_dump` + restore.
-3. **Own the canonical store; engines are replaceable processors.** Distilled memory lives as plain rows (raw text + provenance + regenerable embeddings) in *your* Postgres — never locked inside a managed memory service. (See `layered-agent-memory-design.md` → Portability.)
+3. **Own the canonical store; engines are replaceable processors.** Distilled memory lives as plain rows (raw text + provenance + regenerable embeddings) in Postgres — never locked inside a managed memory service. (See [MEMORY_DESIGN.md](MEMORY_DESIGN.md) → Portability.)
 4. **One model gateway.** All LLM/embedding calls go through a self-hosted **LiteLLM** proxy (OpenAI-compatible). Dev points it at **Ollama** (free, local); cloud points it at **Vertex AI** or **Azure OpenAI** — a config change, not a code change.
 5. **Config over code (from Nexus).** Domains (Trading, Legal, USFS…) are YAML configuration on a domain-agnostic core. RAC becomes the Trading domain config.
 6. **Everything containerized.** Docker Compose in dev → the same images on Cloud Run/GKE or Container Apps/AKS in cloud.
@@ -51,7 +51,7 @@ The third constraint drives everything: **portability is a first-class design go
         ┌───────▼────────────────────────────────────▼────────┐
         │  PORTS (interfaces the core depends on)              │
         │  StoragePort · VectorPort · GraphPort · CachePort    │
-        │  LLMPort · SecretsPort · EventsPort · IdentityPort   │
+        │  LLMPort · SecretsPort · EventsPort · MemoryPort     │
         └───────┬───────────────┬───────────────┬─────────────┘
                 │ adapters       │ adapters       │ adapters
         ┌───────▼──────┐ ┌──────▼───────┐ ┌──────▼──────────┐
@@ -76,7 +76,7 @@ Each capability is accessed through a port; here are the adapters per environmen
 | **Cache / session L1** (`CachePort`) | Redis (Docker) | Memorystore for Redis | Azure Cache for Redis |
 | **LLM + embeddings** (`LLMPort`) | **LiteLLM → Ollama** (local models) | LiteLLM → **Vertex AI Model Garden** | LiteLLM → **Azure OpenAI / AI Foundry** |
 | **Secrets** (`SecretsPort`) | Docker env / SOPS / Infisical | Secret Manager | Azure Key Vault |
-| **Identity / auth** (`IdentityPort`) | **Keycloak / Authentik** (OIDC) | Identity Platform | Entra ID (Azure AD B2C) |
+| **Identity / auth** (gateway concern, not a core port) | **Keycloak / Authentik** (OIDC) | Identity Platform | Entra ID (Azure AD B2C) |
 | **Events** (`EventsPort`) | Redis Streams / NATS | Pub/Sub | Azure Service Bus / Event Grid |
 | **Analytics** (optional) | DuckDB / Postgres | BigQuery | Microsoft Fabric / Synapse |
 | **Observability** | OpenTelemetry + Grafana/Loki/Tempo | Cloud Logging/Trace (+ OTel) | Azure Monitor / App Insights (+ OTel) |
@@ -87,9 +87,9 @@ Each capability is accessed through a port; here are the adapters per environmen
 Verified June 2026: **Apache AGE is a managed extension on Azure Database for PostgreSQL, but NOT on GCP Cloud SQL or AlloyDB** (nor AWS RDS). That inverts the usual intuition for a *cloud-undecided* project:
 
 - **AGE** → seamless on **Azure only**; on **GCP** you must self-manage Postgres+AGE (GKE/VM), losing managed convenience. AGE also has a smaller ecosystem and no graph-algorithms library.
-- **Neo4j** → managed **Aura is multi-cloud (both GCP and Azure)**, so it's actually **more portable across "GCP or Azure" than AGE**. It's also RAC's existing choice, the most mature graph engine, and best-in-class for the **multi-hop reasoning / GraphRAG / entity-timeline** work your knowledge layer needs (native Cypher, GDS algorithms, built-in vector index).
+- **Neo4j** → managed **Aura is multi-cloud (both GCP and Azure)**, so it is **more portable across "GCP or Azure" than AGE**. It is also RAC's existing choice, a mature graph engine, and well-suited to the **multi-hop reasoning / GraphRAG / entity-timeline** work the knowledge layer needs (native Cypher, GDS algorithms, built-in vector index).
 
-**Decision (updated per your note that Neo4j can replace AGE):**
+**Decision:**
 1. **Default to pure Postgres** for the graph while needs are shallow (entity/edge tables + recursive CTEs over the same pgvector DB) — cheapest dev option, zero extra infra, 100% portable.
 2. **Promote to Neo4j** — not AGE — the moment you need real multi-hop traversal, graph algorithms, or GraphRAG. **Neo4j Community (Docker) in dev → Neo4j Aura (GCP or Azure) in cloud.** This keeps a single graph engine across dev and *both* clouds and reuses RAC's proven Neo4j work.
 3. **Keep AGE only as a fallback** if you later commit firmly to Azure and want the graph inside Postgres (one backup, travels with `pg_dump`).
@@ -102,12 +102,15 @@ This resolves the RAC↔Nexus divergence cleanly in favor of your existing inves
 
 ## Memory architecture (the part neither RAC nor Nexus has)
 
-Merge Nexus's scope-based memory (Session/Space/User) with the type-based, per-agent model from `layered-agent-memory-design.md`. The result keeps Nexus's tiers **and** adds the two missing dimensions: **memory type** and **agent identity**.
+Merge Nexus's scope-based memory (Session/Space/User) with the type-based, per-agent model from [MEMORY_DESIGN.md](MEMORY_DESIGN.md). The result keeps Nexus's tiers **and** adds the two missing dimensions: **memory type** and **agent identity**.
 
 ### Scoping dimensions (every memory row carries these)
-`agent_id` · `project_id` · `space_id` · `user_id` · `scope ∈ {agent, project, space, shared/team}`
+`agent_id` · `project_id` · `domain_id` · `tenant_id` · `scope ∈ {agent, project, domain, space}`
 
-This is the key upgrade: memory is no longer only per-user/per-space — **each agent has its own namespace**, plus a shared team namespace.
+`tenant_id` is the hard isolation boundary; `scope` sets how widely a memory is shared *within* a
+tenant — agent → project → domain → space, where `space` = tenant-wide. See ADR-07 + GLOSSARY.
+
+This is the key upgrade: memory is no longer only per-tenant — **each agent has its own namespace**, with project, domain, and tenant-wide sharing above it.
 
 ### Layers
 | Layer | Lifespan | Backend (dev → cloud) | Notes |
@@ -120,11 +123,11 @@ This is the key upgrade: memory is no longer only per-user/per-space — **each 
 ### Canonical memory schema (engine-neutral, lives in your Postgres)
 ```sql
 -- Raw experience (episodic source material)
-episodes(id, agent_id, project_id, space_id, ts, kind, content_raw, metadata jsonb)
+episodes(id, agent_id, project_id, tenant_id, domain_id, ts, kind, content_raw, metadata jsonb)
 
 -- Distilled long-term memory (the "brain")
 memories(
-  id, agent_id, project_id, space_id, scope,
+  id, agent_id, project_id, tenant_id, domain_id, scope,
   type,                 -- 'semantic' | 'episodic' | 'procedural'
   content_raw text,     -- source text  (KEEP — enables re-embedding on migration)
   summary   text,       -- distilled form used in prompts
@@ -143,12 +146,17 @@ agent_profiles(agent_id, display_name, standing_preferences jsonb, created_at)
 consolidation_runs(id, agent_id, started_at, finished_at, stats jsonb)
 ```
 
+(The block above is the memory core. L0 knowledge-base sections live in a separate
+`kb_sections` table introduced with the knowledge/BRD-04 cycle — see `sdd/06_SPEC/SPEC-02`.)
+
 Because `content_raw` and `provenance` are always kept and `embedding` is marked regenerable, **the brain survives any model or platform migration** — you re-embed from `content_raw`, you don't re-architect.
 
 ### The distillation loop (domain-agnostic generalization of Nexus's Trading learning loop)
 - **Per task:** retrieve top-K from L2 (agent + shared) + L1 project state + L0 docs → act → append new episodes to L1.
 - **Reflection (async, post-session):** worker reads recent episodes → writes distilled semantic/episodic/procedural memories to L2 under the agent's namespace.
-- **Consolidation (periodic):** worker compacts L2 — merge duplicates, generalize repeated lessons, `valid_to`-expire stale facts, prune noise. Keeps L2 dense and bounded → effectively endless.
+- **Consolidation (periodic):** worker compacts L2 — merge duplicates, generalize repeated lessons, `valid_to`-expire stale facts, prune noise. Keeps L2 dense and high-signal so the *retrieved working set* stays bounded even as the store grows.
+
+**What "endless" means (and doesn't).** The body of memory grows without a fixed cap; consolidation keeps it dense, and each task retrieves only a small, relevant slice. So the model's *working set* is bounded while the *store* is unbounded. "Endless" here is **relevant recall via compression + retrieval — not total recall, not a constant-size store, and not an infinite context window.** The system will sometimes fail to surface a past detail; that is expected behavior, not a defect.
 
 Nexus's existing Trading `learning:` block (`post_trade_review`, `meta_review_frequency`, bias/accuracy tracking) becomes **one domain's configuration of this general engine**, not a bespoke feature.
 
@@ -179,7 +187,7 @@ The cores call a `MemoryPort`. Adapter options, all keeping Postgres canonical:
 |---|---|---|---|
 | **0 — Dev foundation** | Cheap self-hosted base | Docker Compose: Postgres(pgvector) · Redis · MinIO · LiteLLM+Ollama · Keycloak · MCP gateway · worker. Define all Ports. | Free local platform, portable by construction |
 | **1 — Consolidate** | One platform | Port RAC's MCP tools/parsers onto the unified core; RAC becomes the **per-project domain-config layer** (each project = one config; Trading is just one example); everything behind Ports | RAC + Nexus merged, no stack duplication |
-| **2 — Cognition** | The differentiator | `agent_id` scoping; L1/L2/L3 schema; reflection + consolidation workers; wire LangMem/Cipher via `MemoryPort` | Per-agent distilled, endless memory |
+| **2 — Cognition** | Per-agent cognition | `agent_id` scoping; L1/L2/L3 schema; reflection + consolidation workers; wire LangMem/Cipher via `MemoryPort` | Per-agent distilled, endless memory |
 | **3 — Cloud migration** | GCP or Azure | Swap adapters (managed Postgres, Redis, object store, model endpoint, secrets, identity); IaC; `pg_dump`+object copy; re-embed if model changes | Same app, cloud-native, data intact |
 
 Phases 0–2 are entirely free/self-hosted. Phase 3 is a **configuration + adapter swap**, not a rewrite — that's the payoff of the ports design.
@@ -198,10 +206,10 @@ Phases 0–2 are entirely free/self-hosted. Phase 3 is a **configuration + adapt
 
 ## Recommended dev stack (Phase 0 docker-compose)
 
-`postgres:16` (pgvector) · `redis` · `minio` · `ghcr.io/berriai/litellm` + `ollama` · `keycloak` · your `mcp-gateway` · your `knowledge-core` · your `memory-core` · your `worker` (reflection/consolidation) · `grafana`+`loki`+`tempo` (OTel).
+Provisioned in the Phase-0 compose **today:** `postgres:16` (pgvector) · `redis` · `minio` · `ghcr.io/berriai/litellm` + `ollama` · `keycloak`. **Planned (not yet in docker-compose):** the application services `mcp-gateway` · `knowledge-core` · `memory-core` · `worker` (reflection/consolidation), and observability `grafana`+`loki`+`tempo` (OTel).
 
 All open-source, all free, all with a documented GCP **and** Azure adapter for later. Start here; the cloud is a swap, not a rebuild.
 
 ---
 
-*Companion docs: `nexus-v3-review.md`, `ai-knowledge-rac-review.md`, `layered-agent-memory-design.md`, `agent-memory-review.md`. Cloud-service mappings should be re-verified at migration time as managed offerings change.*
+*Companion docs: [MEMORY_DESIGN.md](MEMORY_DESIGN.md), [research/NEXUS_V3_REVIEW.md](research/NEXUS_V3_REVIEW.md), [research/RAC_REVIEW.md](research/RAC_REVIEW.md), [research/MEMORY_LANDSCAPE.md](research/MEMORY_LANDSCAPE.md), [research/MEMORY_CONCEPT_REVIEW.md](research/MEMORY_CONCEPT_REVIEW.md). Cloud-service mappings should be re-verified at migration time as managed offerings change.*

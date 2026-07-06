@@ -65,7 +65,7 @@ feature_definition:
   background:
     steps:
       - "Given the Engramory system is in a ready state"
-      - 'And the current time is "09:30:00" in "America/New_York"'
+      - "And the distillation and consolidation workers are enabled"
       - 'And an authorized agent "agent-A" scoped to project "proj-1" / tenant "t-1"'
 
 # =============================================================================
@@ -107,6 +107,22 @@ scenario_structure:
         then: "THE distillation component SHALL execute a consolidation pass every @threshold:PRD.01.rate.consolidation_cadence AND emit an observable consolidation_run record"
         covers_ears: ["EARS.01.03.d400", "EARS.01.03.a040"]
         spec_trace: ["5 (Behavior)", "2 (Component Overview)"]
+      - id: "BDD.01.03.d070"
+        name: "Cross-project recall surfaces a lesson distilled in another project"
+        tags: ["@scenario-type:success", "@p1-high", "@scenario-id:BDD.01.03.d070"]
+        given: 'agent-A distilled a lesson while working in project "proj-A"'
+        when: 'agent-A requests context while working in project "proj-B"'
+        then: 'THE memory component SHALL surface the relevant lesson distilled in project "proj-A" within agent-A''s scope, WITHIN @threshold:PRD.01.perf.retrieval_p95'
+        covers_ears: ["EARS.01.03.d070"]
+        spec_trace: ["3 (Interfaces)", "5 (Behavior)"]
+      - id: "BDD.01.03.e080"
+        name: "Two agents diverge in private memory while sharing a team (space) namespace"
+        tags: ["@scenario-type:success", "@p1-high", "@scenario-id:BDD.01.03.e080"]
+        given: 'agents "agent-A" and "agent-B" share a team (space) namespace "team-1" in tenant "t-1"'
+        when: "each agent records distinct experience and both read the shared namespace"
+        then: "THE memory component SHALL keep each agent's per-agent memory distinct AND expose the shared team (space) namespace to both agents"
+        covers_ears: ["EARS.01.03.e080"]
+        spec_trace: ["3 (Interfaces)", "5 (Behavior)"]
 
     error:
       - id: "BDD.01.03.e500"
@@ -193,6 +209,9 @@ traceability:
       - "@ears: EARS.01.03.f030"
       - "@ears: EARS.01.03.a040"
       - "@ears: EARS.01.03.b050"
+      - "@ears: EARS.01.03.c060"
+      - "@ears: EARS.01.03.d070"
+      - "@ears: EARS.01.03.e080"
   coverage_matrix:
     _note: "Bidirectional EARS→scenario coverage. Every EARS line is covered by >=1 scenario."
     items:
@@ -224,6 +243,12 @@ traceability:
         scenarios: ["BDD.01.03.d400", "BDD.01.03.d010"]
       - ears: "EARS.01.03.b050"
         scenarios: ["BDD.01.03.e500", "BDD.01.03.f600"]
+      - ears: "EARS.01.03.c060"
+        scenarios: ["BDD.01.03.e500"]
+      - ears: "EARS.01.03.d070"
+        scenarios: ["BDD.01.03.d070"]
+      - ears: "EARS.01.03.e080"
+        scenarios: ["BDD.01.03.e080"]
   downstream_expected:
     - type: ADR
       layer: 5
