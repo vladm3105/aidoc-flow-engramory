@@ -17,3 +17,4 @@ implementing decisions in `sdd/05_ADR/`; keep this file for the conceptual summa
 | 0005 | Canonical memory in Postgres; embeddings & graph are rebuildable projections | sdd/05_ADR/ADR-05 |
 | — | Governed-write authority + fail-closed access | sdd/05_ADR/ADR-06 |
 | — | Scope ladder (agent/project/domain/space) + tenant_id isolation | sdd/05_ADR/ADR-07 |
+| — | Single platform, two bounded cores — Memory and Knowledge | sdd/05_ADR/ADR-08 |

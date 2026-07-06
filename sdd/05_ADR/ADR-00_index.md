@@ -34,5 +34,6 @@ Index of Architecture Decision Records for **Engramory**.
 | ADR-05 | Canonical memory in Postgres; projections rebuildable | Accepted | One-way (principle) | [ADR-05_canonical_memory.yaml](ADR-05_canonical_memory.yaml) |
 | ADR-06 | Governed-write authority + fail-closed access | Accepted | Two-way | [ADR-06_governed_write_failclosed.yaml](ADR-06_governed_write_failclosed.yaml) |
 | ADR-07 | Scope ladder (agent/project/domain/space) + tenant_id isolation | Accepted | Two-way | [ADR-07_scope_model.yaml](ADR-07_scope_model.yaml) |
+| ADR-08 | Single platform, two bounded cores — Memory and Knowledge | Accepted | Two-way | [ADR-08_two_bounded_cores.yaml](ADR-08_two_bounded_cores.yaml) |
 
 *Last Updated: 2026-07-05*

@@ -1,0 +1,117 @@
+# ADR-08 — Single platform, two bounded cores (Memory and Knowledge).
+id: ADR-08
+title: "Single platform, two bounded cores — Memory and Knowledge"
+
+metadata:
+  schema_version: "1.0"
+  document_type: "adr-document"
+  layer: 5
+  lifecycle: mvp-prod-newmvp
+  id_standard: { format: "{doc_type}.{doc_id}.{section_id}.{hash}", hash_algorithm: SHA256, hash_length: 4 }
+
+document_control:
+  status: Accepted
+  date: "2026-07-05"
+  decision_makers: ["Technical Lead"]
+  author: "Engramory team"
+  version: "1.0"
+  originating_topic: "@brd: BRD.01.07.3c01"
+  brd_reference: "@brd: BRD.01.07.3c01"
+  spec_ready_score: "[Pending]/100"
+  revision_history:
+    - { version: "1.0", date: "2026-07-05T00:00:00", author: "Engramory team", changes: "Decide platform boundary: keep Memory and Knowledge as two bounded cores in one platform rather than two separate projects." }
+
+context:
+  problem_statement: |
+    Engramory covers two distinct concerns: experiential Memory (L1-L3; agent-authored,
+    distilled) and curated Knowledge (L0; human/governed, citable). This raised the
+    question of whether they should be two separate projects/deployments or one platform.
+  business_driver: "Avoid re-creating the RAC/Nexus divergence while keeping the two concerns cleanly separated."
+  key_constraints:
+    - "Both cores share the Postgres spine, scope/tenant model, MCP gateway, and ports."
+    - "Runtime coupling: retrieval blends L0 + L2; distillation reads knowledge/episodes to write memory."
+    - "Different write governance and trust models (governed KB writes vs agent-authored memory)."
+
+decision:
+  chosen_solution:
+    id: "ADR.08.03.a100"
+    title: "One platform, two bounded cores sharing the spine"
+    description: |
+      Keep Memory (L1-L3) and Knowledge (L0) as two bounded cores WITHIN a single
+      platform. They share the spine — Postgres canonical store, pgvector, the
+      agent|project|domain|space + tenant_id scope model (ADR-07), the MCP gateway, and
+      the ports/adapters — and are separated on the axes where they genuinely differ:
+      authorship/trust, write governance, lifecycle, schema, and MCP tool namespace.
+      The port boundary keeps a later extraction (Knowledge as its own service) cheap if
+      a revisit trigger fires.
+  key_components:
+    - { name: "Memory core", role: "L1 short-term, L2 distilled long-term (cross-project), L3 agent identity; core/memory.py" }
+    - { name: "Knowledge core", role: "L0 curated documents/sections; ingestion, semantic/graph search, citations; core/knowledge.py" }
+    - { name: "Shared spine", role: "Postgres canonical, scope/tenant model, MCP gateway, ports/adapters" }
+  separation_rules:
+    - "Distinct schemas: episodes/memories/agent_profiles (Memory) vs kb_sections (Knowledge)."
+    - "Distinct write governance: governed write + evidence for Knowledge (ADR-06); reflection/consolidation + safety screening for Memory."
+    - "Distinct lifecycle: Knowledge versioned/permanent; Memory distilled/consolidated/forgotten."
+    - "Distinct MCP tool namespaces: knowledge_* vs memory_*; one gateway, one auth/scope decision."
+    - "Cross-link by IDs; do not duplicate content across cores."
+  implementation_approach:
+    mvp_scope: "Two cores in one deployable behind one gateway; shared spine; separate tool namespaces."
+    next_cycle_scope: "Extract a core behind its port only if a revisit trigger fires."
+  reversibility: "two-way"  # ports make a later split cheap
+
+alternatives:
+  options:
+    - id: "ADR.08.04.a100"
+      name: "One platform, two bounded cores"
+      selected: true
+      description: "Shared spine; clean core boundary; extractable later."
+      pros: ["No spine duplication", "One gateway/auth/scope", "Keeps runtime coupling cheap", "Preserves the consolidation goal"]
+      cons: ["Requires discipline to keep the core boundary sharp"]
+      fit: Best
+    - id: "ADR.08.04.b200"
+      name: "Two separate projects/deployments"
+      selected: false
+      description: "Split Memory and Knowledge into independent projects."
+      cons: ["Reverses the RAC/Nexus consolidation", "Duplicates the shared spine", "Network hop in the retrieval hot path", "Two auth/scope surfaces"]
+      rejection_reason: "Premature at this stage; re-creates the divergence Engramory exists to remove."
+      fit: Poor
+    - id: "ADR.08.04.c300"
+      name: "Fully merged, no core boundary"
+      selected: false
+      description: "One store/module with no Memory/Knowledge separation."
+      rejection_reason: "Loses the distinct write governance, trust, and lifecycle the two concerns require."
+      fit: Poor
+
+consequences:
+  positive_outcomes:
+    - { id: "ADR.08.05.a100", outcome: "Single spine + gateway; the two concerns stay cleanly bounded and independently reasoned-about." }
+  tradeoffs_and_risks:
+    - { id: "ADR.08.05.b200", tradeoff: "Boundary can erode without enforcement", impact: Medium, mitigation: "Separate schemas, tool namespaces, and (optionally) an import rule; document in docs/CORES.md." }
+  what_breaks_if_wrong: "If merged with no boundary, agent-authored memory contaminates governed knowledge; if split into projects, the spine duplicates and drifts."
+  revisit_triggers:
+    - "Knowledge gains its own non-agent users/product at scale."
+    - "The cores need independent scaling or deployment cadence one deployable can't serve."
+    - "Separate ownership/compliance boundaries force a split."
+
+traceability:
+  tags: ["@adr: ADR-08"]
+  originating_topic: "@brd: BRD.01.07.3c01"
+  upstream:
+    ears_references: ["@ears: EARS.01.03.a040"]
+  downstream_expected:
+    - { type: SPEC, layer: 6, description: "SPEC-02 (store), SPEC-03 (retrieval/graph), SPEC-04 (distillation) keep the core boundary." }
+  cross_links: { depends: ["ADR-01", "ADR-02", "ADR-07"], discoverability: ["@discoverability: docs/CORES.md"] }
+  health_score: { spec_ready: "[Pending]%", target_score: ">=90/100" }
+
+related_decisions:
+  dependencies:
+    - { adr: "ADR-01", relationship: "Depends on", rationale: "Both cores share the Postgres spine." }
+    - { adr: "ADR-02", relationship: "Depends on", rationale: "Ports make later extraction cheap." }
+    - { adr: "ADR-06", relationship: "Relates to", rationale: "Governed writes distinguish Knowledge from Memory." }
+  supersedes: { items: [] }
+
+glossary:
+  terms:
+    - { term: "Memory core", definition: "Experiential store: L1 short-term, L2 distilled long-term (cross-project), L3 agent identity." }
+    - { term: "Knowledge core", definition: "Curated L0 document/section store with citations." }
+    - { term: "bounded core", definition: "A module with its own schema, governance, and lifecycle inside the shared platform." }
