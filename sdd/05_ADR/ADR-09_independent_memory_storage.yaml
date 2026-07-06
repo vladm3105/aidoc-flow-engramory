@@ -1,0 +1,122 @@
+# ADR-09 — Independent memory storage; integrate the iplan ledger as an episode source.
+id: ADR-09
+title: "Independent memory storage; integrate the iplan ledger as an episode source (not a backend)"
+
+metadata:
+  schema_version: "1.0"
+  document_type: "adr-document"
+  layer: 5
+  lifecycle: mvp-prod-newmvp
+  id_standard: { format: "{doc_type}.{doc_id}.{section_id}.{hash}", hash_algorithm: SHA256, hash_length: 4 }
+
+document_control:
+  status: Accepted
+  date: "2026-07-05"
+  decision_makers: ["Technical Lead"]
+  author: "Engramory team"
+  version: "1.0"
+  originating_topic: "@brd: BRD.01.07.3c01"
+  brd_reference: "@brd: BRD.01.07.3c01"
+  spec_ready_score: "[Pending]/100"
+  revision_history:
+    - { version: "1.0", date: "2026-07-05T00:00:00", author: "Engramory team", changes: "Decide whether Engramory reuses the iplan execution ledger for storage or builds its own memory + storage." }
+
+context:
+  problem_statement: |
+    The aidoc-flow execution plane already has a "ledger": the iplan-runner
+    IPLAN-execution ledger (append-only, hash-chained, one YAML file per plan run) and
+    the iplanic hosted service (its own PostgreSQL execution-record store). The question:
+    should Engramory reuse that ledger as its memory + knowledge store, or build its own?
+  business_driver: "Avoid duplicating storage while keeping the memory plane's canonical store owned and fit-for-purpose."
+  key_constraints:
+    - "Engramory memory is mutable/updatable (supersede, valid_to, consolidate, forget) and vector-retrieved."
+    - "The iplan ledger is append-only/immutable, execution-shaped, and file-per-run with no query/index/embeddings."
+    - "Own-the-canonical-store is a hard principle (ADR-05); scope is per-agent cross-project + multi-tenant (ADR-07)."
+
+decision:
+  chosen_solution:
+    id: "ADR.09.03.a100"
+    title: "Build independent memory storage; integrate the ledger as an upstream episode source"
+    description: |
+      Engramory owns its canonical memory + knowledge store (Postgres per ADR-01/ADR-05).
+      It does NOT use the iplan ledger as a backend — the ledger is a different bounded
+      context (the execution plane's system-of-record). Instead:
+        1. Ingest iplan execution-events (from iplan-runner / iplanic) as L1 episodes via an
+           events/ingestion adapter behind EventsPort, then distill into L2 (one-way projection,
+           mirroring how iplanic ingests the runner's events — no shared store).
+        2. Cross-link provenance by ID: a distilled memory may cite the originating ledger /
+           execution-record entry, without copying it.
+        3. Borrow the ledger's patterns (append-only hash chain + HMAC signing + client/project
+           path isolation) as design input for Engramory's memory-safety / write-audit layer.
+  key_components:
+    - { name: "Engramory canonical store", role: "Postgres: episodes/memories/agent_profiles + kb_sections (ADR-01/05/08)" }
+    - { name: "Ledger ingestion adapter", role: "Consumes iplan execution-events -> L1 episodes (EventsPort)" }
+    - { name: "Provenance cross-link", role: "Memory.provenance references the source ledger/execution-record id" }
+  separation_rules:
+    - "Engramory never writes into the iplan ledger; the ledger never stores Engramory memory."
+    - "Integration is one-way: execution-events flow ledger -> Engramory episodes."
+    - "Cross-link by id, do not duplicate content across planes (mirrors ADR-08 / docs/CORES.md)."
+  implementation_approach:
+    mvp_scope: "Own Postgres store; a read-only ingestion path is deferred until an execution-event feed is available."
+    next_cycle_scope: "EventsPort ingestion adapter for iplanic execution-events; provenance cross-linking; write-audit modeled on the ledger's hash-chain + signing."
+  reversibility: "two-way"  # integration is additive and behind a port
+
+alternatives:
+  options:
+    - id: "ADR.09.04.a100"
+      name: "Independent storage + ledger as episode source"
+      selected: true
+      description: "Own the canonical store; consume execution-events; cross-link provenance."
+      pros: ["Fit-for-purpose store (mutable, vector, scoped)", "Keeps ADR-05 own-the-store", "Reuses the ledger's real value (episodes + provenance + safety patterns)"]
+      cons: ["Requires an ingestion adapter and an event feed"]
+      fit: Best
+    - id: "ADR.09.04.b200"
+      name: "Reuse the iplan ledger as Engramory's storage backend"
+      selected: false
+      description: "Persist memory/knowledge in the execution ledger."
+      cons: ["Execution-shaped fixed schema (tasks/gates/leases/saga)", "YAML file-per-run, no query/index/embeddings", "Append-only immutable vs Engramory's mutable/forgettable memory", "Wrong scope (per-IPLAN vs per-agent cross-project)"]
+      rejection_reason: "Structural mismatch; even iplanic did not reuse the runner ledger as storage — it built its own Postgres store and only ingests projected events."
+      fit: Poor
+    - id: "ADR.09.04.c300"
+      name: "Independent storage, no ledger integration"
+      selected: false
+      description: "Own the store and ignore the ledger entirely."
+      rejection_reason: "Forgoes a high-value episode source and provenance cross-linking."
+      fit: Fair
+
+consequences:
+  positive_outcomes:
+    - { id: "ADR.09.05.a100", outcome: "Canonical memory store stays fit-for-purpose and owned; the ledger contributes episodes + provenance + safety patterns." }
+  tradeoffs_and_risks:
+    - { id: "ADR.09.05.b200", tradeoff: "An ingestion adapter + event feed must be built", impact: Low, mitigation: "Defer to the cycle that needs it; keep it behind EventsPort." }
+  what_breaks_if_wrong: "Reusing the ledger as a backend would force execution-shaped, append-only, file-per-run storage onto a mutable, vector-retrieved, growing memory corpus."
+  revisit_triggers:
+    - "A shared cross-plane store is mandated by governance/compliance."
+    - "The execution-event feed shape changes materially."
+
+integration_notes:
+  episode_source: "iplan-runner ledger / iplanic execution-events -> Engramory L1 episodes (decisions, errors, outcomes) -> distilled into L2."
+  provenance: "Memory.provenance records the originating ledger/execution-record id for traceability."
+  pattern_reuse: "Append-only hash chain + HMAC signing + client/project/path isolation inform Engramory's write-audit and tenant isolation (relates to ADR-06 governed write and ADR-07 scope)."
+
+traceability:
+  tags: ["@adr: ADR-09"]
+  originating_topic: "@brd: BRD.01.07.3c01"
+  upstream:
+    ears_references: ["@ears: EARS.01.03.a040"]
+  downstream_expected:
+    - { type: SPEC, layer: 6, description: "An EventsPort ingestion adapter spec + provenance field usage in SPEC-02." }
+  cross_links: { depends: ["ADR-05", "ADR-08"], discoverability: ["@discoverability: docs/CORES.md"] }
+  health_score: { spec_ready: "[Pending]%", target_score: ">=90/100" }
+
+related_decisions:
+  dependencies:
+    - { adr: "ADR-05", relationship: "Extends", rationale: "Own-the-canonical-store applies: do not outsource memory storage to the ledger." }
+    - { adr: "ADR-08", relationship: "Extends", rationale: "The execution ledger is a separate bounded context from the Memory and Knowledge cores." }
+    - { adr: "ADR-06", relationship: "Relates to", rationale: "Ledger integrity patterns inform the governed-write / memory-safety audit." }
+  supersedes: { items: [] }
+
+glossary:
+  terms:
+    - { term: "iplan ledger", definition: "The execution plane's append-only, hash-chained system-of-record for one IPLAN run (iplan-runner)." }
+    - { term: "episode source", definition: "An upstream feed of execution-events ingested as L1 episodes; not a storage backend." }
