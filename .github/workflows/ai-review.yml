@@ -1,0 +1,41 @@
+# Caller for vladm3105/aidoc-flow-ci/.github/workflows/ai-review.yml.
+# Pinned at @ci/v1.4.3 per IPLAN-0017 §4 Phase C — first wire-up on this repo.
+#
+# Reviewer choice: claude (subscription-auth via CLAUDE_CODE_OAUTH_TOKEN).
+# Runner topology: ubuntu-latest (public GitHub-hosted runners) — matches this
+# repo's existing ci.yml pattern. Contrast with operations' self-hosted two-pool
+# topology and iplanic's self-hosted single-pool.
+#
+# `pull_request_target` (not `pull_request`) is required because the trust gate
+# needs write-capable credentials to apply labels/comments on fork PRs and the
+# heavy review job needs secrets — both unavailable under `pull_request` on
+# fork PRs. The trust gate decides whether to proceed; the heavy job runs only
+# for trusted authors per the allowlist in `.github/ai-review/config.json`
+# (fetched from operations @main; per-consumer config move tracked as follow-up).
+#
+# DORMANCY NOTE: this workflow won't produce COUNTING App-attributed reviews
+# until the reviewer App is installed on this repo (F5 blast-radius
+# prerequisite per aidoc-flow-operations CLAUDE.md § Unified CI). Pre-install,
+# the reviewer job falls through to GITHUB_TOKEN with a `::warning::` — reviews
+# are posted as `github-actions[bot]`, which do NOT satisfy the composition-based
+# branch-protection gate. Intentional — App install is the last step of IPLAN-0017
+# Phase C activation.
+name: ai-review
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+
+permissions:
+  contents: write        # auto-merge
+  pull-requests: write   # review comment, labels, merge
+  issues: write          # labels
+
+jobs:
+  call:
+    uses: vladm3105/aidoc-flow-ci/.github/workflows/ai-review.yml@ci/v1.4.3
+    with:
+      reviewer: claude
+      # Single-pool ubuntu-latest — this repo has no self-hosted pool.
+      runner_labels_routine: '"ubuntu-latest"'
+      runner_labels_review: '"ubuntu-latest"'
+    secrets: inherit  # pragma: allowlist secret

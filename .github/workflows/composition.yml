@@ -1,0 +1,35 @@
+# Caller for vladm3105/aidoc-flow-ci/.github/workflows/composition.yml.
+# Pinned at @ci/v1.3.0 per IPLAN-0017 §4 Phase C — first wire-up on this repo.
+#
+# The reusable handles BOTH event shapes (pull_request_review + workflow_run)
+# via ||-fallback expressions in its env block. Fires only on real state changes:
+#   - pull_request_review (submitted/dismissed/edited): App reviewer's
+#     APPROVED/REQUEST_CHANGES posted at HEAD.
+#   - workflow_run (ai-review completed, any conclusion): this repo's ai-review
+#     caller workflow finished.
+#
+# DORMANCY NOTE: mirrors ai-review.yml — pre-arm (`vars.APP_REVIEWER_1_BOT_ID`
+# unset), the reusable's INERT/EXEMPT branch passes composition GREEN regardless
+# of App approvals (see aidoc-flow-ci composition.yml header). Once the var is
+# set + App is installed, composition becomes the load-bearing branch-protection
+# gate: GREEN only when an APPROVED review from the reviewer App exists at HEAD.
+# Only the intermediate mid-arm state (var SET but App not yet APPROVED at HEAD)
+# stays PENDING.
+name: composition
+on:
+  pull_request_review:
+    types: [submitted, dismissed, edited]
+  workflow_run:
+    workflows: ["ai-review"]
+    types: [completed]
+
+permissions:
+  pull-requests: read
+  contents: read
+
+jobs:
+  call:
+    uses: vladm3105/aidoc-flow-ci/.github/workflows/composition.yml@ci/v1.3.0
+    with:
+      runner_labels: '"ubuntu-latest"'
+    secrets: inherit  # pragma: allowlist secret
