@@ -83,7 +83,7 @@ executive_summary:
 # =============================================================================
 actors_and_trust:
   _note: "Trust boundaries, data classification, and abuse cases at capability altitude. Control selection is deferred to PRD/ADR."
-  _scope_note: "Scope ladder: agent → project → domain → shared. The 'domain' level (a vertical grouping several projects) is additive on the foundation (nullable domain_id); its full configuration + domain-shared memory is delivered in BRD-04 (Domain & Project Configuration)."
+  _scope_note: "Scope ladder: agent → project → domain → space. The 'domain' level (a vertical grouping several projects) is additive on the foundation (nullable domain_id); its full configuration + domain-shared memory is delivered in BRD-04 (Domain & Project Configuration)."
   actor_classes:
     - class: "Authenticated agent (scoped)"
       may: "Read/write knowledge and memory within its agent/project/tenant scope."
@@ -137,7 +137,7 @@ introduction:
       - "Cloud-managed deployment automation (deferred to BRD-02)"
       - "Advanced ML-based distillation / scoring (deferred to BRD-03)"
       - "Consumer-project domain configs (deferred to BRD-04)"
-      - "Governed pay-memory / wallet audit (deferred to BRD-05)"
+      - "Pay-memory / wallet audit — out of Engramory scope (consumer-owned; see BRD-00)"
       - "Detailed user stories and personas (PRD owns these)"
 
 # =============================================================================
@@ -230,7 +230,7 @@ project_scope:
       - "Cloud-managed deployment automation (BRD-02)"
       - "Advanced ML distillation and scoring (BRD-03)"
       - "Consumer-project domain configs (BRD-04)"
-      - "Pay-memory / wallet audit (BRD-05)"
+      - "Pay-memory / wallet audit — out of Engramory scope (consumer-owned; see BRD-00)"
     rationale: "MVP proves the shared per-agent memory plane and ucx_kb replacement; scaling and integrations follow."
   workflow:
     diagram:
@@ -720,9 +720,6 @@ glossary:
     - term: Canonical store
       definition: "PostgreSQL — the source of truth; embeddings and graph are rebuildable projections."
 
-# =============================================================================
-# Appendix: Lifecycle Reference
-# =============================================================================
 # =============================================================================
 # Appendix: Lifecycle Reference
 # =============================================================================

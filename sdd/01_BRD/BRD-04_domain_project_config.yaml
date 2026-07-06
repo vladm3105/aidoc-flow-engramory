@@ -49,7 +49,7 @@ project_scope:
     p1_must_have:
       - "Domain config schema + registry"
       - "Project config schema (inherits domain; overrides)"
-      - "`domain` scope level in memory/knowledge (agent → project → domain → shared)"
+      - "`domain` scope level in memory/knowledge (agent → project → domain → space)"
       - "Domain-shared knowledge/memory namespace"
       - "Config resolution (Platform → Domain → Project → Agent)"
     p2_should_have:

@@ -34,7 +34,7 @@ flowchart LR
 
 ## Document Registry
 
-Cycle 1 (BRD-01) is authored at **full depth** (8 layers). BRD-02…BRD-07 are
+Cycle 1 (BRD-01) is authored at **full depth** (8 layers). BRD-02…BRD-08 are
 **draft sketches** (business scope only — downstream layers authored when their
 MVP cycle begins). See [../../roadmap/ROADMAP.md](../../roadmap/ROADMAP.md).
 

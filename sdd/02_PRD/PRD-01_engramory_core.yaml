@@ -364,6 +364,30 @@ functional_requirements:
           criterion: "Migration path"
           target: "Demonstrated dump+restore+adapter-swap to a managed cloud store"
       brd_reference: "@brd: BRD.01.07.8b01"
+    - id: "PRD.01.09.f600"
+      name: "Cross-project distilled recall (L2)"
+      description: |
+        The product retains distilled semantic, episodic, and procedural memory
+        and surfaces relevant lessons distilled in one project when the same
+        agent works in another project, within the agent's scope.
+      priority: P1
+      acceptance_criteria:
+        - id: "PRD.01.09.f601"
+          criterion: "Cross-project recall"
+          target: "Lessons distilled in project A are retrievable by the same agent scope in project B across >=2 projects"
+      brd_reference: "@brd: BRD.01.07.3c01"
+    - id: "PRD.01.09.a700"
+      name: "Per-agent memory identity & shared team namespace (L3)"
+      description: |
+        The product gives each agent its own accumulating memory namespace plus
+        access to a shared team (space-scoped) namespace, so agents diverge in
+        private memory while sharing team memory where appropriate.
+      priority: P1
+      acceptance_criteria:
+        - id: "PRD.01.09.a701"
+          criterion: "Per-agent divergence + shared namespace"
+          target: "Two agents accrue distinct per-agent memories while sharing a team (space) namespace"
+      brd_reference: "@brd: BRD.01.07.4d01"
   user_journey:
     diagram:
       type: sequenceDiagram
@@ -504,10 +528,15 @@ traceability:
   upstream:
     brd_references:
       - "@brd: BRD.01.07.1a01"
+      - "@brd: BRD.01.07.2b01"
+      - "@brd: BRD.01.07.3c01"
+      - "@brd: BRD.01.07.4d01"
       - "@brd: BRD.01.07.5e01"
       - "@brd: BRD.01.07.6f01"
       - "@brd: BRD.01.07.7a01"
       - "@brd: BRD.01.07.8b01"
+      - "@brd: BRD.01.07.9c01"
+      - "@brd: BRD.01.07.0d01"
   downstream_expected:
     - type: EARS
       layer: 3
@@ -517,24 +546,39 @@ traceability:
     topics:
       - topic: "Data architecture (canonical store + vectors + graph)"
         brd_reference: "@brd: BRD.01.08.b200"
-        status: Pending
+        status: Selected
+        adr_reference: ["@adr: ADR-01", "@adr: ADR-03"]
         business_driver: "One portable canonical store; relationship queries for traceability/recall."
         options: "Relational+vector store as canonical (e.g., PostgreSQL + pgvector); graph via in-store extension vs dedicated engine (pure-Postgres recursive CTE vs Neo4j vs Apache AGE) — evaluate on multi-cloud managed availability and graph capability."
+        decision: "PostgreSQL + pgvector canonical spine (ADR-01); Neo4j graph engine behind a port (ADR-03)."
       - topic: "Models, embeddings & distillation"
         brd_reference: "@brd: BRD.01.08.f600"
-        status: Pending
+        status: Selected
+        adr_reference: ["@adr: ADR-04"]
         business_driver: "Embeddings + generation with provider portability; distillation engine."
         options: "Single model gateway (e.g., LiteLLM) routing local models in dev to managed cloud models later; memory/distillation engine behind a port (e.g., LangMem vs Cipher vs Mem0)."
+        decision: "LiteLLM as the single model gateway (ADR-04)."
       - topic: "Integration & framework compatibility"
         brd_reference: "@brd: BRD.01.08.c300"
-        status: Pending
+        status: Selected
+        adr_reference: []
         business_driver: "Agents and the framework consume over MCP; ucx_kb replaced."
         options: "MCP access surface; Hermes KB skill compatibility layer; ucx_kb migration (entries + graph re-projection)."
+        decision: "Selection recorded at BRD §8 (BRD.01.08.c300, Selected): MCP access surface + Hermes KB skill compatibility + ucx_kb migration; no dedicated ADR (elaborated in SPEC-01/SPEC-05)."
       - topic: "Hosting/deployment & technology boundaries"
         brd_reference: "@brd: BRD.01.08.a100"
-        status: Pending
+        status: Selected
+        adr_reference: ["@adr: ADR-02", "@adr: ADR-05"]
         business_driver: "Self-host dev, migratable to GCP/Azure."
         options: "Ports & adapters with per-environment adapter sets; container topology for dev; managed equivalents for cloud."
+        decision: "Ports & adapters / hexagonal boundaries (ADR-02); canonical data in Postgres with rebuildable projections (ADR-05)."
+      - topic: "Security (authentication & data protection)"
+        brd_reference: "@brd: BRD.01.08.d400"
+        status: Partially Selected
+        adr_reference: ["@adr: ADR-06"]
+        business_driver: "Multi-tenant isolation, governed writes, per-tenant residency, secret handling."
+        options: "Governed-write authority + fail-closed access; identity via OIDC; secrets via a SecretsPort adapter."
+        decision: "Governed-write authority and fail-closed access are Selected (ADR-06). OIDC identity and secrets-adapter selection remain Pending (note: deferred; secrets are excluded from stored memory by policy)."
   cross_links:
     depends:
       - "@depends: BRD-01"

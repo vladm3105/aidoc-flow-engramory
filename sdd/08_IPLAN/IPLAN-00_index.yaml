@@ -18,7 +18,7 @@ registry:
       complexity: 4
       session_count: 0
       sessions_completed: 0
-      files_declared: 5
+      files_declared: 7
       files_done: 0
       skipped: []
       depends_on: ["IPLAN-06", "IPLAN-02"]
@@ -32,7 +32,7 @@ registry:
       session_count: 0
       sessions_completed: 0
       files_declared: 5
-      files_done: 0
+      files_done: 1
       skipped: []
       depends_on: ["IPLAN-06"]
     - id: "IPLAN-03"
@@ -70,7 +70,7 @@ registry:
       complexity: 4
       session_count: 0
       sessions_completed: 0
-      files_declared: 5
+      files_declared: 6
       files_done: 0
       skipped: []
       depends_on: ["IPLAN-02", "IPLAN-01"]
@@ -84,7 +84,7 @@ registry:
       session_count: 0
       sessions_completed: 0
       files_declared: 6
-      files_done: 0
+      files_done: 1
       skipped: []
       depends_on: []
 

@@ -39,7 +39,7 @@ project_scope:
   core_features:
     p1_must_have: ["Brain export/import (open format)", "Re-embed + re-project automation", "Cross-engine MemoryPort migration", "Migration verification suite"]
     p2_should_have: ["Scheduled backups/snapshots", "Selective per-agent export"]
-  out_of_scope: { items: ["Pay-memory (BRD-08, TBD by owner)"] }
+  out_of_scope: { items: ["Pay-memory / wallet audit — out of Engramory scope (consumer-owned; see BRD-00)"] }
 
 traceability:
   tags: ["@brd: BRD-07"]

@@ -43,8 +43,6 @@ test_cases:
         action: { description: "read through accelerator then reconcile" }
         expected_state: ["canonical store authoritative", "accelerator never source of truth"]
         error_paths: [{ condition: "adapter unavailable", expected_error: "fail closed retryable" }]
-  e2e_tests:
-    cases:
       - id: "TDD.06.04.c100"
         name: "re-embed + re-project migration reproduces retrievable memory"
         bdd_ref: "@bdd: BDD.01.03.d010"

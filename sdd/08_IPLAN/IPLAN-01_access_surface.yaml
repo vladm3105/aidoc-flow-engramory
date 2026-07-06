@@ -11,7 +11,7 @@ document_control:
   last_updated: "2026-06-22T00:00:00"
   author: "Engramory team"
   complexity: 4
-  estimated_files: 5
+  estimated_files: 7
   session_count: 0
 
 file_manifest:
@@ -21,6 +21,8 @@ file_manifest:
     - { path: "src/engramory/access/surface.py", order: 3, status: NOT_STARTED, session: null, verified: false }
     - { path: "tests/integration/test_access_surface.py", order: 4, status: NOT_STARTED, session: null, verified: false }
     - { path: "tests/e2e/test_scope_isolation.py", order: 5, status: NOT_STARTED, session: null, verified: false }
+    - { path: "tests/e2e/test_retrieval.py", order: 6, status: NOT_STARTED, session: null, verified: false }
+    - { path: "tests/security/test_failclosed.py", order: 7, status: NOT_STARTED, session: null, verified: false }
 
 execution_commands:
   setup:
@@ -30,7 +32,7 @@ execution_commands:
     - "# TDD: write tests/unit/test_authz.py (default-deny) FIRST"
     - "# Implement src/engramory/access/authz.py then surface.py (MCP tools, audit, fail-closed)"
   validation:
-    - "python -m pytest tests/unit/test_authz.py tests/integration/test_access_surface.py tests/e2e/test_scope_isolation.py -v"
+    - "python -m pytest tests/unit/test_authz.py tests/integration/test_access_surface.py tests/e2e/test_scope_isolation.py tests/e2e/test_retrieval.py tests/security/test_failclosed.py -v"
     - "python -m ruff check src/engramory/access"
 
 implementation_contracts:

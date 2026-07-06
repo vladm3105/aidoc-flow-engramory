@@ -71,7 +71,7 @@ data_models:
         - { name: "agent_id", type: "str", required: true, description: "Calling agent identity" }
         - { name: "project_id", type: "str", required: true, description: "Project scope" }
         - { name: "tenant_id", type: "str", required: true, description: "Tenant scope" }
-        - { name: "scopes", type: "set[str]", required: true, description: "Granted scopes (agent|project|shared)" }
+        - { name: "scopes", type: "set[str]", required: true, description: "Granted scopes (agent|project|domain|space) per @adr: ADR-07" }
     - name: "AuthzDecision"
       type: "dataclass"
       fields:
@@ -108,6 +108,8 @@ tdd_contracts:
     - { path: "tests/unit/test_authz.py", covers: "authorize() default-deny + scope checks" }
     - { path: "tests/integration/test_access_surface.py", covers: "tool calls + audit emission" }
     - { path: "tests/e2e/test_scope_isolation.py", covers: "BDD.01.03.e500 cross-tenant deny" }
+    - { path: "tests/e2e/test_retrieval.py", covers: "BDD.01.03.a100 scoped retrieval e2e" }
+    - { path: "tests/security/test_failclosed.py", covers: "TDD.01.04.d400 fail-closed on store loss" }
 
 traceability:
   tags: ["@spec: SPEC-01"]

@@ -91,6 +91,20 @@ requirements:
         THE knowledge component SHALL create or update its KB entry and traceability
         links WITHIN one ingestion cycle (<= 60 s).
       traceability: "@brd: BRD.01.07.7a01 | @prd: PRD.01.09.d400"
+    - id: "EARS.01.03.e500"
+      name: "Idempotent episode persistence"
+      statement: |
+        WHEN an episode identical in content and scope to a stored episode is submitted,
+        THE memory component SHALL NOT store a duplicate (idempotent by content hash within
+        the same project scope) and SHALL acknowledge the existing record.
+      traceability: "@brd: BRD.01.07.2b01 | @prd: PRD.01.09.b200"
+    - id: "EARS.01.03.d070"
+      name: "Cross-project distilled recall (L2)"
+      statement: |
+        WHEN an authorized agent retrieves context in project B,
+        THE memory component SHALL surface relevant lessons distilled by that agent in
+        project A within the agent's scope, WITHIN @threshold: PRD.01.perf.retrieval_p95.
+      traceability: "@brd: BRD.01.07.3c01 | @prd: PRD.01.09.f600"
 
   state_driven:
     - id: "EARS.01.03.d400"
@@ -99,15 +113,8 @@ requirements:
         WHILE long-term memory accrues new entries,
         THE distillation component SHALL run a consolidation pass every
         @threshold: PRD.01.rate.consolidation_cadence (20 new memories),
-        WITHIN the background-processing window.
+        WITHIN 300 s of reaching that threshold.
       traceability: "@brd: BRD.01.07.5e01 | @prd: PRD.01.09.b200"
-    - id: "EARS.01.03.e500"
-      name: "Idempotent episode persistence"
-      statement: |
-        WHILE the same episode is submitted more than once (identical content + scope),
-        THE memory component SHALL store it at most once (idempotent by content hash)
-        WITHIN the same project scope.
-      traceability: "@brd: BRD.01.07.2b01 | @prd: PRD.01.09.b200"
 
   unwanted_behavior:
     - id: "EARS.01.03.f600"
@@ -129,7 +136,8 @@ requirements:
       statement: |
         IF a distilled lesson's confidence is below the configured floor,
         THE distillation component SHALL mark the lesson advisory-only (excluded from
-        default retrieval) and retain its provenance WITHIN the consolidation pass.
+        default retrieval) and retain its provenance as part of the same consolidation pass
+        that evaluates it.
       traceability: "@brd: BRD.01.07.5e01 | @prd: PRD.01.09.b200"
     - id: "EARS.01.03.c900"
       name: "Canonical-store unavailability fallback"
@@ -173,6 +181,19 @@ requirements:
         THE access component SHALL write an audit record for every authentication and
         authorization decision (allow and deny), for all requests.
       traceability: "@brd: BRD.01.07.0d01 | @prd: PRD.01.09.c300"
+    - id: "EARS.01.03.c060"
+      name: "Wrong-scope return rate bound"
+      statement: |
+        THE access component SHALL keep the rate of wrong-scope returns below
+        @threshold: PRD.01.risk.authz_scope_error (< 0.5%), for all authorized reads.
+      traceability: "@brd: BRD.01.07.6f01 | @prd: PRD.01.09.c300"
+    - id: "EARS.01.03.e080"
+      name: "Per-agent memory identity with shared team namespace (L3)"
+      statement: |
+        THE memory component SHALL maintain a distinct per-agent memory namespace for each
+        agent while exposing a shared team (space-scoped) namespace, so that two agents
+        diverge in private memory while sharing the team namespace, for all agents.
+      traceability: "@brd: BRD.01.07.4d01 | @prd: PRD.01.09.a700"
 
 # =============================================================================
 # Section 4: Quality Attributes
@@ -216,6 +237,8 @@ traceability:
       - "@prd: PRD.01.09.c300"
       - "@prd: PRD.01.09.d400"
       - "@prd: PRD.01.09.e500"
+      - "@prd: PRD.01.09.f600"
+      - "@prd: PRD.01.09.a700"
   downstream_expected:
     - type: BDD
       layer: 4
@@ -228,11 +251,15 @@ traceability:
       - prd: "PRD.01.09.b200"
         ears: ["EARS.01.03.b200", "EARS.01.03.d400", "EARS.01.03.e500", "EARS.01.03.b800", "EARS.01.03.f030"]
       - prd: "PRD.01.09.c300"
-        ears: ["EARS.01.03.e020", "EARS.01.03.f600", "EARS.01.03.b050", "EARS.01.04.b200"]
+        ears: ["EARS.01.03.e020", "EARS.01.03.f600", "EARS.01.03.b050", "EARS.01.03.c060", "EARS.01.04.b200"]
       - prd: "PRD.01.09.d400"
         ears: ["EARS.01.03.c300", "EARS.01.03.a700"]
       - prd: "PRD.01.09.e500"
         ears: ["EARS.01.03.c900", "EARS.01.03.d010", "EARS.01.03.a040"]
+      - prd: "PRD.01.09.f600"
+        ears: ["EARS.01.03.d070"]
+      - prd: "PRD.01.09.a700"
+        ears: ["EARS.01.03.e080"]
   threshold_references:
     items:
       - tag: "@threshold: PRD.01.perf.retrieval_p95"
