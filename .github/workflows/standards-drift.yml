@@ -1,0 +1,30 @@
+# standards-drift — weekly server-side canon drift check per PLAN-002
+# §5.5 (product-code tier). Fetches script from canon at runtime.
+# WARNING-ONLY per canon §3.1b.
+
+name: standards-drift
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+
+jobs:
+  drift:
+    name: check-standards-drift
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Fetch drift-check script from aidoc-flow-ci canon
+        run: |
+          mkdir -p sync
+          curl -fsSL "https://raw.githubusercontent.com/vladm3105/aidoc-flow-ci/ci/v1.6.0/sync/check-standards-drift.sh" -o sync/check-standards-drift.sh
+          chmod +x sync/check-standards-drift.sh
+
+      - name: Run standards drift check (tier=product)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash sync/check-standards-drift.sh --tier product

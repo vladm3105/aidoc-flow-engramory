@@ -30,3 +30,13 @@ volumes/
 dist/
 build/
 node_modules/
+
+# --- aidoc-flow-ci canon baseline (PLAN-002 §10.1) ---
+.claude/
+.review/
+tmp/
+scratch/
+.env.*
+!.env.example
+*.pyc
+Thumbs.db

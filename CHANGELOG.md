@@ -4,6 +4,34 @@ All notable changes to Engramory are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 ### Added
+- **Wave 3 product-tier adoption of aidoc-flow-ci canon** (2026-07-08) —
+  self-adopts the workspace-wide standards canon from
+  `aidoc-flow-ci@ci/v1.6.0` per PLAN-002 §5.5 Wave 3 (product-code tier).
+  9 file surfaces + this CHANGELOG (atomic canon-adoption bundle per
+  PLAN-002 §5.5 explicit exemption to OPS-0061 Rule 1's ≤3-surface cap;
+  same precedent as PR-U4 aidoc-flow-ci + PR #13 iplan-standard + PR #69
+  iplan-runner):
+  - `scripts/pre_push_check.sh` (NEW) — canon self-review script
+    byte-identical to canon at `ci/v1.6.0`.
+  - `.pre-commit-config.yaml` (NEW) — canon fragment verbatim with
+    `# CANON:` marker.
+  - `.github/CODEOWNERS` (NEW) — canon shape.
+  - `.github/pull_request_template.md` (NEW) — canon PR template.
+  - `.github/dependabot.yml` (NEW) — FULL canon (5 ecosystems; Dependabot
+    silently skips missing manifests).
+  - `.gitignore` (edit) — 8 canon baseline lines appended.
+  - `.gitattributes` (NEW) — canon baseline.
+  - `.github/workflows/audit-trail.yml` (NEW) — caller of `audit-trail-check.yml`
+    reusable at `@ci/v1.6.0`; check-name = `call / verify`.
+  - `.github/workflows/standards-drift.yml` (NEW) — weekly cron running
+    `sync/check-standards-drift.sh --tier product` (script fetched from
+    canon at runtime). Warning-only per canon §3.1b.
+  - **Server-side follow-up (F5 blast-radius; not in this PR):** founder
+    runs `bash install/apply-standards.sh --apply --repo vladm3105/aidoc-flow-engramory --tier product --ci-tag ci/v1.6.0 --yes` to add
+    `call / verify` to branch-protection contexts + apply canon labels +
+    repo-settings + actions-permissions + branch-protection-product.
+  - **Origin:** `aidoc-flow-ci/plans/PLAN-002_workspace-standards-rollout.md`
+    §5.5 Wave 3.
 - **aidoc-flow CI standards adoption** (2026-07-06) — engramory joins the
   aidoc-flow workspace CI infrastructure:
   - `CLAUDE.md` populated with the aidoc-flow-standard governance sections
