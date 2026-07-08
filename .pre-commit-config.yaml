@@ -1,0 +1,34 @@
+# CANON: aidoc-flow-ci pre_push_check (idempotency marker per PLAN-002 §5.2)
+#
+# Canonical pre-commit fragment wiring the canon pre_push_check.sh hook.
+# `install/install.sh` merges this block into a consumer's
+# `.pre-commit-config.yaml` idempotently (marker comment above triggers
+# no-op re-installation).
+#
+# TWO surfaces are wired:
+#   (a) `default_install_hook_types: [pre-commit, pre-push]` at the root —
+#       ensures `pre-commit install` also sets up the pre-push git hook.
+#       install.sh upgrades the value in-place if consumer has only
+#       [pre-commit]; leaves alone if already [pre-commit, pre-push].
+#   (b) The pre-push local hook below, invoking scripts/pre_push_check.sh.
+#
+# Consumers that need repo-specific extras (e.g., verified-planning
+# `check_plan.py`) point this entry at `scripts/pre_push_check_<repo>.sh`
+# WRAPPER instead — wrapper sources canon + adds its own checks. See
+# PLAN-002 §4.8 for the operations wrapper reference design.
+
+default_install_hook_types:
+- pre-commit
+- pre-push
+
+repos:
+- repo: local
+  hooks:
+  - id: aidoc-flow-pre-push
+    name: aidoc-flow canon pre-push validation + OPS-0069 audit-trail check
+    entry: scripts/pre_push_check.sh
+    language: script
+    stages:
+    - pre-push
+    pass_filenames: false
+    always_run: true

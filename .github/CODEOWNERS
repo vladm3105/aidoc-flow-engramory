@@ -1,0 +1,37 @@
+# CODEOWNERS — canonical shape per docs/REPO_STANDARDS.md §7.
+#
+# Single-owner phase: all patterns route to @vladm3105. v2 fans out per-
+# domain reviewers (docs → docs-savvy, workflows → security-savvy) as
+# the team grows. Do NOT prematurely fan out — keep single-owner until
+# there is more than one reviewer to route to.
+#
+# Adoption per tier (see REPO_STANDARDS.md §2 branch-protection table):
+#   - governance + umbrella tiers: CODEOWNERS review is REQUIRED
+#     (branch protection `require_code_owner_reviews: true`).
+#   - product-code + ops-private tiers: CODEOWNERS ships but does NOT
+#     gate merges (defer to `ai-review.yml` + `composition.yml`).
+#
+# CRITICAL ordering invariant: GitHub CODEOWNERS is LAST-MATCH-WINS.
+# Broad globs go FIRST; specific paths go LAST — otherwise a later
+# broad rule silently overrides an earlier specific one. Preserve
+# this ordering when fanning out to per-domain reviewers in v2, or
+# governance paths (CLAUDE.md, DECISIONS.md, REPO_STANDARDS.md) will
+# quietly re-route to the docs owner.
+
+# Global default: founder
+*                                       @vladm3105
+
+# Docs (broad glob — must come BEFORE governance-surface files that
+# live under docs/, so the specific rules below win)
+docs/**                                 @vladm3105
+
+# Security-sensitive paths
+.github/**                              @vladm3105
+.github/workflows/**                    @vladm3105
+.github/ai-review/**                    @vladm3105
+
+# Governance surfaces (specific files — LAST so they win over
+# the broader docs/** and .github/** rules above)
+CLAUDE.md                               @vladm3105
+ops/DECISIONS.md                        @vladm3105
+docs/REPO_STANDARDS.md                  @vladm3105
