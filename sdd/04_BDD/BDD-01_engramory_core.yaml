@@ -131,7 +131,7 @@ scenario_structure:
         given: 'a memory record owned by tenant "t-2"'
         when: "agent-A (tenant t-1) requests that record"
         then: "THE access component SHALL deny the request, return no data, AND write an audit record WITHIN 200 ms"
-        covers_ears: ["EARS.01.03.f600", "EARS.01.03.e020", "EARS.01.03.b050"]
+        covers_ears: ["EARS.01.03.f600", "EARS.01.03.e020", "EARS.01.03.b050", "EARS.01.03.c060"]
         spec_trace: ["3 (Interfaces)", "5 (Behavior — error_handling)"]
       - id: "BDD.01.03.f600"
         name: "Governed-write without approval is rejected and audited"
@@ -149,6 +149,14 @@ scenario_structure:
         then: "THE distillation component SHALL mark the lesson advisory-only AND retain its provenance, AND default retrieval SHALL NOT return it"
         covers_ears: ["EARS.01.03.b800"]
         spec_trace: ["5 (Behavior)"]
+      - id: "BDD.01.03.g010"
+        name: "Secret material is excluded from stored memory"
+        tags: ["@scenario-type:error", "@p1-high", "@scenario-id:BDD.01.03.g010", "@security"]
+        given: "an episode submission whose content contains a credential-like string"
+        when: "the write is screened and the reflection pass runs"
+        then: "THE system SHALL exclude the secret content from any stored episode or memory AND write an audit record for the exclusion"
+        covers_ears: ["EARS.01.04.c300"]
+        spec_trace: ["5 (Behavior — validation_rules)"]
 
     recovery:
       - id: "BDD.01.03.b800"
@@ -212,8 +220,9 @@ traceability:
       - "@ears: EARS.01.03.c060"
       - "@ears: EARS.01.03.d070"
       - "@ears: EARS.01.03.e080"
+      - "@ears: EARS.01.04.c300"
   coverage_matrix:
-    _note: "Bidirectional EARS→scenario coverage. Every EARS line is covered by >=1 scenario."
+    _note: "Bidirectional EARS→scenario coverage. Every EARS §3 functional line is covered by >=1 scenario; §4 quality attributes are covered where scenario-testable (c300 → g010; a100/d400 verify via the eval/load harness, b200 via the e500/e020 authz scenarios). EARS.01.03.c060 is a statistical bound: e500 covers the deny mechanism, the rate bound verifies in the eval harness."
     items:
       - ears: "EARS.01.03.a100"
         scenarios: ["BDD.01.03.a100"]
@@ -249,6 +258,8 @@ traceability:
         scenarios: ["BDD.01.03.d070"]
       - ears: "EARS.01.03.e080"
         scenarios: ["BDD.01.03.e080"]
+      - ears: "EARS.01.04.c300"
+        scenarios: ["BDD.01.03.g010"]
   downstream_expected:
     - type: ADR
       layer: 5

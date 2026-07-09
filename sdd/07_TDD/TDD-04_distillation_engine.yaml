@@ -15,9 +15,12 @@ test_mapping:
     - bdd_scenario: "@bdd: BDD.01.03.a700"
       description: "Low-confidence lesson quarantined"
       tests: [{ type: unit, file: "tests/unit/test_consolidation.py", function: "test_quarantine_low_confidence", status: pending }]
+    - bdd_scenario: "@bdd: BDD.01.03.g010"
+      description: "Secret material excluded from stored memory, audited"
+      tests: [{ type: unit, file: "tests/unit/test_secrets_screen.py", function: "test_secret_content_excluded", status: pending }]
   coverage_table:
     columns: [BDD Scenario, Unit, Integration, E2E, Total]
-    rows: [["BDD.01.03.d400", 0, 1, 0, 1], ["BDD.01.03.a700", 1, 0, 0, 1]]
+    rows: [["BDD.01.03.d400", 0, 1, 0, 1], ["BDD.01.03.a700", 1, 0, 0, 1], ["BDD.01.03.g010", 1, 0, 0, 1]]
 
 test_cases:
   unit_tests:
@@ -31,6 +34,15 @@ test_cases:
         inputs: [{ name: "lesson", type: "Memory", value: "confidence below floor" }]
         expected_output: { type: "ConsolidationStats", value: "quarantined>=1; provenance retained" }
         edge_cases: [{ condition: "duplicate lessons", expected: "merged, count in stats" }]
+      - id: "TDD.04.04.c100"
+        name: "credential-like content excluded from distilled memory, audited"
+        spec_ref: "@spec: SPEC-04"
+        target: "reflect"
+        test_file: "tests/unit/test_secrets_screen.py"
+        test_function: "test_secret_content_excluded"
+        inputs: [{ name: "episode", type: "Episode", value: "content containing an API-key-like high-entropy string" }]
+        expected_output: { type: "int", value: "0 memories written from the secret span; audit_records row emitted" }
+        edge_cases: [{ condition: "secret embedded mid-sentence", expected: "memory stored with the secret span redacted OR write rejected entirely" }]
   integration_tests:
     cases:
       - id: "TDD.04.04.b100"
@@ -63,7 +75,7 @@ traceability:
   upstream:
     spec_references: ["@spec: SPEC-04"]
     adr_references: ["@adr: ADR.04.03.a100", "@adr: ADR.05.03.a100"]
-    bdd_references: ["@bdd: BDD.01.03.d400", "@bdd: BDD.01.03.a700"]
-    ears_references: ["@ears: EARS.01.03.d400", "@ears: EARS.01.03.b800", "@ears: EARS.01.03.e500"]
+    bdd_references: ["@bdd: BDD.01.03.d400", "@bdd: BDD.01.03.a700", "@bdd: BDD.01.03.g010"]
+    ears_references: ["@ears: EARS.01.03.d400", "@ears: EARS.01.03.b800", "@ears: EARS.01.03.e500", "@ears: EARS.01.04.c300"]
   downstream: [{ type: IPLAN, layer: 8, description: "Distillation worker implementation plan" }]
   health_score: { iplan_ready: "[Pending]%", target_score: ">=90/100" }

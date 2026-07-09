@@ -46,7 +46,7 @@ interfaces:
     - name: "reflect"
       type: "async function"
       signature: "async def reflect(agent_id: str, project_id: str | None) -> int"
-      description: "Promote recent episodes into distilled long-term memories. Returns count."
+      description: "Promote recent episodes into distilled long-term memories. Returns count. Port binding: MemoryPort.reflect (renamed from distill, PLAN-001). Validate this batch-reflect surface against the adopted engine's API (Mem0 write-time ADD/UPDATE/DELETE/NOOP) before building the adapter (IPLAN-04 precondition)."
       errors: ["LLMUnavailable: retryable"]
     - name: "consolidate"
       type: "async function"
@@ -68,6 +68,9 @@ behavior:
   validation_rules:
     - { rule: "Consolidation runs every @threshold:PRD.01.rate.consolidation_cadence (20 new memories)", source: "@ears: EARS.01.03.d400" }
     - { rule: "Low-confidence lessons marked advisory-only, provenance retained", source: "@ears: EARS.01.03.b800" }
+    - { rule: "Reflection triggers: >=10 unprocessed episodes OR 30 min elapsed since the first unprocessed episode OR an explicit reflect() call — never 'project end' alone (continuous agents have no project end)", source: "@bdd: BDD.01.03.d400" }
+    - { rule: "Confidence dynamics: distiller assigns initial confidence in [0,1]; on each feedback outcome v (useful=1.0, not_useful=0.25, harmful=0.0): c := clamp(c + 0.2*(v - c), 0, 1); status:='advisory' when c < 0.4, restored to 'active' when c >= 0.5 (hysteresis); a 'harmful' outcome sets status:='quarantined' immediately", source: "@ears: EARS.01.03.b800" }
+    - { rule: "Secrets screen: before any episode or memory write, content is screened for credential material (key/token/password patterns + high-entropy strings); matches are rejected (or the span redacted) and an audit_records row is written", source: "@ears: EARS.01.04.c300" }
   state_transitions:
     - { from: "Episodes", to: "DistilledMemory", trigger: "reflection pass", source: "@bdd: BDD.01.03.d400" }
     - { from: "Lesson", to: "AdvisoryOnly", trigger: "confidence < floor", source: "@bdd: BDD.01.03.a700" }
@@ -90,7 +93,7 @@ traceability:
   upstream:
     adr_references: ["@adr: ADR.04.03.a100", "@adr: ADR.05.03.a100"]
     bdd_references: ["@bdd: BDD.01.03.d400", "@bdd: BDD.01.03.a700"]
-    ears_references: ["@ears: EARS.01.03.d400", "@ears: EARS.01.03.b800", "@ears: EARS.01.03.e500"]
+    ears_references: ["@ears: EARS.01.03.d400", "@ears: EARS.01.03.b800", "@ears: EARS.01.03.e500", "@ears: EARS.01.04.c300"]
   downstream:
     - { type: TDD, layer: 7, description: "Distillation/consolidation tests" }
     - { type: IPLAN, layer: 8, description: "Worker implementation" }

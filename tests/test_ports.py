@@ -25,10 +25,21 @@ def test_eight_ports_exported() -> None:
     assert set(ports.__all__) == EXPECTED_PORTS
 
 
-def test_ports_are_protocols_and_importable() -> None:
+def test_ports_are_protocols() -> None:
     for name in EXPECTED_PORTS:
         port = getattr(ports, name)
         assert inspect.isclass(port), f"{name} should be a class"
+        assert getattr(port, "_is_protocol", False), f"{name} should be a typing.Protocol"
+
+
+def test_memory_port_learning_loop_surface() -> None:
+    """The learning loop (SPEC-01/03/04) is part of the port contract."""
+    for method in ("add_episode", "search", "reflect", "consolidate",
+                   "feedback", "forget", "get_profile"):
+        assert hasattr(ports.MemoryPort, method), f"MemoryPort missing '{method}'"
+    sig = inspect.signature(ports.MemoryPort.search)
+    for param in ("include_advisory", "token_budget"):
+        assert param in sig.parameters, f"MemoryPort.search missing '{param}'"
 
 
 def test_memory_port_scope_surface() -> None:
