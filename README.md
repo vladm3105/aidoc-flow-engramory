@@ -64,8 +64,7 @@ All dev dependencies are free and open-source.
 | [docs/STRATEGY.md](docs/STRATEGY.md) | Build strategy & recommendation (build the plane, adopt the engine, lead with evaluation) |
 | [docs/MEMORY_DESIGN.md](docs/MEMORY_DESIGN.md) | Layered memory (L0–L3), distillation loop, schema, portability |
 | [docs/PORTABILITY.md](docs/PORTABILITY.md) | Self-hosted → GCP/Azure principles and migration |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | Engineering Phase 0–3 build plan |
-| [roadmap/ROADMAP.md](roadmap/ROADMAP.md) | Canonical MVP cycle plan (MVP-1..8) for scope and sequencing |
+| [roadmap/ROADMAP.md](roadmap/ROADMAP.md) | Canonical roadmap — MVP cycle plan (MVP-1..8) + engineering Phase view (Phase 0–3) |
 | [docs/GLOSSARY.md](docs/GLOSSARY.md) | Terms |
 | [sdd/](sdd/) | SDD lifecycle artifacts (BRD→IPLAN); `sdd/05_ADR/` = canonical implementing ADRs |
 | [docs/adr/](docs/adr/) | Conceptual/descriptive architecture decision records |
@@ -74,7 +73,7 @@ All dev dependencies are free and open-source.
 
 ## Status
 
-Project initiation. Phase 0 (dev foundation) scaffolding. See [docs/ROADMAP.md](docs/ROADMAP.md).
+Project initiation. Phase 0 (dev foundation) scaffolding. See [roadmap/ROADMAP.md](roadmap/ROADMAP.md) § "Engineering Phase view".
 
 ## License
 

@@ -5,6 +5,18 @@ Working agreement for AI agents in Engramory. For engineering conventions
 this file records only what's specific to Engramory as an **aidoc-flow workspace repo**
 (governance, CI, cross-repo standards). Both files apply.
 
+## What this repo is
+
+**Engramory** is the aidoc-flow workspace's memory plane — the durable
+substrate for AI-agent memory (episodic + semantic) that other
+aidoc-flow projects consume as a subscriber. Currently at Phase 0
+(dev foundation) with MVP-1 SDD artifacts in place; no adapters or
+running gateway yet. Substantive engineering standard evolution
+lives in `sdd/` (BRD → IPLAN artifacts, with implementing ADRs at
+`sdd/05_ADR/` and conceptual ADRs at `docs/adr/`); repo-level
+operational + workspace-standard adoption decisions log to
+`DECISIONS.md`.
+
 ## Per-repo governance — this repo owns its own continuity
 
 The `aidoc-flow` workspace is multi-repo. Each repo governs its own activity
@@ -13,11 +25,26 @@ repo:
 
 | Surface | Path (in this repo) |
 | --- | --- |
-| Engineering agreement | `AGENTS.md` (the source of truth for how to build; CLAUDE.md points here) |
+| Live HANDOFF | `HANDOFF.md` |
+| TODO / backlog | `TODO.md` |
+| Decisions log | `DECISIONS.md` |
+| Plans | Not adopted — engineering delivery flows through the `sdd/` lifecycle (BRD → IPLAN artifacts + ADRs at `sdd/05_ADR/`); no per-initiative `plans/` directory needed at this stage |
 | Changelog | `CHANGELOG.md` |
-| Roadmap | `roadmap/` |
-| Decisions log | `sdd/05_ADR/` (canonical/implementing ADRs) + `docs/adr/` (conceptual) |
-| SDD lifecycle | `sdd/` (BRD→IPLAN artifacts) |
+| Roadmap | `roadmap/ROADMAP.md` |
+| Engineering agreement | `AGENTS.md` |
+| SDD lifecycle | `sdd/` |
+| Substantive ADRs (implementing) | `sdd/05_ADR/` |
+| Conceptual ADRs | `docs/adr/` |
+
+The top 6 rows are the canonical required set per PLAN-003 §4.2. The
+4 rows below are engramory-specific additional surfaces: `AGENTS.md`
+is the engineering-conventions doc CLAUDE.md defers to; `sdd/` is the
+substantive standard-evolution lifecycle (BRD → IPLAN artifacts);
+`sdd/05_ADR/` + `docs/adr/` are the substantive-ADR split (implementing
+vs conceptual). None duplicate the required rows — repo-level +
+workspace-standard adoption decisions live in `DECISIONS.md` distinct
+from substantive ADRs which evolve through the `sdd/` lifecycle
+described in `AGENTS.md`.
 
 **Never put any of these in `tmp/`** — `tmp/` is for transient working files;
 nothing in it survives a context-clear or new session.

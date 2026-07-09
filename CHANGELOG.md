@@ -3,6 +3,72 @@
 All notable changes to Engramory are documented here. Format: [Keep a Changelog](https://keepachangelog.com/); versioning: [SemVer](https://semver.org/).
 
 ## [Unreleased]
+
+### Changed — Wave 3b adoption of aidoc-flow-ci PLAN-003 governance-file canon (2026-07-08)
+
+engramory adopts the PLAN-003 flexible-canonical (Option B) project-
+governance file canon. Design in `aidoc-flow-ci#72` (plan draft);
+shipment: `aidoc-flow-ci#73`/`#74`/`#75`/`#76`/`#77`/`#78`/`#79`,
+`aidoc-flow-operations#217` = PR-V1/V2/V3/V4 + canon-template fix +
+parser §N handling + rubric fix + canonical-source authority
+disambiguation — all merged 2026-07-08.
+
+Governance drift check (`bash ../aidoc-flow-ci/install/apply-standards.sh
+--check`) — `CLAUDE.md#per-repo-governance` now reports OK (6/6 required
++ 4 additional + 0 errors).
+
+- **`HANDOFF.md`** (NEW at repo root) — cross-session resume; seeded
+  with Wave 3b state + active surfaces (substantive engineering via
+  `sdd/`; PLAN-004 upstream ratification on interlog).
+- **`DECISIONS.md`** (NEW at repo root) — append-only decision log for
+  repo-level + workspace-standard-adoption decisions; seeded with
+  `E-0001` (this Wave 3b adoption). ID prefix: `E-NNNN`. Distinct from
+  substantive ADRs (`sdd/05_ADR/` + `docs/adr/`) which evolve through
+  the framework CHG / GATE-SPEC process.
+- **`CLAUDE.md`** — new `## What this repo is` section (currently
+  absent per PLAN-003 §5.4c audit); `## Per-repo governance` table
+  restructured to canonical 6-required-row format + 4 additional rows
+  (`AGENTS.md`, `sdd/`, `sdd/05_ADR/`, `docs/adr/`).
+- **`docs/ROADMAP.md`** (DELETED) — consolidated into
+  `roadmap/ROADMAP.md` per PLAN-003 §5.5 Wave 3 dual-ROADMAP option
+  (a). Content preserved: the Phase 0-3 engineering-view table +
+  ARCHITECTURE.md pointer migrated into a new §"Engineering Phase
+  view (Phase 0-3)" section in `roadmap/ROADMAP.md`; the dead
+  `../docs/ROADMAP.md` cross-reference at roadmap/ROADMAP.md:3
+  updated to describe the consolidation.
+- **`roadmap/ROADMAP.md`** — added new §"Engineering Phase view
+  (Phase 0-3)" section containing the migrated Phase table + pointer
+  to `../docs/ARCHITECTURE.md`. Updated line-3 preamble from
+  "engineering view is in ../docs/ROADMAP.md" to "single canonical
+  roadmap — cycle scope + Phase view". Last-updated date bumped to
+  2026-07-08.
+- **`README.md`** — updated 2 cross-references: dropped the standalone
+  `docs/ROADMAP.md` row (Phase view now folded into `roadmap/ROADMAP.md`);
+  §Status pointer switched from `docs/ROADMAP.md` to
+  `roadmap/ROADMAP.md § "Engineering Phase view"`.
+- **`docs/README.md`** — updated the ROADMAP row to describe the
+  consolidation (no more standalone ROADMAP.md in docs/; canonical
+  roadmap at ../roadmap/ROADMAP.md).
+- **`CHANGELOG.md`** — this entry.
+
+Working-tree cleanup (not a diff surface — `tmp/` is gitignored):
+- Removed untracked `tmp/TODO.md` + `tmp/SESSION_HANDOFF_2026-07-07.md`
+  from disk to enforce the "Never in `tmp/`" memory rule. `tmp/`
+  itself is preserved as the workspace scratch directory.
+
+**8 tracked surfaces** (HANDOFF.md + DECISIONS.md + CLAUDE.md +
+docs/ROADMAP.md deletion + roadmap/ROADMAP.md migration + README.md +
+docs/README.md + this CHANGELOG entry). Above OPS-0061 Rule 1 ≤3
+default. Bundle authorized under standing founder OK for Wave 3
+rollout (per PLAN-003 §5.5 Wave sequencing + founder direction
+2026-07-08 "continuing... Wave 3"). Expanded from initial 5 tracked +
+1 untracked-cleanup after 2-agent review surfaced 4 dead refs to the
+deleted `docs/ROADMAP.md` (3 pre-existing consumer refs + 1 in the
+canonical roadmap itself) — Phase 0-3 content migrated rather than
+lost; all dead refs cleared.
+
+Multi-agent self-review per OPS-0065 (code-reviewer + documentation-specialist parallel dispatch): approved after 1 fold cycle addressing 1 CRITICAL (4 dead refs to deleted docs/ROADMAP.md — code-reviewer flagged; all 4 fixed by migrating Phase 0-3 content into roadmap/ROADMAP.md + updating README + docs/README consumer refs) + 3 HIGH (docs/ROADMAP.md supersession framing was wrong — Phase content wasn't duplicate, was complementary; content-migration path chosen; false "AGENTS.md CHG/GATE-SPEC" claim retracted across HANDOFF + DECISIONS + CLAUDE.md; surface count 6→8 corrected honestly; CHANGELOG TBD → filled) + 4 MEDIUM/LOW (charter/build-in-progress → Phase 0 dev foundation per README wording; tmp cleanup reframed as working-tree hygiene not diff surface; tmp/SESSION_HANDOFF also cleaned; CHANGELOG subsection order preserved — Added-then-Changed acceptable within Unreleased)
+
 ### Added
 - **Wave 3 product-tier adoption of aidoc-flow-ci canon** (2026-07-08) —
   self-adopts the workspace-wide standards canon from
