@@ -5,16 +5,20 @@ workspace's memory plane (durable substrate for AI-agent memory that
 other aidoc-flow projects consume as a subscriber). Read at session
 start; refresh at milestones and before context compaction.
 
-## Current state (2026-07-09)
+## Current state (2026-07-09, post-PLAN-001)
 
-**PLAN-003 Wave 3b adoption MERGED** — PR #12 squash-merged to main
-2026-07-09 (67b12d2); merged branches pruned. **PLAN-001 pre-first-run
-remediation underway** (`plans/PLAN-001_pre-first-run-remediation.md`):
-a 2026-07-09 five-agent review found the SDD↔schema↔code contracts
-drifted (StoragePort semantics, missing content_hash/kb_sections/status,
-untracked learning loop) plus the known `call / trust` CI failure
-(`TODO.md` §1, decided: Option A). PR sequence PR-1…PR-7; see the plan's
-Task list (Tasks 1-7) for scope and checkbox status.
+**PLAN-001 pre-first-run remediation COMPLETE** — all 7 PRs (#13–#19)
+merged to main 2026-07-09, plus the 3 stranded Dependabot PRs (#8–#10).
+The 2026-07-09 five-agent review's contract gaps are closed: migration
+0003 (content_hash, quarantine status, tenant wall, feedback/audit/
+kb_sections), StoragePort semantics reconciled, learning-loop contracts
+(feedback/forget/profile, RRF ranking, token budget, secrets-exclusion
+trace), infra pinned, docs/governance refreshed. See
+`plans/PLAN-001_pre-first-run-remediation.md` for the record. **Still
+open (founder-gated):** `AI_REVIEW_TOKEN` secret for `call / trust`
+(`TODO.md` §1) and the F5 App/branch-protection follow-up (`TODO.md`
+§2). Next engineering work: MVP-1 vertical slice per IPLAN-02/06 and
+`roadmap/ROADMAP.md`.
 
 ## Open threads
 

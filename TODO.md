@@ -87,13 +87,15 @@ as a CHANGELOG bullet; promoted here so it has an owner surface.
 
 **Discovered.** 2026-07-08 (Wave 3); promoted 2026-07-09 (PLAN-001 review).
 
-## 3. 🟡 Stranded Dependabot PRs #8 / #9 / #10
+## 3. ~~🟡 Stranded Dependabot PRs #8 / #9 / #10~~ — RESOLVED 2026-07-09
 
-**Status:** open, blocked on §1. All three show `call / trust` FAIL +
-`call / ai-review` SKIPPED; they accumulate weekly until §1 lands. After
-`AI_REVIEW_TOKEN` is set, close-and-reopen (or push an empty commit to) each
-PR to re-trigger the gate, then merge per repo convention. Note: PR #8's
-group bump overlaps #9/#10 (checkout, setup-python) — merging #8 first may
-auto-close the others.
+**Status:** resolved. All three merged 2026-07-09 on founder instruction:
+`call / trust` turned out to be a **non-required** check (branch protection
+not yet applied — see §2), so `mergeStateStatus` was UNSTABLE, not BLOCKED,
+and normal squash-merge succeeded without the §1 secret. #10 needed a
+`@dependabot rebase` after #9 touched the same `ci.yml` lines. §1 remains
+open on its own merits (trust gate still fails until `AI_REVIEW_TOKEN`
+lands); it just doesn't hard-block merges until §2 makes `call / verify`
+(and any future required contexts) branch-protection-required.
 
-**Discovered.** 2026-07-09 (PLAN-001 review).
+**Discovered.** 2026-07-09 (PLAN-001 review). **Resolved.** 2026-07-09.
