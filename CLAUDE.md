@@ -28,7 +28,7 @@ repo:
 | Live HANDOFF | `HANDOFF.md` |
 | TODO / backlog | `TODO.md` |
 | Decisions log | `DECISIONS.md` |
-| Plans | Not adopted — engineering delivery flows through the `sdd/` lifecycle (BRD → IPLAN artifacts + ADRs at `sdd/05_ADR/`); no per-initiative `plans/` directory needed at this stage |
+| Plans | `plans/` — repo-wide remediation/feature plans (`PLAN-NNN_slug.md`; adopted 2026-07-09 with PLAN-001). Substantive engineering delivery still flows through the `sdd/` lifecycle (BRD → IPLAN artifacts + ADRs at `sdd/05_ADR/`); a plan here orchestrates cross-cutting work the sdd layers don't own |
 | Changelog | `CHANGELOG.md` |
 | Roadmap | `roadmap/ROADMAP.md` |
 | Engineering agreement | `AGENTS.md` |
@@ -68,12 +68,16 @@ semver-tagged (`ci/v1.0.0`, `ci/v1.0.1`, …). Plan + charter live in
 `ops/iplans/IPLAN-0017_unified-ci-flows.md` +
 `ops/iplans/IPLAN-0017-CHARTER_aidoc-flow-ci.md`.
 
-**Per-repo state (2026-07-06):** public repo. Adopts unified CI
-via `.github/workflows/ai-review.yml`@ci/v1.4.3 + `composition.yml`@ci/v1.3.0
-+ `auto-merge-ai-prs.yml`@ci/v1.5.1 (this PR). Runner topology: `ubuntu-latest`
-(matches existing `ci.yml`). Reviewer: `claude` (subscription-auth via
-`CLAUDE_CODE_OAUTH_TOKEN`). Dormant until reviewer App is installed
-(F5 blast-radius prerequisite per operations CLAUDE.md § Unified CI).
+**Per-repo state (2026-07-09):** public repo. Adopts unified CI via
+`.github/workflows/ai-review.yml`@ci/v1.4.3 + `composition.yml`@ci/v1.3.0
++ `auto-merge-ai-prs.yml`@ci/v1.5.1 + `audit-trail.yml` (canon
+`audit-trail-check.yml`@ci/v1.6.0) + `standards-drift.yml` (fetches canon
+at ci/v1.6.0). Runner topology:
+`ubuntu-latest` (matches existing `ci.yml`). Reviewer: `claude`
+(subscription-auth via `CLAUDE_CODE_OAUTH_TOKEN`). Dormant until the
+reviewer App is installed (F5 prerequisite — tracked in `TODO.md` §2).
+Known: `call / trust` fails pending the `AI_REVIEW_TOKEN` secret
+(`TODO.md` §1).
 
 ### Local overrides shared — the foundational rule
 

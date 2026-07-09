@@ -117,7 +117,7 @@ traceability:
 
 related_decisions:
   dependencies:
-    - { adr: "ADR-01", relationship: "Depends on", rationale: "StoragePort/VectorPort back onto the Postgres spine." }
+    - { adr: "ADR-01", relationship: "Depends on", rationale: "The repository layer and VectorPort back onto the Postgres spine; StoragePort is object storage (SPEC-06)." }
   supersedes: { items: [] }
 
 glossary:
