@@ -1,10 +1,10 @@
 # Engramory — Project Roadmap
 
-*This file is **canonical for cycle scope and sequencing** (MVP-1..8); the engineering Phase 0–3 view is in [`../docs/ROADMAP.md`](../docs/ROADMAP.md).*
+*This file is the **single canonical roadmap** — cycle scope + sequencing (MVP-1..8) + the engineering Phase view (0–3). Prior `docs/ROADMAP.md` was consolidated here 2026-07-08 per PLAN-003 §5.5 Wave 3 (see `DECISIONS.md` E-0001).*
 
 *Cycles follow the framework cadence: **MVP → PROD → new-feature MVP → new PROD**. Each cycle is anchored by a **BRD set** — a platform BRD plus its feature BRDs, linked by `@depends:` (see [HOW_TO_USE_THE_FRAMEWORK](../docs/HOW_TO_USE_THE_FRAMEWORK.md) §4). The current cycle's BRD set is authored at full depth (8 layers); future cycles are **draft BRD sketches** (business scope only) until their cycle begins.*
 
-*Last updated: 2026-07-07*
+*Last updated: 2026-07-08*
 
 ---
 
@@ -23,6 +23,23 @@ Engramory is the aidoc-flow ecosystem's shared memory & knowledge plane — per-
 **Next (MVP-1):** the vertical slice — Postgres memory repository + one adopted `MemoryPort` engine (Mem0) + `memory_add`/`memory_search` over MCP — with the evaluation harness and a retrieval→outcome feedback loop built in parallel. Then the learning-half work (confidence dynamics, contradiction handling, memory safety) and the ledger→episode ingestion adapter (ADR-09).
 
 **Known issue (CI, operations-owned):** the shared `trust` gate fails on every PR here — `ai-review.yml@ci/v1.4.3` fetches the trust allowlist from the **private** `aidoc-flow-operations`, and this **public** repo's default token cannot read it. PRs currently require admin-merge. Fix: complete the per-consumer config move — bump the ai-review pin to the aidoc-flow-ci version that reads a local `.github/ai-review/config.json`, and add that file here.
+
+## Engineering Phase view (Phase 0–3)
+
+The MVP cycles above map to a 4-phase engineering-view:
+**Phase 0–2 ≈ MVP-1** (self-hosted memory & knowledge core);
+**Phase 3 ≈ MVP-2** (cloud migration). Phases 0–2 are entirely
+free/self-hosted; Phase 3 is an adapter swap, not a rewrite.
+
+| Phase | Goal | Key work | Outcome |
+|---|---|---|---|
+| **0 — Dev foundation** | Cheap self-hosted base | `docker compose up`: Postgres+pgvector, Redis, MinIO, LiteLLM+Ollama, Neo4j, Keycloak. Define all Ports. Apply memory schema. | Free local platform, portable by construction |
+| **1 — Consolidate** | One platform | Fold RAC's MCP tools/parsers onto the core; RAC becomes the per-project domain-config layer (Trading = one example project); everything behind Ports | RAC + Nexus v3 merged, no stack duplication |
+| **2 — Cognition** | The differentiator | `agent_id` scoping; reflection + consolidation workers; wire a MemoryPort adapter (LangMem/Cipher/Mem0) | Per-agent distilled, endless memory |
+| **3 — Cloud migration** | GCP or Azure | Swap adapters (managed Postgres, Redis, object store, model endpoint, secrets, identity); IaC; pg_dump + object copy; re-embed if model changes | Same app, cloud-native, data intact |
+
+See [`../docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md) for the full
+design and the portability matrix.
 
 ## Cycle cadence
 
