@@ -61,11 +61,13 @@ After session:  REFLECTION pass reads recent L1 episodes and asks
 
 Periodically:   CONSOLIDATION pass over L2 → merge duplicates, generalize repeated
                 lessons into stronger rules, end-date facts that are no longer true,
-                prune low-value noise. Keeps L2 dense and bounded.
+                prune low-value noise. Keeps L2 dense and high-signal (the store may
+                grow; the retrieved working set stays bounded — see ARCHITECTURE
+                §"What endless means").
 ```
 
 Three properties this gives you:
-- **Endless, because bounded.** Raw episodes are compressed into a roughly constant-size, high-signal long-term store. You retrieve from a dense library, not an ever-growing transcript.
+- **Endless, because compressed + retrieved.** Raw episodes are compressed into a dense, high-signal long-term store; the store grows without a fixed cap while each task retrieves only a small relevant slice. You retrieve from a dense library, not an ever-growing transcript.
 - **Self-correcting.** Errors become procedural rules ("don't do X"); superseded facts get invalidated instead of lingering.
 - **Per-agent personality.** Because distillation writes to each agent's namespace, agents genuinely diverge based on what they've each lived through — while still sharing team knowledge.
 
@@ -220,6 +222,6 @@ The model never sees more than a focused working set, yet behaves as if it carri
 
 ## Recommended next step
 
-Pilot the experiential layer cheaply before committing: stand up **LangMem as a memory service behind your existing MCP**, wire L1 (project scope) + L2 (semantic/episodic/procedural) + the Memory Manager for L3 distillation, and keep RAC as L0. Run it on one real project for a week and inspect what the reflection pass distills. If the distilled lessons are good, scale it; if integration friction with RAC dominates, fold the L1/L2 tables into your own Neo4j+pgvector and port only the consolidation logic — by then you'll know exactly what you need.
+Pilot the experiential layer cheaply before committing: stand up **LangMem as a memory service behind your existing MCP**, wire L1 (project scope) + L2 (semantic/episodic/procedural) + the Memory Manager for L3 distillation, and keep RAC as L0. Run it on one real project for a week and inspect what the reflection pass distills. If the distilled lessons are good, scale it; if integration friction with RAC dominates, (historical option — superseded by ADR-01/ADR-05: the canonical store is Postgres) fold the L1/L2 tables into your own Neo4j+pgvector and port only the consolidation logic — by then you'll know exactly what you need.
 
 **Verdict: yes, it's possible — and you're already most of the way there.** You have L0 and the infrastructure. What's missing is the experiential memory engine (L1–L2) and the distillation loop (L3), and those are the parts worth adopting rather than building from scratch.

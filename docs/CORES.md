@@ -20,8 +20,8 @@ separated only on the axes where they genuinely differ.
 | Trust | Inferred — needs confidence + safety screening | Authoritative, citable |
 | Write governance | Reflection + consolidation; injection/quarantine screening | Governed write + evidence reference ([ADR-06](../sdd/05_ADR/ADR-06_governed_write_failclosed.yaml)) |
 | Lifecycle | Distilled → consolidated → forgotten | Versioned, permanent |
-| Schema | `episodes`, `memories`, `agent_profiles` | `kb_sections` (arrives with the knowledge cycle) |
-| MCP tools | `memory_add`, `memory_search`, … | `knowledge_ingest`, `knowledge_search`, … |
+| Schema | `episodes`, `memories`, `agent_profiles`, `consolidation_runs`, `memory_retrievals` | `kb_sections` (migration 0003, MVP-1) |
+| MCP tools | `memory_add`, `memory_search`, `memory_feedback`, `memory_forget`, `agent_profile_get` | `knowledge_ingest` (reads served through `memory_search` for MVP-1 — see boundary rule 4) |
 | Code | `src/engramory/core/memory.py` | `src/engramory/core/knowledge.py` |
 
 Memory is **per-agent and cross-project** (L2 recalls lessons distilled in *other*
@@ -56,7 +56,7 @@ Both cores share, and must not duplicate:
 1. **Separate schemas** — Memory tables never mix with `kb_sections`.
 2. **Separate write governance** — Knowledge writes are governed (evidence); Memory writes are distilled and safety-screened. Agent-authored memory must never write into governed knowledge.
 3. **Separate lifecycle** — Knowledge is versioned/permanent; Memory is distilled, consolidated, and forgotten.
-4. **Separate MCP namespaces** — `knowledge_*` vs `memory_*`, on one gateway.
+4. **Separate MCP namespaces for writes** — `knowledge_ingest` vs `memory_*`, on one gateway. MVP-1 retrieval is deliberately unified: `memory_search` spans both cores in one scoped, ranked call (SPEC-01); a dedicated `knowledge_search` splits out when the knowledge core grows its own retrieval semantics.
 5. **Cross-link by ID, don't duplicate** — a memory may cite a knowledge section; it does not copy it.
 
 ## Why one platform (not two projects)
