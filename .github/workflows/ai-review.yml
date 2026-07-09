@@ -32,7 +32,7 @@ permissions:
 
 jobs:
   call:
-    uses: vladm3105/aidoc-flow-ci/.github/workflows/ai-review.yml@ci/v1.4.3
+    uses: vladm3105/aidoc-flow-ci/.github/workflows/ai-review.yml@ci/v1.6.0
     with:
       reviewer: claude
       # Single-pool ubuntu-latest — this repo has no self-hosted pool.
