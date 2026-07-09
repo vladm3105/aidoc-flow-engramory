@@ -44,13 +44,28 @@ interfaces:
   exports:
     - name: "memory_search"
       type: "async function"
-      signature: "async def memory_search(ctx: ActorContext, query: str, k: int = 8) -> list[MemoryHit]"
-      description: "Scoped retrieval of knowledge + distilled memory."
+      signature: "async def memory_search(ctx: ActorContext, query: str, k: int = 8, token_budget: int | None = None) -> list[MemoryHit]"
+      description: "Scoped retrieval of knowledge + distilled memory. Token budget defaults to @threshold:PRD.01.perf.context_token_budget. Deliberately does NOT expose include_advisory: advisory/quarantined memories are unreachable through the agent-facing surface (EARS.01.03.b800); include_advisory exists only on the internal MemoryPort/retrieve layer for ops and evaluation."
       errors: ["AuthzError: caller scope insufficient", "StoreUnavailable: fail closed"]
     - name: "memory_add"
       type: "async function"
       signature: "async def memory_add(ctx: ActorContext, episode: EpisodeIn) -> EpisodeId"
       description: "Append an episode in the caller's scope."
+      errors: ["AuthzError"]
+    - name: "memory_feedback"
+      type: "async function"
+      signature: "async def memory_feedback(ctx: ActorContext, retrieval_id: RetrievalId, outcome: str) -> None"
+      description: "Record a retrieval outcome (useful | not_useful | harmful); drives the SPEC-04 confidence-update rule via the memory_retrievals log (migration 0003)."
+      errors: ["AuthzError"]
+    - name: "memory_forget"
+      type: "async function"
+      signature: "async def memory_forget(ctx: ActorContext, memory_id: MemoryId, reason: str) -> None"
+      description: "Retire a memory in the caller's scope: end-date + mark superseded (soft; provenance retained). Audited."
+      errors: ["AuthzError"]
+    - name: "agent_profile_get"
+      type: "async function"
+      signature: "async def agent_profile_get(ctx: ActorContext) -> AgentProfile"
+      description: "Load the caller's L3 identity profile (MEMORY_DESIGN task step 1)."
       errors: ["AuthzError"]
     - name: "knowledge_ingest"
       type: "async function"

@@ -237,6 +237,11 @@ component_decomposition:
           value: 800
           unit: "ms"
           source: "@brd: BRD-01"
+        - key: "context_token_budget"
+          full_id: "PRD.01.perf.context_token_budget"
+          value: 2000
+          unit: "tokens"
+          source: "@brd: BRD-01"
     - id: "distillation-engine"
       responsibility: "Reflection and consolidation passes over episodes/long-term memory."
       thresholds:

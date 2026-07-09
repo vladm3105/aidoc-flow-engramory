@@ -43,7 +43,7 @@ interfaces:
   exports:
     - name: "retrieve"
       type: "async function"
-      signature: "async def retrieve(scope: Scope, query: str, k: int = 8) -> list[MemoryHit]"
+      signature: "async def retrieve(scope: Scope, query: str, k: int = 8, include_advisory: bool = False, token_budget: int | None = None) -> list[MemoryHit]"
       description: "Scoped hybrid retrieval (vector + optional graph), ranked, with provenance."
       errors: ["StoreUnavailable: fail closed", "AuthzError"]
     - name: "traverse"
@@ -62,6 +62,8 @@ data_models:
         - { name: "summary", type: "str", required: true, description: "Distilled text" }
         - { name: "score", type: "float", required: true, description: "Fused rank score" }
         - { name: "provenance", type: "dict", required: true, description: "Source trace" }
+        - { name: "retrieval_id", type: "RetrievalId", required: true, description: "memory_retrievals row id (migration 0003) — pass to memory_feedback" }
+        - { name: "token_count", type: "int", required: true, description: "summary token count, for budget accounting" }
 
 behavior:
   validation_rules:
@@ -74,7 +76,11 @@ behavior:
 
 implementation_notes:
   constraints: ["Retrieval p95 within @threshold:PRD.01.perf.retrieval_p95", "Graph optional behind GraphPort"]
-  patterns: ["Hybrid rank fusion (vector + graph signal)"]
+  patterns:
+    - "Rank fusion: weighted Reciprocal Rank Fusion over three legs — vector cosine (w=0.5), lexical ts_rank over memories.ts_lex (w=0.3), recency (w=0.2); score = sum(w_leg / (60 + rank_leg)); graph signal, when GraphPort has a backend, joins as a fourth leg"
+    - "Post-fusion multipliers: confidence (0..1) x scope proximity (agent 1.0, project 0.9, domain 0.8, space 0.7) x source_trust (human 1.0, tool 0.9, agent 0.8)"
+    - "Default filter: status = 'active' AND valid_to IS NULL (partial index idx_memories_tenant_live, migration 0003); include_advisory=true adds status='advisory', never quarantined/superseded"
+    - "Every returned hit writes a memory_retrievals row and carries its retrieval_id; token_budget (default @threshold:PRD.01.perf.context_token_budget) truncates by cumulative summary tokens"
   performance_considerations: ["Cap graph hops; cache hot scopes"]
 
 tdd_contracts:
