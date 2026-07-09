@@ -8,10 +8,10 @@ document_control:
   status: Draft
   version: "1.0"
   date_created: "2026-06-22T00:00:00"
-  last_updated: "2026-06-22T00:00:00"
+  last_updated: "2026-07-09T00:00:00"
   author: "Engramory team"
   complexity: 4
-  estimated_files: 5
+  estimated_files: 6
   session_count: 0
 
 file_manifest:
@@ -19,8 +19,9 @@ file_manifest:
     - { path: "tests/unit/test_models.py", order: 1, status: NOT_STARTED, session: null, verified: false }
     - { path: "src/engramory/core/models.py", order: 2, status: NOT_STARTED, session: null, verified: false }
     - { path: "db/migrations/0001_init_memory.sql", order: 3, status: DONE, session: "scaffold", verified: false }
-    - { path: "src/engramory/core/repository.py", order: 4, status: NOT_STARTED, session: null, verified: false }
-    - { path: "tests/integration/test_repository.py", order: 5, status: NOT_STARTED, session: null, verified: false }
+    - { path: "db/migrations/0003_reconcile_contracts.sql", order: 4, status: DONE, session: "plan-001-remediation", verified: true }
+    - { path: "src/engramory/core/repository.py", order: 5, status: NOT_STARTED, session: null, verified: false }
+    - { path: "tests/integration/test_repository.py", order: 6, status: NOT_STARTED, session: null, verified: false }
 
 execution_commands:
   setup:
@@ -29,7 +30,7 @@ execution_commands:
     - "make migrate   # applies db/migrations/0001_init_memory.sql"
   implementation:
     - "# TDD: write tests/unit/test_models.py (provenance + idempotency) FIRST"
-    - "# Implement src/engramory/core/models.py then repository.py over StoragePort/VectorPort"
+    - "# Implement src/engramory/core/models.py then repository.py over the Postgres driver + VectorPort"
   validation:
     - "python -m pytest tests/unit/test_models.py tests/integration/test_repository.py -v"
     - "python -m mypy src/engramory/core --strict && python -m ruff check src/engramory/core"
@@ -41,15 +42,15 @@ implementation_contracts:
       - { name: "Repository", type: "Protocol Interface", note: "add_episode (idempotent), get_memories, upsert_memory (soft-supersede), upsert_kb_section" }
   consumed:
     dependencies:
-      - { name: "StoragePort / VectorPort", from: "@spec: SPEC-06", note: "persistence + vector index" }
+      - { name: "VectorPort", from: "@spec: SPEC-06", note: "vector index projection; relational persistence is the Postgres driver directly (SPEC-02)" }
 
 session_handoff:
   sessions:
     - date: "2026-06-22"
       agent: "(unstarted)"
       files_touched: []
-      partial_work: "Schema scaffold exists (db/migrations/0001_init_memory.sql); models/repository not implemented."
-      blockers: "Depends on IPLAN-06 (StoragePort/VectorPort)."
+      partial_work: "Schema scaffold (0001) + contract reconciliation (0003) exist; models/repository not implemented."
+      blockers: "Depends on IPLAN-06 (VectorPort)."
       next_session_directive: "File order 1: tests/unit/test_models.py (TDD-02.04.a100/a200)."
       validation_results: { tests_passing: null, coverage: null, lint_clean: false }
 
@@ -63,3 +64,4 @@ traceability:
   code_inventory:
     files:
       - { path: "db/migrations/0001_init_memory.sql", status: created, session: "scaffold", verified: false }
+      - { path: "db/migrations/0003_reconcile_contracts.sql", status: created, session: "plan-001-remediation", verified: true }
