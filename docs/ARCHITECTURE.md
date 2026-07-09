@@ -142,14 +142,16 @@ memories(
 )
 
 -- Per-agent identity
-agent_profiles(agent_id, display_name, standing_preferences jsonb, created_at)
+agent_profiles(agent_id, display_name, standing_preferences jsonb, created_at, updated_at)
 
 -- Distillation bookkeeping
 consolidation_runs(id, agent_id, started_at, finished_at, stats jsonb)
 ```
 
-(The block above is the memory core. L0 knowledge-base sections live in a separate
-`kb_sections` table introduced with the knowledge/BRD-04 cycle — see `sdd/06_SPEC/SPEC-02`.)
+(The block above is the memory core as of migration 0001/0002. Migration 0003 adds the
+contract-reconciliation surfaces — `episodes.content_hash`, `memories.status/source_trust/ts_lex`,
+`memory_retrievals`, `audit_records` — and the L0 `kb_sections` table (MVP-1/BRD-01
+knowledge core; see `sdd/06_SPEC/SPEC-02`).)
 
 Because `content_raw` and `provenance` are always kept and `embedding` is marked regenerable, **the brain survives any model or platform migration** — you re-embed from `content_raw`, you don't re-architect.
 
@@ -164,7 +166,7 @@ Nexus's existing Trading `learning:` block (`post_trade_review`, `meta_review_fr
 
 ### Memory processor (the swappable engine on top)
 The cores call a `MemoryPort`. Adapter options, all keeping Postgres canonical:
-- **Dev / self-host:** **LangMem** (MIT, explicit sem/epi/proc + consolidation) or **Mem0** (Apache-2.0) running against your Postgres; **Cipher** if you want turnkey reflection.
+- **Dev / self-host:** **LangMem** (MIT, explicit sem/epi/proc + consolidation) or **Mem0** (Apache-2.0) running against your Postgres; **Cipher** if you want turnkey reflection. **Default engine: Mem0 — decided in [STRATEGY.md](STRATEGY.md).**
 - **Cloud (optional accelerator):** Vertex AI Memory Bank (GCP) / Azure equivalent — used as cache/index only, **never the source of truth**.
 
 ---
@@ -208,7 +210,7 @@ Phases 0–2 are entirely free/self-hosted. Phase 3 is a **configuration + adapt
 
 ## Recommended dev stack (Phase 0 docker-compose)
 
-Provisioned in the Phase-0 compose **today:** `postgres:16` (pgvector) · `redis` · `minio` · `ghcr.io/berriai/litellm` + `ollama` · `keycloak`. **Planned (not yet in docker-compose):** the application services `mcp-gateway` · `knowledge-core` · `memory-core` · `worker` (reflection/consolidation), and observability `grafana`+`loki`+`tempo` (OTel).
+Provisioned in the Phase-0 compose **today:** `postgres:16` (pgvector) · `redis` · `minio` · `ghcr.io/berriai/litellm` + `ollama` · `neo4j` · `keycloak`. **Planned (not yet in docker-compose):** the application services `mcp-gateway` · `knowledge-core` · `memory-core` · `worker` (reflection/consolidation), and observability `grafana`+`loki`+`tempo` (OTel).
 
 All open-source, all free, all with a documented GCP **and** Azure adapter for later. Start here; the cloud is a swap, not a rebuild.
 

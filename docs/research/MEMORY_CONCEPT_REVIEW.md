@@ -7,6 +7,17 @@
 > Status: review artifact. Evaluative by purpose. Where it conflicts with an accepted
 > ADR, the ADR governs until amended. Findings marked **Fix** are proposals, not decisions.
 
+> **Status (2026-07-09, PLAN-001):** the contract-level fixes for D1
+> (feedback loop), D2 (confidence dynamics), D4 partially (status +
+> usage columns), and the quarantine/idempotency gaps now live in
+> `db/migrations/0003_reconcile_contracts.sql` + SPEC-01/03/04 updates.
+> Still open as design work: D3 (contradiction detection), D5 (query-type
+> routing), D6 partially (reflection triggers specified in SPEC-04, not
+> yet built), G1 (injection screen / self-poisoning gate beyond
+> source_trust), G2 (cross-agent promotion/corroboration before `space`
+> scope), G4 (context assembly beyond token_budget). This review governs
+> those open items.
+
 ---
 
 ## Summary judgment

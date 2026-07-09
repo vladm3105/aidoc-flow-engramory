@@ -66,6 +66,8 @@ All dev dependencies are free and open-source.
 | [docs/PORTABILITY.md](docs/PORTABILITY.md) | Self-hosted → GCP/Azure principles and migration |
 | [roadmap/ROADMAP.md](roadmap/ROADMAP.md) | Canonical roadmap — MVP cycle plan (MVP-1..8) + engineering Phase view (Phase 0–3) |
 | [docs/GLOSSARY.md](docs/GLOSSARY.md) | Terms |
+| [docs/HOW_TO_USE_THE_FRAMEWORK.md](docs/HOW_TO_USE_THE_FRAMEWORK.md) | Authoring SDD artifacts the UCX / aidoc-flow way |
+| [docs/UCX_INTEGRATION.md](docs/UCX_INTEGRATION.md) | How Engramory fits UCX and replaces `ucx_kb` |
 | [sdd/](sdd/) | SDD lifecycle artifacts (BRD→IPLAN); `sdd/05_ADR/` = canonical implementing ADRs |
 | [docs/adr/](docs/adr/) | Conceptual/descriptive architecture decision records |
 | [config/](config/) | Per-project / per-domain YAML config on the shared core |

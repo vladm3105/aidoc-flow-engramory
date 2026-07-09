@@ -51,7 +51,7 @@ These two projects overlap massively but have **diverged on core technology**, w
 
 ## How Nexus's memory maps to the layered design we built
 
-Nexus already has a 3-layer memory system. Here's the honest mapping to the L0–L3 model from `layered-agent-memory-design.md`:
+Nexus already has a 3-layer memory system. Here's the honest mapping to the L0–L3 model from [MEMORY_DESIGN.md](../MEMORY_DESIGN.md) (formerly `layered-agent-memory-design.md`):
 
 | Nexus layer | Storage / TTL | Maps to our design | Verdict |
 |---|---|---|---|
@@ -95,4 +95,4 @@ Applying the principle from the design doc (*own the canonical store in an open 
 
 ---
 
-*Companion docs: `ai-knowledge-rac-review.md` (RAC review), `layered-agent-memory-design.md` (the L0–L3 memory design + portability), `agent-memory-review.md` (tool landscape). This review reads only the three Nexus documents; I did not see implementation code or the full 1,326-line spec beyond the architecture, memory, data, and learning sections.*
+*Companion docs: [RAC_REVIEW.md](RAC_REVIEW.md) (RAC review), [../MEMORY_DESIGN.md](../MEMORY_DESIGN.md) (the L0–L3 memory design + portability), [MEMORY_LANDSCAPE.md](MEMORY_LANDSCAPE.md) (tool landscape). This review reads only the three Nexus documents; I did not see implementation code or the full 1,326-line spec beyond the architecture, memory, data, and learning sections.*
