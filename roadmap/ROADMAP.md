@@ -4,7 +4,7 @@
 
 *Cycles follow the framework cadence: **MVP → PROD → new-feature MVP → new PROD**. Each cycle is anchored by a **BRD set** — a platform BRD plus its feature BRDs, linked by `@depends:` (see [HOW_TO_USE_THE_FRAMEWORK](../docs/HOW_TO_USE_THE_FRAMEWORK.md) §4). The current cycle's BRD set is authored at full depth (8 layers); future cycles are **draft BRD sketches** (business scope only) until their cycle begins.*
 
-*Last updated: 2026-07-08*
+*Last updated: 2026-07-09*
 
 ---
 
@@ -14,15 +14,22 @@ Engramory is the aidoc-flow ecosystem's shared memory & knowledge plane — per-
 
 **Guiding strategy** ([../docs/STRATEGY.md](../docs/STRATEGY.md)): build the plane (Postgres spine, ports, gateway, scope, governance); **adopt** a proven memory engine behind `MemoryPort` rather than hand-writing distillation; and lead with an evaluation + feedback loop. MVP-1 carries a vertical slice (one agent, one real workload) plus that eval harness; later cycles stay sketches until the slice proves value.
 
-## Current status (2026-07-07)
+## Current status (2026-07-09)
 
 **Phase 0 — dev foundation.** Scaffold + full-depth MVP-1 SDD artifacts are in place; no adapters or running gateway yet.
 
 **Architecture decisions locked** (`../sdd/05_ADR/`): ADR-05 own the canonical store · ADR-07 scope ladder (`agent/project/domain/space` + `tenant_id`) · ADR-08 single platform, two bounded cores · ADR-09 independent memory storage (the iplan ledger is integrated as an *episode source*, not a backend). Concept validated in [`../docs/research/MEMORY_CONCEPT_REVIEW.md`](../docs/research/MEMORY_CONCEPT_REVIEW.md); build direction in [`../docs/STRATEGY.md`](../docs/STRATEGY.md).
 
-**Next (MVP-1):** the vertical slice — Postgres memory repository + one adopted `MemoryPort` engine (Mem0) + `memory_add`/`memory_search` over MCP — with the evaluation harness and a retrieval→outcome feedback loop built in parallel. Then the learning-half work (confidence dynamics, contradiction handling, memory safety) and the ledger→episode ingestion adapter (ADR-09).
+**Next (MVP-1):** the vertical slice — Postgres memory repository + one adopted `MemoryPort` engine (Mem0) + `memory_add`/`memory_search` over MCP — with the evaluation harness and a retrieval→outcome feedback loop built in parallel. Then the learning-half work (confidence dynamics, contradiction handling, memory safety) and the ledger→episode ingestion adapter (ADR-09). The eval harness + feedback loop are MVP-1 exit criteria, not stretch goals.
 
-**Known issue (CI, operations-owned):** the shared `trust` gate fails on every PR here — `ai-review.yml@ci/v1.4.3` fetches the trust allowlist from the **private** `aidoc-flow-operations`, and this **public** repo's default token cannot read it. PRs currently require admin-merge. Fix: complete the per-consumer config move — bump the ai-review pin to the aidoc-flow-ci version that reads a local `.github/ai-review/config.json`, and add that file here.
+**Known issue (CI, operations-owned):** the shared `trust` gate fails on
+every PR here — `ai-review.yml@ci/v1.4.3` fetches the trust allowlist from
+the **private** `aidoc-flow-operations`, and this **public** repo's default
+token cannot read it. PRs currently require admin-merge. **Fix (decided
+2026-07-09, see `TODO.md` §1):** founder sets the `AI_REVIEW_TOKEN` repo
+secret (Option A). Moving the trust config to a public location is an
+upstream `aidoc-flow-ci` follow-up, not yet available in any tagged canon
+version.
 
 ## Engineering Phase view (Phase 0–3)
 
