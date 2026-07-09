@@ -1,6 +1,7 @@
 """Static checks on the SQL migrations (no database required)."""
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 MIGRATIONS = Path(__file__).resolve().parents[1] / "db" / "migrations"
@@ -19,8 +20,9 @@ def test_scope_columns_use_tenant_id_not_space_id() -> None:
     """Scope-model invariant (ADR-07): the isolation column is tenant_id."""
     init_sql = (MIGRATIONS / "0001_init_memory.sql").read_text()
     assert "tenant_id" in init_sql
-    # 'space_id' must not appear as a column definition (it was renamed to tenant_id).
-    assert "space_id" not in init_sql
+    # 'space_id' must not appear as a column definition (it was renamed to
+    # tenant_id). Word boundary so future tokens like 'namespace_id' don't trip it.
+    assert not re.search(r"\bspace_id\b", init_sql)
 
 
 def test_domain_scope_is_additive() -> None:
