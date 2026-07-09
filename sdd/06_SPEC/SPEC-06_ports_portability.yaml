@@ -43,7 +43,7 @@ interfaces:
     - name: "StoragePort"
       type: "class"
       signature: "class StoragePort(Protocol): ..."
-      description: "Relational persistence (canonical)."
+      description: "Object storage (MinIO | GCS | Azure Blob): put/get/delete/exists for documents and artifacts. NOT the relational store — Postgres is the canonical spine (ADR-01, one-way) and is reached via the Postgres driver directly; cloud migration of the canonical store is a managed-Postgres connection swap, not an adapter swap."
       errors: []
     - name: "VectorPort"
       type: "class"
@@ -104,7 +104,7 @@ behavior:
     - { condition: "Adapter unavailable", response: "Fail closed; surface retryable error", source: "@bdd: BDD.01.03.b800" }
 
 implementation_notes:
-  constraints: ["Core imports only ports — no vendor SDKs", "Adapter set chosen by ENGRAMORY_PROFILE"]
+  constraints: ["Core imports only ports — no cloud-vendor SDKs; the Postgres driver is spine infrastructure (ADR-01), not a vendor SDK, and repositories use it directly", "Adapter set chosen by ENGRAMORY_PROFILE"]
   patterns: ["Hexagonal ports & adapters", "Adapter conformance test suite shared across environments"]
   performance_considerations: ["Adapters must meet retrieval p95 budget"]
 

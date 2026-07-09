@@ -42,7 +42,7 @@ implementation_contracts:
       - { name: "AccessSurface tools", type: "DI Interface", note: "memory_search/add, knowledge_ingest exposed over MCP" }
   consumed:
     dependencies:
-      - { name: "MemoryPort / StoragePort", from: "@spec: SPEC-06", note: "scoped reads/writes" }
+      - { name: "MemoryPort", from: "@spec: SPEC-06", note: "scoped reads/writes; relational persistence is the Postgres driver (SPEC-02) — StoragePort is object storage only" }
       - { name: "MemoryStore", from: "@spec: SPEC-02", note: "episode/memory persistence" }
 
 session_handoff:

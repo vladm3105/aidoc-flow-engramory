@@ -32,11 +32,11 @@ component_overview:
     mermaid: |
       flowchart LR
         MemoryService --> Repository
-        Repository --> StoragePort
+        Repository --> PostgresCanonical
         Repository --> VectorPort
   language: "Python"
   dependencies:
-    - { name: "StoragePort (SPEC-06)", version: "internal", purpose: "Relational persistence" }
+    - { name: "Postgres canonical store (ADR-01)", version: "internal", purpose: "Relational persistence via the Postgres driver — not behind a port; see SPEC-06 StoragePort note" }
     - { name: "VectorPort (SPEC-06)", version: "internal", purpose: "Vector index (projection)" }
 
 interfaces:
@@ -84,6 +84,8 @@ data_models:
         - { name: "embedding_model", type: "str", required: true, description: "Model used (for re-embedding)" }
         - { name: "provenance", type: "dict", required: true, description: "Source episodes, agent, project, ts" }
         - { name: "confidence", type: "float", required: true, description: "Quarantine if below floor" }
+        - { name: "status", type: "str", required: true, description: "active|advisory|quarantined|superseded — non-active excluded from default retrieval (EARS.01.03.b800); schema: migration 0003" }
+        - { name: "source_trust", type: "str", required: true, description: "human|tool|agent — authorship trust signal used by SPEC-03 ranking; schema: migration 0003" }
         - { name: "valid_from", type: "datetime", required: true, description: "Temporal validity start" }
         - { name: "valid_to", type: "datetime | None", required: false, description: "End-dated when superseded" }
         - { name: "supersedes", type: "MemoryId | None", required: false, description: "Corrected predecessor" }
@@ -111,7 +113,7 @@ behavior:
 
 implementation_notes:
   constraints: ["Always persist content_raw + embedding_model/dims", "Vector index dimension set per embedding model", "domain_id nullable; domain-scoped memory shared across a domain's projects"]
-  patterns: ["Repository pattern over StoragePort/VectorPort", "Soft-supersede instead of delete"]
+  patterns: ["Repository pattern over the Postgres driver (canonical) + VectorPort (projection)", "Soft-supersede instead of delete"]
   performance_considerations: ["HNSW/IVF vector index for retrieval; batch projection writes"]
 
 tdd_contracts:
