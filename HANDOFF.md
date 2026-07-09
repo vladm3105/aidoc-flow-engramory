@@ -5,19 +5,16 @@ workspace's memory plane (durable substrate for AI-agent memory that
 other aidoc-flow projects consume as a subscriber). Read at session
 start; refresh at milestones and before context compaction.
 
-## Current state (2026-07-08)
+## Current state (2026-07-09)
 
-**PLAN-003 Wave 3b adoption** — first substantive workspace-governance
-adoption on this repo. Prior state: `CHANGELOG.md` + a small
-`CLAUDE.md` + `sdd/`-based engineering lifecycle; no `HANDOFF.md` /
-`DECISIONS.md` at repo root. Wave 3b creates both + adds `## What this
-repo is` section + consolidates dual ROADMAP (delete older
-`docs/ROADMAP.md`; keep `roadmap/ROADMAP.md` as canonical) + cleans
-stray `tmp/TODO.md` per memory rule. 8-tracked-surface bundle
-(expanded from initial 5 after pre-push review surfaced 4 dead refs
-to the deleted `docs/ROADMAP.md`; Phase 0-3 content migrated into
-`roadmap/ROADMAP.md` rather than lost) above OPS-0061 Rule 1 ≤3
-default, authorized under standing founder OK for Wave 3 rollout.
+**PLAN-003 Wave 3b adoption MERGED** — PR #12 squash-merged to main
+2026-07-09 (67b12d2); merged branches pruned. **PLAN-001 pre-first-run
+remediation underway** (`plans/PLAN-001_pre-first-run-remediation.md`):
+a 2026-07-09 five-agent review found the SDD↔schema↔code contracts
+drifted (StoragePort semantics, missing content_hash/kb_sections/status,
+untracked learning loop) plus the known `call / trust` CI failure
+(`TODO.md` §1, decided: Option A). PR sequence PR-1…PR-7; see the plan's
+Task list (Tasks 1-7) for scope and checkbox status.
 
 ## Open threads
 

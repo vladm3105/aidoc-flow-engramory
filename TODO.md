@@ -54,8 +54,15 @@ happened for PR #6). Automated OPS-0062 auto-merge cannot arm without
 | **C. Inline the allowlist directly into engramory's `.github/workflows/ai-review.yml`** | Small | Config drift risk (allowlist maintained per-repo instead of centrally). Not recommended. |
 | **D. Skip ai-review on engramory** | None | Loses AI review gate. Not recommended. |
 
-**Recommendation:** Option A as immediate unblock; Option B as
-follow-up plan on `aidoc-flow-ci` (small design PR + reusable edit).
+**DECIDED (2026-07-09, PLAN-001):** Option A — founder sets the
+`AI_REVIEW_TOKEN` secret (PAT, `contents: read` on `aidoc-flow-operations`):
+`gh secret set AI_REVIEW_TOKEN --repo vladm3105/aidoc-flow-engramory`.
+Option B (public trust config) remains an upstream `aidoc-flow-ci`
+follow-up — NOT executable today: verified 2026-07-09 that aidoc-flow-ci
+HEAD (> ci/v1.6.0) still checks out private `aidoc-flow-operations@main`
+in the trust job; no canon version reads a local consumer config.
+Reconciles the contradicting fix prescribed in `roadmap/ROADMAP.md`
+"Known issue" (also corrected in PLAN-001 PR-1).
 
 **Blockers / gates.** None; founder can do Option A whenever
 convenient. Option B needs a small plan doc on aidoc-flow-ci first.
@@ -69,3 +76,24 @@ convenient. Option B needs a small plan doc on aidoc-flow-ci first.
   (blocked when `call / trust` FAIL)
 
 **Discovered.** 2026-07-08 during PLAN-002 Wave 3 rollout.
+
+## 2. 🟡 F5 server-side follow-up — reviewer App install + branch protection
+
+**Status:** open, founder-gated. The unified-CI merge gate is dormant until
+the reviewer App is installed and `apply-standards.sh --apply` adds
+`call / verify` to branch-protection required contexts (F5 blast-radius
+prerequisite per operations CLAUDE.md § Unified CI). Previously tracked only
+as a CHANGELOG bullet; promoted here so it has an owner surface.
+
+**Discovered.** 2026-07-08 (Wave 3); promoted 2026-07-09 (PLAN-001 review).
+
+## 3. 🟡 Stranded Dependabot PRs #8 / #9 / #10
+
+**Status:** open, blocked on §1. All three show `call / trust` FAIL +
+`call / ai-review` SKIPPED; they accumulate weekly until §1 lands. After
+`AI_REVIEW_TOKEN` is set, close-and-reopen (or push an empty commit to) each
+PR to re-trigger the gate, then merge per repo convention. Note: PR #8's
+group bump overlaps #9/#10 (checkout, setup-python) — merging #8 first may
+auto-close the others.
+
+**Discovered.** 2026-07-09 (PLAN-001 review).
