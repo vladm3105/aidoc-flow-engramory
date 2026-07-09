@@ -1,5 +1,6 @@
 # Engramory dev convenience targets
-.PHONY: up down logs migrate pull-models lint typecheck test fmt
+.PHONY: help up down logs migrate pull-models lint typecheck test fmt
+.DEFAULT_GOAL := help
 
 # Load .env so host-side commands (migrate) honor your local overrides.
 ifneq (,$(wildcard .env))
@@ -9,6 +10,9 @@ endif
 
 POSTGRES_USER ?= engramory
 POSTGRES_DB   ?= engramory
+
+help:          ## Show available targets
+	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
 
 up:            ## Start the dev stack
 	docker compose up -d
