@@ -1,35 +1,29 @@
-# Caller for vladm3105/aidoc-flow-ci/.github/workflows/composition.yml.
-# Pinned at @ci/v1.3.0 per IPLAN-0017 §4 Phase C — first wire-up on this repo.
+# IPLAN-0026 Phase 2 (ci/v1.3.0): dropped `pull_request_target` trigger
+# from the recommended install-template set. Phase 1 (ci/v1.2.0) shipped
+# the `workflow_run` mechanism alongside `pull_request_target` for safety
+# during the transition. Phase 2 drops `pull_request_target` and delivers
+# the actual friction relief. See composition-private.yml for the full
+# rationale. Public-repo variant uses `ubuntu-latest`.
 #
-# The reusable handles BOTH event shapes (pull_request_review + workflow_run)
-# via ||-fallback expressions in its env block. Fires only on real state changes:
-#   - pull_request_review (submitted/dismissed/edited): App reviewer's
-#     APPROVED/REQUEST_CHANGES posted at HEAD.
-#   - workflow_run (ai-review completed, any conclusion): this repo's ai-review
-#     caller workflow finished.
-#
-# DORMANCY NOTE: mirrors ai-review.yml — pre-arm (`vars.APP_REVIEWER_1_BOT_ID`
-# unset), the reusable's INERT/EXEMPT branch passes composition GREEN regardless
-# of App approvals (see aidoc-flow-ci composition.yml header). Once the var is
-# set + App is installed, composition becomes the load-bearing branch-protection
-# gate: GREEN only when an APPROVED review from the reviewer App exists at HEAD.
-# Only the intermediate mid-arm state (var SET but App not yet APPROVED at HEAD)
-# stays PENDING.
+# The fully-superseded Phase-1 trigger set (KEPT here as commit history for
+# reference) was:
+#   pull_request_target:
+#     types: [opened, synchronize, reopened, labeled, unlabeled]
+# Existing public consumers can still locally override and re-add it if
+# their flow depends on it; the Phase-2 install template no longer
+# inherits it.
 name: composition
 on:
   pull_request_review:
     types: [submitted, dismissed, edited]
   workflow_run:
+    # Fires AFTER consumer's `ai-review` caller completes (any conclusion).
+    # See composition-private.yml for full rationale.
     workflows: ["ai-review"]
     types: [completed]
-
-permissions:
-  pull-requests: read
-  contents: read
-
 jobs:
   call:
-    uses: vladm3105/aidoc-flow-ci/.github/workflows/composition.yml@ci/v1.6.0
+    uses: vladm3105/aidoc-flow-ci/.github/workflows/composition.yml@ci/v1.8.1
     with:
       runner_labels: '"ubuntu-latest"'
     secrets: inherit  # pragma: allowlist secret
