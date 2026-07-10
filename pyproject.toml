@@ -6,12 +6,12 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Engramory contributors" }]
-# Runtime dependencies are added with the first concrete adapter (psycopg, redis,
-# an MCP SDK, ...). The ports layer is stdlib-only by design.
-dependencies = []
+# The ports layer stays stdlib-only by design. psycopg is spine infrastructure
+# (ADR-01 / SPEC-06): the repository uses the Postgres driver directly.
+dependencies = ["psycopg[binary]>=3.2"]
 
 [project.optional-dependencies]
-dev = ["ruff", "pytest", "mypy"]
+dev = ["ruff", "pytest", "pytest-asyncio", "mypy"]
 
 [project.urls]
 Repository = "https://github.com/vladm3105/aidoc-flow-engramory"
