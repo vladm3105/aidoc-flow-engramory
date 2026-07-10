@@ -106,10 +106,19 @@ async def test_get_memory_missing_raises(repo: Repository) -> None:
         await repo.get_memory("00000000-0000-0000-0000-000000000000")
 
 
-async def test_query_vec_is_a_loud_refusal(repo: Repository) -> None:
-    """Recency order must never masquerade as similarity ranking (IPLAN-06 gate)."""
-    with pytest.raises(NotImplementedError):
-        await repo.get_memories(tenant_id="t", agent_id="a", query_vec=[0.1, 0.2])
+async def test_query_vec_similarity_respects_visibility(repo: Repository) -> None:
+    """Similarity ranking (IPLAN-06) composes with the ADR-07 visibility ladder."""
+    from engramory.adapters.dev.vector_pg import PgVectorAdapter
+
+    vec = PgVectorAdapter(repo.dsn)
+    mine = await repo.upsert_memory(_memory(tenant_id="t-qv", summary="mine"))
+    other = await repo.upsert_memory(
+        _memory(tenant_id="t-qv", agent_id="agent-b", summary="not visible")
+    )
+    await vec.upsert(id=mine, embedding=[1.0, 0.0])
+    await vec.upsert(id=other, embedding=[1.0, 0.0])  # identical vector, invisible scope
+    hits = await repo.get_memories(tenant_id="t-qv", agent_id="agent-a", query_vec=[1.0, 0.0])
+    assert [m.id for m in hits] == [mine]  # visibility beats similarity
 
 
 async def test_kb_section_upsert(repo: Repository) -> None:

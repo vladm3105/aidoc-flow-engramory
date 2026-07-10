@@ -1,4 +1,4 @@
-"""Integration-test Postgres fixture.
+"""Shared ephemeral-Postgres fixture (integration + conformance suites).
 
 Resolution order:
 1. ``ENGRAMORY_TEST_DSN`` env var — use an existing database (migrations are
@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-MIGRATIONS = Path(__file__).resolve().parents[2] / "db" / "migrations"
+MIGRATIONS = Path(__file__).resolve().parents[1] / "db" / "migrations"
 
 
 def _free_port() -> int:
@@ -35,8 +35,11 @@ def _free_port() -> int:
 def _apply_migrations(dsn: str) -> None:
     import psycopg
 
+    paths = sorted(MIGRATIONS.glob("*.sql"))
+    if not paths:  # a broken path must fail loudly, not yield an empty schema
+        raise RuntimeError(f"no migrations found at {MIGRATIONS} — fixture path broken")
     with psycopg.connect(dsn, autocommit=True) as conn:
-        for path in sorted(MIGRATIONS.glob("*.sql")):
+        for path in paths:
             conn.execute(path.read_text())  # type: ignore[arg-type]
 
 

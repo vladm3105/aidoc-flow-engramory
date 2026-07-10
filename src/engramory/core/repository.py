@@ -2,8 +2,9 @@
 
 Uses the Postgres driver (psycopg) directly: Postgres is the one-way spine
 (ADR-01); the relational store is deliberately NOT behind a port (SPEC-06).
-The vector projection joins via VectorPort when its adapter lands (IPLAN-06);
-until then ``get_memories`` ranks by recency and rejects ``query_vec``.
+``get_memories`` ranks by cosine similarity when ``query_vec`` is given (the
+pgvector projection lives in the same canonical table; embeddings are written
+via the VectorPort dev adapter) and by recency otherwise.
 
 Failure mode: ``StoreUnavailable`` wraps driver connectivity errors so callers
 can fail closed with a retryable error (EARS.01.03.c900).
@@ -48,11 +49,20 @@ class StoreUnavailable(RuntimeError):
     """
 
 
+def vector_literal(embedding: Sequence[float]) -> str:
+    """pgvector input literal: '[x1,x2,...]' (cast with ::vector at the call site)."""
+    return "[" + ",".join(repr(float(x)) for x in embedding) + "]"
+
+
 class Repository:
     """Typed data access over the canonical Postgres schema (migrations 0001..0003)."""
 
     def __init__(self, dsn: str) -> None:
         self._dsn = dsn
+
+    @property
+    def dsn(self) -> str:
+        return self._dsn
 
     @asynccontextmanager
     async def _conn(self) -> AsyncIterator[psycopg.AsyncConnection[dict[str, Any]]]:
@@ -166,31 +176,36 @@ class Repository:
         k: int = 8,
         query_vec: Sequence[float] | None = None,
     ) -> list[Memory]:
-        """Visible, live, active memories per the ADR-07 ladder; recency-ranked.
+        """Visible, live, active memories per the ADR-07 ladder.
 
-        ``query_vec`` is reserved for the vector projection (IPLAN-06); passing
-        it now raises so callers cannot mistake recency order for similarity.
+        Ranked by cosine similarity to ``query_vec`` when given (rows without
+        an embedding projection are excluded — they cannot be ranked), by
+        recency otherwise.
         """
+        params: dict[str, Any] = {
+            "tenant_id": tenant_id,
+            "agent_id": agent_id,
+            "project_id": project_id,
+            "domain_id": domain_id,
+            "k": k,
+        }
         if query_vec is not None:
-            raise NotImplementedError(
-                "vector ranking arrives with the VectorPort adapter (IPLAN-06)"
-            )
+            extra = "AND embedding IS NOT NULL"
+            order = "embedding <=> %(qv)s::vector"
+            params["qv"] = vector_literal(query_vec)
+        else:
+            extra = ""
+            order = "valid_from DESC"
         async with self._conn() as conn:
             rows = await (
                 await conn.execute(
                     f"""
                     SELECT {_MEMORY_COLUMNS} FROM memories
-                    WHERE {_VISIBILITY_SQL}
-                    ORDER BY valid_from DESC
+                    WHERE {_VISIBILITY_SQL} {extra}
+                    ORDER BY {order}
                     LIMIT %(k)s
                     """,
-                    {
-                        "tenant_id": tenant_id,
-                        "agent_id": agent_id,
-                        "project_id": project_id,
-                        "domain_id": domain_id,
-                        "k": k,
-                    },
+                    params,
                 )
             ).fetchall()
             return [_hydrate_memory(row) for row in rows]
