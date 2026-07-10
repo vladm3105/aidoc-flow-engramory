@@ -21,17 +21,31 @@ from psycopg.rows import dict_row
 
 from engramory.core.models import Episode, KBSection, Memory
 
-_VISIBILITY_SQL = """
+# ADR-07 visibility ladder, one clause per level. get_memories() includes ONLY
+# the levels the caller was actually granted — an ungranted level (e.g. 'space')
+# must never leak into results even inside the right tenant.
+_SCOPE_CLAUSES = {
+    "agent": "(scope = 'agent' AND agent_id = %(agent_id)s)",
+    "project": "(scope = 'project' AND project_id IS NOT NULL AND project_id = %(project_id)s)",
+    "domain": "(scope = 'domain' AND domain_id IS NOT NULL AND domain_id = %(domain_id)s)",
+    "space": "scope = 'space'",
+}
+
+
+def _visibility_sql(scopes: Sequence[str] | None) -> str:
+    """Tenant wall + SPEC-03 active-only default (idx_memories_tenant_live) +
+    the granted subset of the ladder."""
+    levels = tuple(scopes) if scopes is not None else tuple(_SCOPE_CLAUSES)
+    unknown = set(levels) - set(_SCOPE_CLAUSES)
+    if not levels or unknown:
+        raise ValueError(f"invalid visibility scopes: {sorted(unknown) or 'empty'}")
+    ladder = " OR ".join(_SCOPE_CLAUSES[level] for level in levels)
+    return f"""
     tenant_id = %(tenant_id)s
     AND valid_to IS NULL
     AND status = 'active'
-    AND (
-        (scope = 'agent' AND agent_id = %(agent_id)s)
-        OR (scope = 'project' AND project_id IS NOT NULL AND project_id = %(project_id)s)
-        OR (scope = 'domain' AND domain_id IS NOT NULL AND domain_id = %(domain_id)s)
-        OR scope = 'space'
-    )
-"""  # ADR-07 visibility ladder + SPEC-03 active-only default (idx_memories_tenant_live)
+    AND ({ladder})
+"""
 
 
 _MEMORY_COLUMNS = (
@@ -175,8 +189,13 @@ class Repository:
         domain_id: str | None = None,
         k: int = 8,
         query_vec: Sequence[float] | None = None,
+        scopes: Sequence[str] | None = None,
     ) -> list[Memory]:
         """Visible, live, active memories per the ADR-07 ladder.
+
+        ``scopes`` restricts visibility to the granted ladder levels; None
+        means the full ladder (repo-level tooling — the access surface always
+        passes the caller's granted subset).
 
         Ranked by cosine similarity to ``query_vec`` when given (rows without
         an embedding projection are excluded — they cannot be ranked), by
@@ -201,7 +220,7 @@ class Repository:
                 await conn.execute(
                     f"""
                     SELECT {_MEMORY_COLUMNS} FROM memories
-                    WHERE {_VISIBILITY_SQL} {extra}
+                    WHERE {_visibility_sql(scopes)} {extra}
                     ORDER BY {order}
                     LIMIT %(k)s
                     """,
@@ -239,6 +258,99 @@ class Repository:
             ).fetchone()
             assert row is not None
             return str(row["id"])
+
+    async def record_audit(
+        self,
+        *,
+        tenant_id: str,
+        agent_id: str,
+        project_id: str | None,
+        action: str,
+        allowed: bool,
+        reason: str,
+    ) -> None:
+        """Write an AuditRecord (SPEC-01; EARS.01.03.b050 — allow AND deny)."""
+        async with self._conn() as conn:
+            await conn.execute(
+                """
+                INSERT INTO audit_records
+                    (tenant_id, agent_id, project_id, action, allowed, reason)
+                VALUES (%(tenant_id)s, %(agent_id)s, %(project_id)s, %(action)s,
+                        %(allowed)s, %(reason)s)
+                """,
+                {
+                    "tenant_id": tenant_id,
+                    "agent_id": agent_id,
+                    "project_id": project_id,
+                    "action": action,
+                    "allowed": allowed,
+                    "reason": reason,
+                },
+            )
+
+    async def get_audit_records(
+        self, *, tenant_id: str, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        """Most-recent-first audit rows for a tenant (tests/operators)."""
+        async with self._conn() as conn:
+            return await (
+                await conn.execute(
+                    """
+                    SELECT agent_id, project_id, action, allowed, reason, ts
+                    FROM audit_records
+                    WHERE tenant_id = %(t)s
+                    ORDER BY ts DESC, id DESC
+                    LIMIT %(limit)s
+                    """,
+                    {"t": tenant_id, "limit": limit},
+                )
+            ).fetchall()
+
+    async def log_retrievals(
+        self,
+        *,
+        memory_ids: Sequence[str],
+        tenant_id: str,
+        agent_id: str,
+        project_id: str | None,
+    ) -> list[str]:
+        """Record hits handed to an agent (memory_retrievals) and bump the usage
+        signals — ONE connection/transaction for the whole batch (never N+1).
+        Returns retrieval_ids in memory_ids order, for memory_feedback."""
+        if not memory_ids:
+            return []
+        retrieval_ids: list[str] = []
+        async with self._conn() as conn:
+            for memory_id in memory_ids:
+                row = await (
+                    await conn.execute(
+                        """
+                        INSERT INTO memory_retrievals
+                            (memory_id, tenant_id, agent_id, project_id)
+                        VALUES (%(memory_id)s, %(tenant_id)s, %(agent_id)s, %(project_id)s)
+                        RETURNING id
+                        """,
+                        {
+                            "memory_id": memory_id,
+                            "tenant_id": tenant_id,
+                            "agent_id": agent_id,
+                            "project_id": project_id,
+                        },
+                    )
+                ).fetchone()
+                assert row is not None
+                retrieval_ids.append(str(row["id"]))
+            # tenant guard: defense-in-depth — this public method must never
+            # bump a foreign tenant's usage signals.
+            await conn.execute(
+                """
+                UPDATE memories
+                SET retrieval_count = retrieval_count + 1, last_retrieved_at = now()
+                WHERE id = ANY(%(ids)s::uuid[]) AND tenant_id = %(tenant_id)s
+                """,
+                {"ids": list(memory_ids), "tenant_id": tenant_id},
+            )
+        return retrieval_ids
 
     async def count_episodes(self, *, tenant_id: str) -> int:
         return await self._count("episodes", tenant_id)

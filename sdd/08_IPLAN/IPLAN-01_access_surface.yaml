@@ -12,17 +12,17 @@ document_control:
   author: "Engramory team"
   complexity: 4
   estimated_files: 7
-  session_count: 0
+  session_count: 1
 
 file_manifest:
   files:
-    - { path: "tests/unit/test_authz.py", order: 1, status: NOT_STARTED, session: null, verified: false }
-    - { path: "src/engramory/access/authz.py", order: 2, status: NOT_STARTED, session: null, verified: false }
-    - { path: "src/engramory/access/surface.py", order: 3, status: NOT_STARTED, session: null, verified: false }
-    - { path: "tests/integration/test_access_surface.py", order: 4, status: NOT_STARTED, session: null, verified: false }
-    - { path: "tests/e2e/test_scope_isolation.py", order: 5, status: NOT_STARTED, session: null, verified: false }
-    - { path: "tests/e2e/test_retrieval.py", order: 6, status: NOT_STARTED, session: null, verified: false }
-    - { path: "tests/security/test_failclosed.py", order: 7, status: NOT_STARTED, session: null, verified: false }
+    - { path: "tests/unit/test_authz.py", order: 1, status: DONE, session: "s1-2026-07-09", verified: true }
+    - { path: "src/engramory/access/authz.py", order: 2, status: DONE, session: "s1-2026-07-09", verified: true }
+    - { path: "src/engramory/access/surface.py", order: 3, status: DONE, session: "s1-2026-07-09", verified: true }
+    - { path: "tests/integration/test_access_surface.py", order: 4, status: DONE, session: "s1-2026-07-09", verified: true }
+    - { path: "tests/e2e/test_scope_isolation.py", order: 5, status: DONE, session: "s1-2026-07-09", verified: true }
+    - { path: "tests/e2e/test_retrieval.py", order: 6, status: DONE, session: "s1-2026-07-09", verified: true }
+    - { path: "tests/security/test_failclosed.py", order: 7, status: DONE, session: "s1-2026-07-09", verified: true }
 
 execution_commands:
   setup:
@@ -54,6 +54,13 @@ session_handoff:
       blockers: "Depends on IPLAN-06 (ports) and IPLAN-02 (store)."
       next_session_directive: "Begin file order 1: tests/unit/test_authz.py (TDD-01.04.a100 default-deny)."
       validation_results: { tests_passing: null, coverage: null, lint_clean: false }
+    - date: "2026-07-09"
+      agent: "Claude Fable 5 (session s1)"
+      files_touched: ["tests/unit/test_authz.py", "src/engramory/access/__init__.py", "src/engramory/access/authz.py", "src/engramory/access/surface.py", "tests/integration/test_access_surface.py", "tests/e2e/test_scope_isolation.py", "tests/e2e/test_retrieval.py", "tests/security/test_failclosed.py", "src/engramory/core/repository.py"]
+      partial_work: "Full manifest DONE (TDD red->green, all four tiers vs real Postgres): authorize() pure default-deny (unknown action / cross-tenant 'out_of_scope' / ungranted scope, every decision reasoned for audit); AccessSurface authorize->audit->execute on every call (audit_records via repository), fail-closed incl. denial-during-audit-outage never exposing data; memory_add idempotent episodes; knowledge_ingest governed write (GovernedWriteRejected + deny audit without evidence_ref); memory_search returns MemoryHit{retrieval_id, token_count} with memory_retrievals logging + usage-signal bumps + token-budget truncation. INTERIM: ranking is recency-based — SPEC-03 fusion (vector+lexical) needs the LLMPort embedding path; surface contract already final. memory_feedback/memory_forget/agent_profile_get tools NOT yet built (SPEC-01 additions from PLAN-001; the memory_retrievals plumbing they need is in place)."
+      blockers: "Rank fusion + query embedding depend on LLMPort dev adapter (IPLAN-06 remainder). MCP transport binding (engramory.mcp) is a separate step — the surface is transport-agnostic by design. Known follow-ups from the security review: (1) kb_sections conflict key (tenant,doc,citation,version) permits same-tenant cross-project text overwrite — needs a migration decision; (2) Repository.get_memory has no tenant binding — scope it before wiring memory_feedback."
+      next_session_directive: "Either memory_feedback/memory_forget/agent_profile_get tools (SPEC-04 confidence rule over memory_retrievals; scope get_memory to tenant first), or LLMPort dev adapter (unlocks query embedding + SPEC-03 fusion + reembed tool), or the MCP gateway binding."
+      validation_results: { tests_passing: 49, coverage: null, lint_clean: true }
 
 traceability:
   upstream:
@@ -63,4 +70,12 @@ traceability:
     code_paths: ["@code: src/engramory/access/"]
     test_paths: ["@tests: tests/unit/test_authz.py", "@tests: tests/e2e/test_scope_isolation.py"]
   code_inventory:
-    files: []
+    files:
+      - { path: "src/engramory/access/__init__.py", status: created, session: "s1-2026-07-09", verified: true }
+      - { path: "src/engramory/access/authz.py", status: created, session: "s1-2026-07-09", verified: true }
+      - { path: "src/engramory/access/surface.py", status: created, session: "s1-2026-07-09", verified: true }
+      - { path: "tests/unit/test_authz.py", status: created, session: "s1-2026-07-09", verified: true }
+      - { path: "tests/integration/test_access_surface.py", status: created, session: "s1-2026-07-09", verified: true }
+      - { path: "tests/e2e/test_scope_isolation.py", status: created, session: "s1-2026-07-09", verified: true }
+      - { path: "tests/e2e/test_retrieval.py", status: created, session: "s1-2026-07-09", verified: true }
+      - { path: "tests/security/test_failclosed.py", status: created, session: "s1-2026-07-09", verified: true }
