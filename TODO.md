@@ -79,11 +79,12 @@ convenient. Option B needs a small plan doc on aidoc-flow-ci first.
 
 ## 2. 🟡 F5 server-side follow-up — reviewer App install + branch protection
 
-**Status:** open, founder-gated. The unified-CI merge gate is dormant until
-the reviewer App is installed and `apply-standards.sh --apply` adds
-`call / verify` to branch-protection required contexts (F5 blast-radius
-prerequisite per operations CLAUDE.md § Unified CI). Previously tracked only
-as a CHANGELOG bullet; promoted here so it has an owner surface.
+**Status:** open, founder-gated — **partially underway**: the
+`APP_REVIEWER_1_ID` / `APP_REVIEWER_1_KEY` secrets landed 2026-07-09; the
+remaining half is `apply-standards.sh --apply` adding `call / verify` to
+branch-protection required contexts (F5 blast-radius prerequisite per
+operations CLAUDE.md § Unified CI). Previously tracked only as a CHANGELOG
+bullet; promoted here so it has an owner surface.
 
 **Discovered.** 2026-07-08 (Wave 3); promoted 2026-07-09 (PLAN-001 review).
 
@@ -99,3 +100,64 @@ lands); it just doesn't hard-block merges until §2 makes `call / verify`
 (and any future required contexts) branch-protection-required.
 
 **Discovered.** 2026-07-09 (PLAN-001 review). **Resolved.** 2026-07-09.
+
+## 4. 🟡 CI does not run the container-backed test tiers (19 tests skipped)
+
+**Status:** open. `ci.yml` runs bare `pytest`; the shared fixture
+(`tests/conftest.py`) deliberately skips container-dependent
+integration/e2e/conformance/security tests under `CI=` without
+`ENGRAMORY_TEST_DSN` (no per-run Docker Hub pull → no rate-limit/outage
+flakiness on the merge gate). Net: CI verifies 30 of 49 tests; the P1
+security scenarios run only locally.
+
+**Fix:** add a `services:` postgres (pgvector/pgvector:pg16) job container
+to `ci.yml` and export `ENGRAMORY_TEST_DSN` — the fixture already prefers
+the DSN path and applies migrations itself. Small PR; no test changes.
+
+**Discovered.** 2026-07-09 (IPLAN-02 s2 review, finding folded as CI-skip).
+
+## 5. 🟡 `kb_sections` conflict key permits same-tenant cross-project text overwrite
+
+**Status:** open — needs a schema decision (migration 0004 candidate).
+`uq_kb_sections_version` is `(tenant_id, doc_id, citation, version)`;
+`upsert_kb_section` `DO UPDATE SET text` lets project A overwrite project
+B's section text within one tenant, and a `space`-scoped section keeps its
+wider scope while a narrower-scoped caller replaces its text. Mitigated
+today by the governed-write gate (evidence + authz) and single-project
+Phase 0 use.
+
+**Fix options:** include `coalesce(project_id,'')` in the unique index
+(new migration; drop + recreate), or reject cross-project version
+collisions in `upsert_kb_section`. Decide before multi-project onboarding
+(BRD-08 at the latest).
+
+**Discovered.** 2026-07-09 (IPLAN-01 security review).
+
+## 6. 🟡 `Repository.get_memory` has no tenant binding — scope before wiring `memory_feedback`
+
+**Status:** open. `get_memory(id)` fetches any tenant's row and its
+`KeyError` echoes the id (existence probe). Safe today — only tests and
+same-tenant supersede flows call it — but `memory_feedback` /
+`memory_forget` (next tools, SPEC-01) take caller-supplied ids and MUST
+NOT ride on an unscoped fetch.
+
+**Fix:** add a required `tenant_id` parameter (`WHERE id = %(id)s AND
+tenant_id = %(t)s`) as the first step of the feedback-tools session; also
+recorded in the IPLAN-01 session handoff.
+
+**Discovered.** 2026-07-09 (IPLAN-01 security review).
+
+## 7. ⚪ MVP-1 remaining engineering work (pointer — not tracked here)
+
+Engineering delivery is tracked in the `sdd/` lifecycle, not this file.
+Remaining for the MVP-1 vertical slice, per the `next_session_directive`
+fields in the IPLAN session handoffs (`sdd/08_IPLAN/IPLAN-{01,02,06}_*.yaml`)
+and `roadmap/ROADMAP.md`:
+
+- LLMPort dev adapter (LiteLLM/Ollama) → query embeddings, SPEC-03 rank
+  fusion, `reembed_and_reproject` (closes IPLAN-06, 7/7)
+- `memory_feedback` / `memory_forget` / `agent_profile_get` tools with the
+  SPEC-04 confidence rule (after §6)
+- MCP transport binding over `AccessSurface` (`engramory.mcp`)
+- Eval harness + retrieval→outcome feedback loop (MVP-1 **exit criteria**
+  per ROADMAP)
