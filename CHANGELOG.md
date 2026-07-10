@@ -4,6 +4,46 @@ All notable changes to Engramory are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+### Added / Changed — PLAN-001 pre-first-run remediation (2026-07-09)
+
+Closes the contract gaps found by the 2026-07-09 five-agent pre-first-run
+review. Plan + claim ledger + review log:
+`plans/PLAN-001_pre-first-run-remediation.md` (all 7 PRs #13–#19 merged
+2026-07-09; Dependabot #8–#10 merged the same day).
+
+- **`db/migrations/0003_reconcile_contracts.sql`** (NEW) — episode
+  idempotency (`content_hash` + unique index), memory lifecycle
+  `status` (quarantine surface for EARS.01.03.b800), `tenant_id`
+  NOT NULL + tenant-leading partial index (ADR-07), lexical `ts_lex`
+  + GIN, feedback signals (`retrieval_count`, `last_retrieved_at`,
+  `source_trust`), `memory_retrievals` + `audit_records` tables,
+  `kb_sections` knowledge-core table (ADR-08). Verified idempotent
+  ×2 on pgvector:pg16. (#14)
+- **StoragePort reconciliation** — SPEC-06/SPEC-02/IPLAN-01/02 no
+  longer describe the object-storage port as relational persistence;
+  repositories are specified over the Postgres driver directly
+  (ADR-01 spine). ADR-02 rationale corrected. (#15, #19)
+- **Learning-loop contracts** — `MemoryPort.reflect` (renamed from
+  `distill`) + `feedback`/`forget`/`get_profile`;
+  `search(include_advisory, token_budget)`; MCP tools
+  `memory_feedback`/`memory_forget`/`agent_profile_get`; SPEC-03
+  concrete RRF ranking spec; SPEC-04 reflection triggers +
+  confidence-update rule + secrets screen; PRD threshold
+  `context_token_budget` = 2000; EARS.01.04.c300 (P1 secrets
+  exclusion) traced to BDD.01.03.g010 + TDD.04.04.c100. (#16)
+- **Infra determinism** — all compose images pinned (litellm off
+  `main-latest` to `-stable`); `make` defaults to `help`; CODEOWNERS
+  dead paths fixed; MinIO healthcheck kept (`mc ready local` verified
+  working — review finding was a false positive). (#17)
+- **Docs reconcile** — kb_sections cycle attribution (MVP-1/BRD-01),
+  CORES↔SPEC-01 namespace rule, retracted "bounded store" claims,
+  NEXUS review dead refs, MEMORY_CONCEPT_REVIEW status annotation,
+  README doc-table rows. (#18)
+- **Ops/governance** — CI trust-gap fix DECIDED (Option A,
+  `AI_REVIEW_TOKEN`; TODO §1), F5 + Dependabot tracked (TODO §2/§3),
+  CLAUDE.md CI state refreshed + `plans/` surface adopted, ADR-00
+  preamble fixed. (#13, #19, #20)
+
 ### Changed — Wave 3b adoption of aidoc-flow-ci PLAN-003 governance-file canon (2026-07-08)
 
 engramory adopts the PLAN-003 flexible-canonical (Option B) project-
