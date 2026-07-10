@@ -12,12 +12,12 @@ document_control:
   author: "Engramory team"
   complexity: 4
   estimated_files: 6
-  session_count: 0
+  session_count: 1
 
 file_manifest:
   files:
-    - { path: "tests/unit/test_models.py", order: 1, status: NOT_STARTED, session: null, verified: false }
-    - { path: "src/engramory/core/models.py", order: 2, status: NOT_STARTED, session: null, verified: false }
+    - { path: "tests/unit/test_models.py", order: 1, status: DONE, session: "s1-2026-07-09", verified: true }
+    - { path: "src/engramory/core/models.py", order: 2, status: DONE, session: "s1-2026-07-09", verified: true }
     - { path: "db/migrations/0001_init_memory.sql", order: 3, status: DONE, session: "scaffold", verified: false }
     - { path: "db/migrations/0003_reconcile_contracts.sql", order: 4, status: DONE, session: "plan-001-remediation", verified: true }
     - { path: "src/engramory/core/repository.py", order: 5, status: NOT_STARTED, session: null, verified: false }
@@ -53,6 +53,13 @@ session_handoff:
       blockers: "Depends on IPLAN-06 (VectorPort)."
       next_session_directive: "File order 1: tests/unit/test_models.py (TDD-02.04.a100/a200)."
       validation_results: { tests_passing: null, coverage: null, lint_clean: false }
+    - date: "2026-07-09"
+      agent: "Claude Fable 5 (session s1)"
+      files_touched: ["tests/unit/test_models.py", "src/engramory/core/models.py"]
+      partial_work: "Data contracts done (TDD red->green): Episode/Memory/KBSection/AgentProfile frozen dataclasses enforcing migration-0003 CHECK domains + NOT NULL rules; content_hash matches the 0003 md5 backfill; Episode.idempotency_key mirrors uq_episodes_idempotency. Repository not started."
+      blockers: "repository.py (order 5) depends on IPLAN-06 (VectorPort adapter) for the projection write; the relational half can start without it."
+      next_session_directive: "File order 5: src/engramory/core/repository.py over the Postgres driver (add_episode idempotent via models.Episode.idempotency_key, get_memories status='active' default, upsert_memory soft-supersede) — TDD via tests/integration/test_repository.py (TDD-02.04.b100), needs a Postgres container."
+      validation_results: { tests_passing: 14, coverage: null, lint_clean: true }
 
 traceability:
   upstream:
@@ -65,3 +72,5 @@ traceability:
     files:
       - { path: "db/migrations/0001_init_memory.sql", status: created, session: "scaffold", verified: false }
       - { path: "db/migrations/0003_reconcile_contracts.sql", status: created, session: "plan-001-remediation", verified: true }
+      - { path: "tests/unit/test_models.py", status: created, session: "s1-2026-07-09", verified: true }
+      - { path: "src/engramory/core/models.py", status: created, session: "s1-2026-07-09", verified: true }
