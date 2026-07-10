@@ -5,20 +5,43 @@ workspace's memory plane (durable substrate for AI-agent memory that
 other aidoc-flow projects consume as a subscriber). Read at session
 start; refresh at milestones and before context compaction.
 
-## Current state (2026-07-09, post-PLAN-001)
+## Current state (2026-07-09, session wrap — MVP-1 implementation underway)
 
-**PLAN-001 pre-first-run remediation COMPLETE** — all 7 PRs (#13–#19)
-merged to main 2026-07-09, plus the 3 stranded Dependabot PRs (#8–#10).
-The 2026-07-09 five-agent review's contract gaps are closed: migration
-0003 (content_hash, quarantine status, tenant wall, feedback/audit/
-kb_sections), StoragePort semantics reconciled, learning-loop contracts
-(feedback/forget/profile, RRF ranking, token budget, secrets-exclusion
-trace), infra pinned, docs/governance refreshed. See
-`plans/PLAN-001_pre-first-run-remediation.md` for the record. **Still
-open (founder-gated):** `AI_REVIEW_TOKEN` secret for `call / trust`
-(`TODO.md` §1) and the F5 App/branch-protection follow-up (`TODO.md`
-§2). Next engineering work: MVP-1 vertical slice per IPLAN-02/06 and
-`roadmap/ROADMAP.md`.
+**PLAN-001 remediation COMPLETE** (#13–#21; record at
+`plans/PLAN-001_pre-first-run-remediation.md`) and **MVP-1
+implementation is 3 IPLANs deep**, all merged 2026-07-09:
+
+- **IPLAN-02 COMPLETE** (#22 contracts, #23 repository): typed data
+  contracts + Postgres repository — idempotent episodes, soft-supersede
+  with tenant-guarded writes, ADR-07 visibility-ladder retrieval,
+  active-only default. First runtime dep: `psycopg` (spine per SPEC-06).
+- **IPLAN-06 6/7** (#24): pgvector VectorPort dev adapter + factory +
+  no-vendor-imports architecture guard; `get_memories(query_vec)` does
+  real cosine similarity composed with visibility. Remaining:
+  `reembed_and_reproject` (needs an LLMPort dev adapter).
+- **IPLAN-01 COMPLETE** (#25): default-deny `authorize()`, AccessSurface
+  (authorize→audit→execute, fail-closed incl. audit-store-down),
+  governed `knowledge_ingest`, `memory_search` with MemoryHit
+  {retrieval_id, token_count}, PRD token budget (2000) default, scope
+  containment (ungranted ladder levels never leak — review-caught).
+
+49 tests across four tiers vs real Postgres (ephemeral-container
+fixture at `tests/conftest.py`; CI skips container tests until a
+`services:` postgres + ENGRAMORY_TEST_DSN is added to ci.yml);
+`mypy --strict` + ruff clean. Every PR carried a multi-agent OPS-0065
+review; 4 security holes were folded pre-push in #25 alone.
+
+**Next engineering work (pick one):** (a) LLMPort dev adapter
+(LiteLLM/Ollama) → query embeddings + SPEC-03 rank fusion + reembed
+tool (closes IPLAN-06); (b) memory_feedback/memory_forget/
+agent_profile_get tools (SPEC-04 confidence rule; scope
+`Repository.get_memory` to tenant first — see IPLAN-01 handoff
+follow-ups); (c) MCP transport binding over AccessSurface; (d) eval
+harness (MVP-1 exit criterion per ROADMAP).
+
+**Still open (founder-gated):** `AI_REVIEW_TOKEN` secret (`TODO.md` §1)
+and F5 App/branch-protection (`TODO.md` §2; `APP_REVIEWER_1_*` secrets
+already added 2026-07-09).
 
 ## Open threads
 

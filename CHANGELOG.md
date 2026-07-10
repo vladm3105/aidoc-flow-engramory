@@ -4,6 +4,38 @@ All notable changes to Engramory are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+### Added — MVP-1 implementation: store, adapters, access surface (2026-07-09)
+
+First working code of the memory plane — three IPLANs, TDD-first across
+four test tiers against real Postgres (49 tests; `mypy --strict` + ruff
+clean; every PR multi-agent-reviewed per OPS-0065):
+
+- **IPLAN-02 complete** — `src/engramory/core/models.py` (typed
+  contracts mirroring migrations 0001–0003; derived content_hash,
+  read-only mapping fields) + `src/engramory/core/repository.py`
+  (idempotent `add_episode` via `uq_episodes_idempotency`, transactional
+  tenant-guarded soft-supersede, ADR-07 visibility-ladder retrieval,
+  keyed `upsert_kb_section`, `StoreUnavailable` fail-closed wrapper).
+  First runtime dependency: `psycopg[binary]` (spine per ADR-01/SPEC-06).
+  (#22, #23)
+- **IPLAN-06 6/7** — `PgVectorAdapter` (VectorPort over pgvector;
+  embedding as rebuildable projection, cosine `<=>`, filter allowlist),
+  adapter factory (`ENGRAMORY_PROFILE`), no-vendor-imports architecture
+  guard (psycopg carve-out core-only), and similarity ranking live in
+  `get_memories(query_vec)` composed with visibility. Remaining:
+  `reembed_and_reproject` (needs LLMPort dev adapter). (#24)
+- **IPLAN-01 complete** — `engramory.access`: pure default-deny
+  `authorize()`, `AccessSurface` (authorize→audit→execute; fail-closed
+  even when the audit store is down; governed `knowledge_ingest`
+  requiring evidence; `memory_search` → `MemoryHit{retrieval_id,
+  token_count}` with batched `memory_retrievals` logging, PRD
+  token-budget default 2000, `k` clamp, scope containment). P1 security
+  scenarios (cross-tenant deny+audit, fail-closed, scope containment)
+  run as e2e/security tests. (#25)
+- Test infrastructure: shared ephemeral-pgvector fixture
+  (`tests/conftest.py`; `ENGRAMORY_TEST_DSN` override; CI skips
+  container tests by design until ci.yml gains a `services:` postgres).
+
 ### Added / Changed — PLAN-001 pre-first-run remediation (2026-07-09)
 
 Closes the contract gaps found by the 2026-07-09 five-agent pre-first-run
