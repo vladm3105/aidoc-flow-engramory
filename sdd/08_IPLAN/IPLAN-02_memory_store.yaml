@@ -22,7 +22,7 @@ file_manifest:
     - { path: "db/migrations/0003_reconcile_contracts.sql", order: 4, status: DONE, session: "plan-001-remediation", verified: true }
     - { path: "src/engramory/core/repository.py", order: 5, status: DONE, session: "s2-2026-07-09", verified: true }
     - { path: "tests/integration/test_repository.py", order: 6, status: DONE, session: "s2-2026-07-09", verified: true }
-    - { path: "tests/integration/conftest.py", order: 7, status: DONE, session: "s2-2026-07-09", verified: true }
+    - { path: "tests/conftest.py", order: 7, status: DONE, session: "s2-2026-07-09", verified: true }  # created as tests/integration/conftest.py; moved to tests/ root in IPLAN-06 s1 (shared with conformance suite)
 
 execution_commands:
   setup:
@@ -84,4 +84,4 @@ traceability:
       - { path: "src/engramory/core/models.py", status: created, session: "s1-2026-07-09", verified: true }
       - { path: "src/engramory/core/repository.py", status: created, session: "s2-2026-07-09", verified: true }
       - { path: "tests/integration/test_repository.py", status: created, session: "s2-2026-07-09", verified: true }
-      - { path: "tests/integration/conftest.py", status: created, session: "s2-2026-07-09", verified: true }
+      - { path: "tests/conftest.py", status: created, session: "s2-2026-07-09", verified: true }  # moved from tests/integration/ in IPLAN-06 s1

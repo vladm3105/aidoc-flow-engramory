@@ -11,17 +11,18 @@ document_control:
   last_updated: "2026-06-22T00:00:00"
   author: "Engramory team"
   complexity: 3
-  estimated_files: 6
-  session_count: 0
+  estimated_files: 7
+  session_count: 1
 
 file_manifest:
   files:
-    - { path: "tests/unit/test_no_vendor_imports.py", order: 1, status: NOT_STARTED, session: null, verified: false }
+    - { path: "tests/unit/test_no_vendor_imports.py", order: 1, status: DONE, session: "s1-2026-07-09", verified: true }
     - { path: "src/engramory/ports/__init__.py", order: 2, status: DONE, session: "scaffold", verified: false }
-    - { path: "src/engramory/adapters/dev/__init__.py", order: 3, status: NOT_STARTED, session: null, verified: false }
-    - { path: "src/engramory/adapters/factory.py", order: 4, status: NOT_STARTED, session: null, verified: false }
-    - { path: "tests/conformance/test_adapters.py", order: 5, status: NOT_STARTED, session: null, verified: false }
-    - { path: "tests/integration/test_migration.py", order: 6, status: NOT_STARTED, session: null, verified: false }
+    - { path: "src/engramory/adapters/dev/__init__.py", order: 3, status: DONE, session: "s1-2026-07-09", verified: true }
+    - { path: "src/engramory/adapters/dev/vector_pg.py", order: 4, status: DONE, session: "s1-2026-07-09", verified: true }
+    - { path: "src/engramory/adapters/factory.py", order: 5, status: DONE, session: "s1-2026-07-09", verified: true }
+    - { path: "tests/conformance/test_adapters.py", order: 6, status: DONE, session: "s1-2026-07-09", verified: true }
+    - { path: "tests/integration/test_migration.py", order: 7, status: NOT_STARTED, session: null, verified: false }
 
 execution_commands:
   setup: ["source .venv/bin/activate", "mkdir -p src/engramory/adapters/dev tests/conformance"]
@@ -52,6 +53,13 @@ session_handoff:
       blockers: "None — foundation layer; build first (build_order[0])."
       next_session_directive: "File order 1: tests/unit/test_no_vendor_imports.py (TDD-06.04.a100)."
       validation_results: { tests_passing: null, coverage: null, lint_clean: false }
+    - date: "2026-07-09"
+      agent: "Claude Fable 5 (session s1)"
+      files_touched: ["tests/unit/test_no_vendor_imports.py", "src/engramory/adapters/dev/__init__.py", "src/engramory/adapters/dev/vector_pg.py", "src/engramory/adapters/factory.py", "tests/conformance/test_adapters.py", "src/engramory/core/repository.py"]
+      partial_work: "No-vendor-imports guard (TDD-06.04.a100, with the psycopg spine carve-out encoded); PgVectorAdapter = VectorPort dev adapter over pgvector (upsert/query cosine <=>/delete as rebuildable projection ops on memories; filter allowlist as a security boundary); adapter factory with ENGRAMORY_PROFILE selection (gcp/azure raise until BRD-02); Repository.get_memories(query_vec) now ranks by cosine similarity composed with the ADR-07 visibility ladder. Conformance suite covers VectorPort + fail-closed (BDD.01.03.b800)."
+      blockers: "test_accelerator_cache_only (BDD.01.03.d010) pending a managed-accelerator adapter; reembed_and_reproject migration tool (order 7) needs an LLMPort dev adapter for re-embedding."
+      next_session_directive: "Either LLMPort dev adapter (LiteLLM/Ollama) + reembed_and_reproject + tests/integration/test_migration.py (completes IPLAN-06), or switch to IPLAN-01 (authz + MCP access surface over the repository)."
+      validation_results: { tests_passing: 33, coverage: null, lint_clean: true }
 
 traceability:
   upstream:
@@ -63,3 +71,8 @@ traceability:
   code_inventory:
     files:
       - { path: "src/engramory/ports/__init__.py", status: created, session: "scaffold", verified: false }
+      - { path: "tests/unit/test_no_vendor_imports.py", status: created, session: "s1-2026-07-09", verified: true }
+      - { path: "src/engramory/adapters/dev/__init__.py", status: created, session: "s1-2026-07-09", verified: true }
+      - { path: "src/engramory/adapters/dev/vector_pg.py", status: created, session: "s1-2026-07-09", verified: true }
+      - { path: "src/engramory/adapters/factory.py", status: created, session: "s1-2026-07-09", verified: true }
+      - { path: "tests/conformance/test_adapters.py", status: created, session: "s1-2026-07-09", verified: true }
