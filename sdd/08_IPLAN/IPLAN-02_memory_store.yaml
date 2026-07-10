@@ -11,8 +11,8 @@ document_control:
   last_updated: "2026-07-09T00:00:00"
   author: "Engramory team"
   complexity: 4
-  estimated_files: 6
-  session_count: 1
+  estimated_files: 7
+  session_count: 2
 
 file_manifest:
   files:
@@ -20,8 +20,9 @@ file_manifest:
     - { path: "src/engramory/core/models.py", order: 2, status: DONE, session: "s1-2026-07-09", verified: true }
     - { path: "db/migrations/0001_init_memory.sql", order: 3, status: DONE, session: "scaffold", verified: false }
     - { path: "db/migrations/0003_reconcile_contracts.sql", order: 4, status: DONE, session: "plan-001-remediation", verified: true }
-    - { path: "src/engramory/core/repository.py", order: 5, status: NOT_STARTED, session: null, verified: false }
-    - { path: "tests/integration/test_repository.py", order: 6, status: NOT_STARTED, session: null, verified: false }
+    - { path: "src/engramory/core/repository.py", order: 5, status: DONE, session: "s2-2026-07-09", verified: true }
+    - { path: "tests/integration/test_repository.py", order: 6, status: DONE, session: "s2-2026-07-09", verified: true }
+    - { path: "tests/integration/conftest.py", order: 7, status: DONE, session: "s2-2026-07-09", verified: true }
 
 execution_commands:
   setup:
@@ -60,6 +61,13 @@ session_handoff:
       blockers: "repository.py (order 5) depends on IPLAN-06 (VectorPort adapter) for the projection write; the relational half can start without it."
       next_session_directive: "File order 5: src/engramory/core/repository.py over the Postgres driver (add_episode idempotent via models.Episode.idempotency_key, get_memories status='active' default, upsert_memory soft-supersede) — TDD via tests/integration/test_repository.py (TDD-02.04.b100), needs a Postgres container."
       validation_results: { tests_passing: 14, coverage: null, lint_clean: true }
+    - date: "2026-07-09"
+      agent: "Claude Fable 5 (session s2)"
+      files_touched: ["src/engramory/core/repository.py", "tests/integration/test_repository.py", "tests/integration/conftest.py", "pyproject.toml"]
+      partial_work: "Repository complete (TDD red->green vs a real pgvector:pg16 container): add_episode idempotent via ON CONFLICT on uq_episodes_idempotency; upsert_memory soft-supersede (valid_to + status='superseded', same transaction); get_memories enforces the ADR-07 visibility ladder + SPEC-03 active-only default, recency-ranked (query_vec raises until VectorPort lands); upsert_kb_section keyed upsert; StoreUnavailable wraps connectivity (EARS.01.03.c900). First runtime dependency added: psycopg[binary] (spine infrastructure per SPEC-06). Test fixture: ENGRAMORY_TEST_DSN or ephemeral docker container on a free port; skips only when neither exists."
+      blockers: "Vector ranking + embedding writes depend on IPLAN-06 (VectorPort adapter). IPLAN-02 file manifest is fully DONE — remaining SPEC-02 surface (embedding projection) rides on IPLAN-06."
+      next_session_directive: "IPLAN-02 complete. Next per IPLAN-00 build order: IPLAN-06 dev adapters (VectorPort over pgvector first — enables get_memories(query_vec) + SPEC-03 rank fusion), or IPLAN-01 access surface (authz + MCP tools over this repository)."
+      validation_results: { tests_passing: 23, coverage: null, lint_clean: true }
 
 traceability:
   upstream:
@@ -74,3 +82,6 @@ traceability:
       - { path: "db/migrations/0003_reconcile_contracts.sql", status: created, session: "plan-001-remediation", verified: true }
       - { path: "tests/unit/test_models.py", status: created, session: "s1-2026-07-09", verified: true }
       - { path: "src/engramory/core/models.py", status: created, session: "s1-2026-07-09", verified: true }
+      - { path: "src/engramory/core/repository.py", status: created, session: "s2-2026-07-09", verified: true }
+      - { path: "tests/integration/test_repository.py", status: created, session: "s2-2026-07-09", verified: true }
+      - { path: "tests/integration/conftest.py", status: created, session: "s2-2026-07-09", verified: true }
