@@ -1,5 +1,11 @@
 # PLAN-001 — Pre-First-Run Remediation Implementation Plan
 
+> **STATUS: COMPLETE (2026-07-09).** All tasks executed and merged: Task 0
+> (housekeeping) + PR-1…PR-7 = GitHub #13–#19, closeout #20; Dependabot
+> #8–#10 also merged. Founder-gated residue tracked in `TODO.md` §1
+> (`AI_REVIEW_TOKEN`) and §2 (F5). Checkboxes below retained as authored
+> (execution followed the steps; see CHANGELOG.md 2026-07-09 entry).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Close every contract-level, operational, and documentation gap found in the 2026-07-09 five-agent pre-first-run review, so the first MVP-1 implementation session builds the *reviewed* design (feedback loop, quarantine, idempotency, tenant wall) instead of the pre-review one.
