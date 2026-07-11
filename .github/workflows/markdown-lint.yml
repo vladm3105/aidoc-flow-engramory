@@ -1,0 +1,29 @@
+# Caller for aidoc-flow-ci's reusable markdown-lint workflow (@ci/v1.9.4).
+# REPORT-ONLY during rollout (continue-on-error): surfaces markdownlint
+# annotations on PRs without blocking merge. Graduate to blocking per repo
+# after a `markdownlint-cli2 --fix` remediation pass + adding it to branch
+# protection (tracked: aidoc-flow-ci plans/FRAMEWORK-TODO.md FT-11).
+name: markdown-lint
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  call:
+    continue-on-error: true
+    uses: vladm3105/aidoc-flow-ci/.github/workflows/markdown-lint.yml@ci/v1.9.4
+    with:
+      globs: |
+        **/*.md
+        !node_modules
+        !vendor
+        !examples
