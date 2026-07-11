@@ -8,6 +8,41 @@ All notable changes to Engramory are documented here. Format: [Keep a Changelog]
 
 Adopted the aidoc-flow-ci secret-scan gate (, gitleaks binary).
 
+### Added — PLAN-002: agent-usable memory plane — CLI face, full SPEC-01 tool set, agent docs (2026-07-11)
+
+Engramory is now usable as memory by external AI agents on a dev/pre-prod
+host, per ADR-10 (accepted 2026-07-11) and PLAN-002 (verified plan: 25
+cited claims, 4 independent review passes). Six PRs, every one
+multi-agent-reviewed per OPS-0065; 94 tests green vs real Postgres;
+`make smoke` verifies the full loop end-to-end on the compose store:
+
+- **SPEC-01 tool set complete** (#33) — `memory_feedback` (tenant-guarded
+  outcome stamping), `memory_forget` (soft retire, audited with caller
+  reason), `agent_profile_get` (own profile only; default on fresh store);
+  tenant-scoped `Repository.get_memory` (closes the IPLAN-01 follow-up);
+  interim `reflect()` projection (episodes -> retrievable memories,
+  idempotent by provenance episode_id) so agent-added facts are
+  retrievable before the SPEC-04 engine lands.
+- **ADR-10 accepted** (#34) — agent-facing packaging: CLI + reference
+  Skill as the dev/CI face over AccessSurface; MCP gateway remains the
+  authenticated production face; dev-tier trust carve-out (client-built
+  ActorContext only under ENGRAMORY_PROFILE=dev).
+- **SPEC-01 faces amendment** (#35) + **SPEC-07 CLI-face contract** (#36)
+  — normative exit codes 0/1/2/3, --json shapes, config schema, fence.
+- **The `engramory` CLI** (#37) — init / memory add/search/feedback/
+  forget/distill / profile get / status; `python -m engramory` alias;
+  dev-tier fence enforced via `require_dev_profile()`;
+  `POSTGRES_HOST_PORT` compose override (dev hosts where 5432 is taken).
+- **Agent documentation + reference Skill** (#39) — `docs/INSTALL.md`,
+  `docs/AGENT-QUICKSTART.md` (add -> distill -> search -> feedback loop,
+  3 tracks), `docs/AGENT-INTEGRATION.md` (per-vendor wiring),
+  `skills/engramory-memory/SKILL.md`, README "Use it as an agent".
+- **Pre-prod smoke** (this PR) — `make smoke` (`scripts/smoke_preprod.sh`)
+  drives the full loop through the real CLI and asserts SPEC-07 exit
+  codes incl. the fence; verified passing 2026-07-11 on the dev host.
+
+Backward compatibility: `Repository.get_memory` now requires a
+`tenant_id` keyword (internal API, pre-1.0).
 
 ### Changed — re-pin aidoc-flow-ci callers to @ci/v1.9.1; adopt App-native ai-review trust-fetch (2026-07-11)
 

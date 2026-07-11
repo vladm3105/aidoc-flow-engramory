@@ -1,13 +1,17 @@
 # PLAN-002 — Pre-prod agent readiness: an agent-usable memory plane with full install + usage documentation
 
-**Status:** draft (pending independent review + ADR-10 acceptance)
+**Status:** COMPLETE 2026-07-11 — executed same day as verified (4 review
+passes; G0 met). Delivered via PRs #33 (Phase 1), #34/#35/#36 (governance
+splits ii/iii/iv), #37 (Phase 2 CLI), #39 (Phase 3 docs + Skill), + the
+Phase 4 currency PR (`make smoke` passing on the dev host). Deferred
+follow-ups recorded in TODO.md §7.
 **Date:** 2026-07-11
 **Owner:** Engramory team
 **Origin:** founder goal 2026-07-11 — "make engramory ready for pre-prod run,
 to be used by other agents, including full documentation — how to use
 engramory by other AI agents, how to install and other guidance."
 **Decision foundation:** `sdd/05_ADR/ADR-10_agent_facing_packaging.yaml`
-(Proposed) — layered thin faces over AccessSurface: CLI + reference Skill as
+(Accepted) — layered thin faces over AccessSurface: CLI + reference Skill as
 the dev/CI face now; MCP gateway remains the authenticated production face.
 
 ## Goal

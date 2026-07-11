@@ -27,5 +27,6 @@ Component specifications for **Engramory** (C4-L3). One IPLAN per SPEC component
 | SPEC-04 | Distillation Engine | ADR-04, ADR-05 | [SPEC-04_distillation_engine.yaml](SPEC-04_distillation_engine.yaml) |
 | SPEC-05 | Framework KB Compatibility (ucx_kb replacement) | ADR-06 | [SPEC-05_kb_compatibility.yaml](SPEC-05_kb_compatibility.yaml) |
 | SPEC-06 | Ports & Portability | ADR-02, ADR-05 | [SPEC-06_ports_portability.yaml](SPEC-06_ports_portability.yaml) |
+| SPEC-07 | CLI Face (dev/CI transport over AccessSurface) | ADR-10 | [SPEC-07_cli_face.yaml](SPEC-07_cli_face.yaml) |
 
-*Last Updated: 2026-06-22*
+*Last Updated: 2026-07-11*

@@ -12,6 +12,12 @@ Tools (authoritative registry: sdd/06_SPEC/SPEC-01 Access Surface):
 Any MCP client (Claude Code, Codex, Hermes, custom) connects here. Every call is
 authorized and scoped by agent/project/tenant, audited, and fails closed on uncertainty.
 
-Status: stub — the gateway is not yet implemented (Phase 0). SPEC-01 is the source of
+The gateway is the AUTHENTICATED PRODUCTION FACE over AccessSurface (ADR-10): it
+constructs ActorContext exclusively from verified OIDC claims. A second, dev/CI-only
+face — the `engramory` CLI (engramory.cli, arrives with PLAN-002 Phase 2) — is
+fenced to ENGRAMORY_PROFILE=dev; faces add no logic, all semantics live in
+AccessSurface (SPEC-01).
+
+Status: stub — the gateway is not yet implemented. SPEC-01 is the source of
 truth for tool names and signatures; keep this docstring in sync with it.
 """

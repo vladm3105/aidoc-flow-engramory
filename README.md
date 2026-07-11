@@ -45,15 +45,31 @@ It consolidates two predecessor designs — **RAC** (a working knowledge platfor
 ## Quickstart (dev, self-hosted)
 
 ```bash
-cp .env.example .env          # fill in secrets
+cp .env.example .env          # fill in secrets; set POSTGRES_HOST_PORT if 5432 is taken
 docker compose up -d          # Postgres+pgvector, Redis, MinIO, LiteLLM+Ollama, Neo4j, Keycloak
 make migrate                  # apply db/migrations
 make pull-models              # pull local Ollama models
-# the MCP gateway is not yet shipped (Phase 0 pending) — no gateway service
-# exists in docker-compose yet; see docs/ARCHITECTURE.md for the target design
+# the MCP gateway is not yet shipped — the dev/CI agent face is the CLI (ADR-10):
+pip install -e . && engramory --help
 ```
 
 All dev dependencies are free and open-source.
+
+## Use it as an agent (memory for AI agents)
+
+Any AI agent with a shell uses Engramory as memory through the **`engramory`
+CLI** — remember (`memory add` + `memory distill`), retrieve (`memory
+search`), and close the learning loop (`memory feedback`). Every call is
+authorized (default deny), scoped agent/project/tenant, and audited.
+
+- **Install + first round-trip:** [docs/INSTALL.md](docs/INSTALL.md)
+- **Agent workflow (3 tracks: terminal agent, CI, Skill):** [docs/AGENT-QUICKSTART.md](docs/AGENT-QUICKSTART.md)
+- **Wire any vendor (Claude / Gemini / Codex / Copilot / Cursor):** [docs/AGENT-INTEGRATION.md](docs/AGENT-INTEGRATION.md)
+- **Claude reference Skill:** [skills/engramory-memory/SKILL.md](skills/engramory-memory/SKILL.md)
+- **CLI contract (exit codes, JSON shapes, config):** [sdd/06_SPEC/SPEC-07_cli_face.yaml](sdd/06_SPEC/SPEC-07_cli_face.yaml)
+
+The CLI is the ADR-10 **dev/CI face** (single-tenant dev tier); the MCP
+gateway is the authenticated production face and arrives in a later cycle.
 
 ## Documentation
 
@@ -68,6 +84,9 @@ All dev dependencies are free and open-source.
 | [docs/GLOSSARY.md](docs/GLOSSARY.md) | Terms |
 | [docs/HOW_TO_USE_THE_FRAMEWORK.md](docs/HOW_TO_USE_THE_FRAMEWORK.md) | Authoring SDD artifacts the UCX / aidoc-flow way |
 | [docs/UCX_INTEGRATION.md](docs/UCX_INTEGRATION.md) | How Engramory fits UCX and replaces `ucx_kb` |
+| [docs/INSTALL.md](docs/INSTALL.md) | Install the dev stack + CLI |
+| [docs/AGENT-QUICKSTART.md](docs/AGENT-QUICKSTART.md) | An agent's first remembered + retrieved memory |
+| [docs/AGENT-INTEGRATION.md](docs/AGENT-INTEGRATION.md) | Per-vendor agent wiring (Claude/Gemini/Codex/Copilot/…) |
 | [sdd/](sdd/) | SDD lifecycle artifacts (BRD→IPLAN); `sdd/05_ADR/` = canonical implementing ADRs |
 | [docs/adr/](docs/adr/) | Conceptual/descriptive architecture decision records |
 | [config/](config/) | Per-project / per-domain YAML config on the shared core |
