@@ -23,9 +23,17 @@ document_control:
 
 component_overview:
   description: |
-    The single MCP-exposed surface through which all agents read/write knowledge and
-    memory. Every call is authorized and scoped by agent/project/tenant, audited, and
-    fails closed on uncertainty. Implements the governed-write gate for SDD-artifact writes.
+    The single access surface (AccessSurface) through which all agents read/write
+    knowledge and memory, reached via thin transport faces (ADR-10): the MCP gateway
+    is the authenticated production face; the `engramory` CLI is the dev/CI face.
+    Faces add no logic — every call is authorized and scoped by agent/project/tenant,
+    audited, and fails closed on uncertainty inside AccessSurface itself. Implements
+    the governed-write gate for SDD-artifact writes.
+    TRUST (ADR-10 dev-tier carve-out): in production, ActorContext is constructed
+    exclusively from OIDC claims verified by the gateway; the one fenced exception is
+    the dev tier, where the CLI (arrives with PLAN-002 Phase 2) builds ActorContext
+    from local config — permitted only under ENGRAMORY_PROFILE=dev (single-tenant,
+    local store; the factory's require_dev_profile fence lands with the CLI).
   architecture_decision: "@adr: ADR-02"
   diagram:
     tags: ["@diagram: c4-l3", "@diagram: dfd-l3"]
