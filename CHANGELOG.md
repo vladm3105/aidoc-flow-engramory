@@ -46,7 +46,7 @@ multi-agent-reviewed per OPS-0065; 94 tests green vs real Postgres;
   `docs/AGENT-QUICKSTART.md` (add -> distill -> search -> feedback loop,
   3 tracks), `docs/AGENT-INTEGRATION.md` (per-vendor wiring),
   `skills/engramory-memory/SKILL.md`, README "Use it as an agent".
-- **Pre-prod smoke** (this PR) — `make smoke` (`scripts/smoke_preprod.sh`)
+- **Pre-prod smoke** (#40) — `make smoke` (`scripts/smoke_preprod.sh`)
   drives the full loop through the real CLI and asserts SPEC-07 exit
   codes incl. the fence; verified passing 2026-07-11 on the dev host.
 

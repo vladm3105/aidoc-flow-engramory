@@ -10,8 +10,9 @@ start; refresh at milestones and before context compaction.
 **PLAN-002 executed end-to-end** (record: `plans/PLAN-002_preprod-agent-readiness.md`,
 verified-planning: 25 cited claims, 4 independent passes). Engramory is
 now **pre-prod usable as memory by external AI agents** via the CLI face.
-Six PRs merged 2026-07-11 (#33 core, #34 ADR-10 Accepted, #35 SPEC-01
-faces amendment, #36 SPEC-07, #37 CLI, #39 agent docs + Skill):
+Seven PRs merged 2026-07-11 (#33 core, #34 ADR-10 Accepted, #35 SPEC-01
+faces amendment, #36 SPEC-07, #37 CLI, #39 agent docs + Skill, #40 smoke
++ currency):
 
 - **SPEC-01 tool set complete**: memory_feedback / memory_forget /
   agent_profile_get + tenant-scoped get_memory + interim `reflect()`
