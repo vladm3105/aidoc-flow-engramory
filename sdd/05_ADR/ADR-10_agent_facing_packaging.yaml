@@ -10,16 +10,17 @@ metadata:
   id_standard: { format: "{doc_type}.{doc_id}.{section_id}.{hash}", hash_algorithm: SHA256, hash_length: 4 }
 
 document_control:
-  status: Proposed
+  status: Accepted
   date: "2026-07-11"
   decision_makers: ["Founder", "Technical Lead"]
   author: "Engramory team"
-  version: "1.0"
+  version: "1.1"
   originating_topic: "@brd: BRD.01.07.6f01"
   brd_reference: "@brd: BRD.01.07.6f01"
   spec_ready_score: "[Pending]/100"
   revision_history:
     - { version: "1.0", date: "2026-07-11T00:00:00", author: "Engramory team", changes: "Decide how agents reach the access surface before (and after) the MCP gateway exists, applying the workspace evidence from interlog ADR-0003." }
+    - { version: "1.1", date: "2026-07-11T00:00:00", author: "Engramory team", changes: "Status Proposed -> Accepted per founder OK (in-session, 2026-07-11; PLAN-002 gate G0)." }
 
 context:
   problem_statement: |
