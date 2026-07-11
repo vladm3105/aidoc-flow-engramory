@@ -1,0 +1,31 @@
+# Caller for aidoc-flow-ci's reusable markdown-lint workflow (@ci/v1.9.5).
+# REPORT-ONLY during rollout (fail-on-findings: false): cli2 emits ::error PR
+# annotations but the job exits 0 so it never blocks merge. Graduate to
+# blocking (drop the flag; default true) per repo after a
+# `markdownlint-cli2 --fix` remediation pass + adding it to branch protection
+# (tracked: aidoc-flow-ci plans/FRAMEWORK-TODO.md FT-11).
+name: markdown-lint
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  call:
+    uses: vladm3105/aidoc-flow-ci/.github/workflows/markdown-lint.yml@ci/v1.9.5
+    secrets: inherit  # pragma: allowlist secret
+    with:
+      fail-on-findings: false
+      globs: |
+        **/*.md
+        !node_modules
+        !vendor
+        !examples

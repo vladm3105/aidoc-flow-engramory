@@ -4,6 +4,15 @@ All notable changes to Engramory are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+### Added — canon markdown-lint workflow (report-only) (2026-07-11)
+
+Added `.github/workflows/markdown-lint.yml`, a thin caller of the aidoc-flow-ci
+canon `markdown-lint.yml@ci/v1.9.4` reusable (markdownlint-cli2 via npm, no
+blocked third-party action), plus a `.markdownlint.json` config. Deployed
+**report-only** (`continue-on-error`): surfaces markdownlint annotations on PRs
+without blocking merge; graduates to a blocking gate after a `--fix`
+remediation pass.
+
 ### Added — canon secret-scan (gitleaks) workflow (2026-07-11)
 
 Adopted the aidoc-flow-ci secret-scan gate (, gitleaks binary).
