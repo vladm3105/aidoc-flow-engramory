@@ -4,6 +4,11 @@ All notable changes to Engramory are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+### Added — canon secret-scan (gitleaks) workflow (2026-07-11)
+
+Adopted the aidoc-flow-ci secret-scan gate (, gitleaks binary).
+
+
 ### Changed — re-pin aidoc-flow-ci callers to @ci/v1.9.1; adopt App-native ai-review trust-fetch (2026-07-11)
 
 Re-pinned the four `vladm3105/aidoc-flow-ci` callers (ai-review, audit-trail,
