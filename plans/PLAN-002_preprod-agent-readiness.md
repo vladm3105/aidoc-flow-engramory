@@ -3,7 +3,7 @@
 **Status:** COMPLETE 2026-07-11 — executed same day as verified (4 review
 passes; G0 met). Delivered via PRs #33 (Phase 1), #34/#35/#36 (governance
 splits ii/iii/iv), #37 (Phase 2 CLI), #39 (Phase 3 docs + Skill), + the
-Phase 4 currency PR (`make smoke` passing on the dev host). Deferred
+Phase 4 currency PR #40 (`make smoke` passing on the dev host). Deferred
 follow-ups recorded in TODO.md §7.
 **Date:** 2026-07-11
 **Owner:** Engramory team
