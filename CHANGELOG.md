@@ -4,6 +4,14 @@ All notable changes to Engramory are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+### Added — canon docs-sync workflow (dry-run) (2026-07-11)
+
+Added `.github/workflows/docs-sync.yml` (thin caller of aidoc-flow-ci
+`docs-sync.yml@ci/v1.9.5`) + `.github/docs-sync.json`. Post-merge mechanical
+doc-fixer in **dry-run** mode — computes proposed CHANGELOG-stub / version-sync
+changes and comments them on the merged PR; no push-back (bot App only needed
+for live-mode graduation per IPLAN-0018 §3.7).
+
 ### Added — canon markdown-lint workflow (report-only) (2026-07-11)
 
 Added `.github/workflows/markdown-lint.yml`, a thin caller of the aidoc-flow-ci
