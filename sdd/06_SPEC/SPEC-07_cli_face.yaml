@@ -1,0 +1,107 @@
+# SPEC-07 — CLI Face (dev/CI transport over AccessSurface). Upstream: ADR-10, SPEC-01.
+metadata:
+  schema_version: "1.0"
+  document_type: "spec-document"
+  layer: 6
+  total_sections: 8
+  deliverable_type: code
+  c4_level: { value: component }
+  id_standard: { format: "{doc_type}.{doc_id}.{section_id}.{hash}", hash_algorithm: SHA256, hash_length: 4 }
+  tags: [spec-document, layer-6-artifact, shared-architecture]
+
+id: SPEC-07
+title: "CLI Face — engramory dev/CI transport"
+
+document_control:
+  status: Draft
+  version: "1.0"
+  date_created: "2026-07-11T00:00:00"
+  last_updated: "2026-07-11T00:00:00"
+  author: "Engramory team"
+  component: "engramory.cli"
+  tdd_ready_score: "[Pending]/100"
+
+component_overview:
+  description: |
+    The `engramory` console script (alias: `python -m engramory`) — the ADR-10
+    dev/CI face over AccessSurface. A THIN BINDING: it may only construct
+    ActorContext from local config, parse arguments, and map errors to exit
+    codes; the authorize -> audit -> execute order and every SPEC-01 semantic
+    live in AccessSurface. Two commands are dev-tier OPS COMMANDS outside the
+    agent-tool face contract (they are not thin bindings over AccessSurface):
+    `memory distill` (runs the interim reflect worker in-process) and `status`
+    (store reachability + tenant counts). The faces-add-no-logic rule applies
+    to the seven SPEC-01 agent tools, not to these two.
+    TRUST (ADR-10 dev-tier carve-out): the identity in .engramory/config.toml
+    is client-supplied and trusted ONLY under ENGRAMORY_PROFILE=dev —
+    enforced by the factory guard require_dev_profile(), which the CLI calls
+    before any command dispatch.
+    Production identity is gateway-only (OIDC-verified claims).
+  architecture_decision: "@adr: ADR-10"
+  language: "Python"
+  dependencies:
+    - { name: "stdlib only (argparse, tomllib, asyncio, json)", version: ">=3.12", purpose: "No new runtime deps; psycopg arrives via the Repository" }
+
+interfaces:
+  invocation: "engramory [--json] [--config PATH] <command> [args]"
+  global_flags:
+    - { flag: "--json", behavior: "Emit exactly ONE machine-readable JSON object on stdout; diagnostics go to stderr" }
+    - { flag: "--config PATH", behavior: "Explicit config file; default .engramory/config.toml discovered upward from CWD" }
+  exit_codes:  # NORMATIVE (adopted from the interlog CLI-SPEC draft; pinned here)
+    - { code: 0, meaning: "success" }
+    - { code: 1, meaning: "fail-closed reject — authz deny (AuthzError), governed-write reject, invalid input (ValidationError/ValueError), unknown id (KeyError)" }
+    - { code: 2, meaning: "usage / config / environment — argparse errors, missing or malformed config, the ADR-10 dev-tier fence (PermissionError)" }
+    - { code: 3, meaning: "retryable — canonical store unreachable (StoreUnavailable)" }
+  commands:
+    - { name: "init", maps_to: "scaffold + Repository.upsert_agent_profile (best-effort)", notes: "Writes .engramory/config.toml (actor identity + store dsn), appends .engramory/ to .gitignore (config carries a DSN). Idempotent: existing config -> created=false, never overwritten. Profile upsert is best-effort: store-down still exits 0 with profile=deferred (row lands on a later init)." }
+    - { name: "memory add", maps_to: "AccessSurface.memory_add", notes: "--content, --kind (default note); JSON result {episode_id}" }
+    - { name: "memory search", maps_to: "AccessSurface.memory_search", notes: "--query, --scope (default agent), -k (default 8); JSON result {hits: [{memory_id, summary, score, retrieval_id, token_count}]}" }
+    - { name: "memory feedback", maps_to: "AccessSurface.memory_feedback", notes: "--retrieval-id, --outcome (useful|not_useful|harmful); JSON result {ok}" }
+    - { name: "memory forget", maps_to: "AccessSurface.memory_forget", notes: "--memory-id, --reason (audited); JSON result {ok}" }
+    - { name: "memory distill", maps_to: "workers.distillation.reflect (OPS COMMAND)", notes: "Interim reflect pass; JSON result {created}. Replaced in body by the SPEC-04 engine; command survives." }
+    - { name: "profile get", maps_to: "AccessSurface.agent_profile_get", notes: "Caller's own L3 profile; default profile on fresh store; JSON result {agent_id, display_name, standing_preferences}" }
+    - { name: "status", maps_to: "Repository.count_* (OPS COMMAND)", notes: "JSON result {store, episodes, kb_sections} for the caller's tenant" }
+
+data_models:
+  config_file:
+    path: ".engramory/config.toml (discovered upward; --config overrides)"
+    schema: |
+      [actor]
+      agent_id = "<str>"        # required
+      project_id = "<str>"      # required
+      tenant_id = "<str>"       # required
+      scopes = ["agent", "project"]   # optional; MUST be a TOML list (a string is rejected as ConfigError)
+      [store]
+      dsn = "<postgres dsn>"    # required; credentials — the directory is gitignored
+
+behavior:
+  validation_rules:
+    - { rule: "require_dev_profile runs BEFORE any command dispatch; non-dev ENGRAMORY_PROFILE exits 2 naming ADR-10", source: "@adr: ADR.10.03.a100" }
+    - { rule: "AuthzError/GovernedWriteRejected subclass PermissionError and MUST be matched before the fence clause — a surface deny is exit 1, never 2", source: "@spec: SPEC-01" }
+    - { rule: "--json output is exactly one JSON object on stdout; all diagnostics to stderr", source: "@adr: ADR-10" }
+  error_handling:
+    - { condition: "Store unreachable", response: "Exit 3 (retryable); init alone stays exit 0 with profile=deferred", source: "@ears: EARS.01.03.c900" }
+    - { condition: "Missing/malformed config", response: "Exit 2 with the offending path named", source: "@adr: ADR-10" }
+
+implementation_notes:
+  constraints:
+    - "No logic beyond ActorContext construction, arg parsing, error mapping (ADR-10 separation rule)"
+    - "asyncio.run bridges the async surface per command invocation"
+    - "The CLI never touches Repository/ports directly except the two declared ops commands"
+  patterns: ["Thin transport face", "Fence-then-dispatch"]
+
+tdd_contracts:
+  tdd_document: "@tdd: TDD-01"
+  test_files:
+    - { path: "tests/integration/test_cli.py", covers: "exit-code contract incl. authz-deny=1, config discovery upward + --config, --json purity, round-trip add->distill->search->feedback->forget, fence" }
+    - { path: "tests/unit/test_factory_fence.py", covers: "require_dev_profile matrix (param, env default, env override)" }
+
+traceability:
+  tags: ["@spec: SPEC-07"]
+  upstream:
+    adr_references: ["@adr: ADR.10.03.a100"]
+    spec_references: ["@spec: SPEC-01"]
+    ears_references: ["@ears: EARS.01.03.e020", "@ears: EARS.01.03.c900"]
+  downstream:
+    - { type: IPLAN, layer: 8, description: "PLAN-002 Phase 2 implements this face; Phase 3 documents it (INSTALL / AGENT-QUICKSTART / AGENT-INTEGRATION / reference Skill)" }
+  health_score: { tdd_ready: "[Pending]%", target_score: ">=90/100" }
