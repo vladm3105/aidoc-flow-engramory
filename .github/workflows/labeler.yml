@@ -1,0 +1,15 @@
+name: labeler
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  call:
+    uses: vladm3105/aidoc-flow-ci/.github/workflows/labeler.yml@ci/v1.9.2
+    permissions:
+      contents: read
+      pull-requests: write
+    with:
+      runner_labels: '"ubuntu-latest"'

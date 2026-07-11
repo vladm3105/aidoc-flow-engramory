@@ -1,0 +1,19 @@
+# Path -> label map (actions/labeler v5+). Labels must exist in the repo.
+docs:
+  - changed-files:
+      - any-glob-to-any-file: ["docs/**", "**/*.md"]
+workflows:
+  - changed-files:
+      - any-glob-to-any-file: [".github/workflows/**"]
+scripts:
+  - changed-files:
+      - any-glob-to-any-file: ["scripts/**"]
+tests:
+  - changed-files:
+      - any-glob-to-any-file: ["tests/**", "**/test_*.py", "**/*_test.py"]
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file: ["**/requirements*.txt", "**/package.json", "**/pyproject.toml", ".github/dependabot.yml"]
+security:
+  - changed-files:
+      - any-glob-to-any-file: [".github/workflows/secret-scan.yml", ".github/workflows/codeql.yml", "**/SECURITY.md"]
