@@ -9,7 +9,9 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-engramory}
       POSTGRES_USER: ${POSTGRES_USER:-engramory}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
-    ports: ["5432:5432"]
+    # Published port is overridable: hosts where 5432 is taken set
+    # POSTGRES_HOST_PORT (e.g. in .env) — see docs/INSTALL.md (PLAN-002 2.0).
+    ports: ["${POSTGRES_HOST_PORT:-5432}:5432"]
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./db/migrations:/migrations:ro
