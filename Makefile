@@ -1,5 +1,5 @@
 # Engramory dev convenience targets
-.PHONY: help up down logs migrate pull-models lint typecheck test fmt
+.PHONY: help up down logs migrate pull-models lint typecheck test fmt smoke
 .DEFAULT_GOAL := help
 
 # Load .env so host-side commands (migrate) honor your local overrides.
@@ -45,3 +45,6 @@ fmt:           ## Format
 
 test:          ## Run tests
 	pytest
+
+smoke:         ## Pre-prod smoke: full agent memory loop via the engramory CLI (PLAN-002)
+	bash scripts/smoke_preprod.sh

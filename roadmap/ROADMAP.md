@@ -16,11 +16,11 @@ Engramory is the aidoc-flow ecosystem's shared memory & knowledge plane — per-
 
 ## Current status (2026-07-09)
 
-**Phase 0 — dev foundation.** Scaffold + full-depth MVP-1 SDD artifacts are in place; no adapters or running gateway yet.
+**Phase 0 — dev foundation.** Scaffold + full-depth MVP-1 SDD artifacts in place. As of 2026-07-11 (PLAN-002 / ADR-10): the SPEC-01 tool set is complete over AccessSurface, and agents reach it through the **`engramory` CLI dev/CI face** (SPEC-07) with install + agent-usage docs and a reference Skill; `make smoke` verifies the full memory loop on the compose store. The MCP gateway (production face) is still a stub.
 
 **Architecture decisions locked** (`../sdd/05_ADR/`): ADR-05 own the canonical store · ADR-07 scope ladder (`agent/project/domain/space` + `tenant_id`) · ADR-08 single platform, two bounded cores · ADR-09 independent memory storage (the iplan ledger is integrated as an *episode source*, not a backend). Concept validated in [`../docs/research/MEMORY_CONCEPT_REVIEW.md`](../docs/research/MEMORY_CONCEPT_REVIEW.md); build direction in [`../docs/STRATEGY.md`](../docs/STRATEGY.md).
 
-**Next (MVP-1):** the vertical slice — Postgres memory repository + one adopted `MemoryPort` engine (Mem0) + `memory_add`/`memory_search` over MCP — with the evaluation harness and a retrieval→outcome feedback loop built in parallel. Then the learning-half work (confidence dynamics, contradiction handling, memory safety) and the ledger→episode ingestion adapter (ADR-09). The eval harness + feedback loop are MVP-1 exit criteria, not stretch goals.
+**Next (MVP-1):** the vertical slice — Postgres memory repository (done) + one adopted `MemoryPort` engine (Mem0, replacing the interim reflect pass) + `memory_add`/`memory_search` over MCP (the production face; the CLI face already serves dev/CI per ADR-10) — with the evaluation harness (now scriptable via the CLI) and the retrieval→outcome feedback loop (recording shipped 2026-07-11; the SPEC-04 confidence rule consuming it is open) built in parallel. Then the learning-half work (confidence dynamics, contradiction handling, memory safety) and the ledger→episode ingestion adapter (ADR-09). The eval harness + feedback loop are MVP-1 exit criteria, not stretch goals.
 
 **Known issue (CI, operations-owned):** the shared `trust` gate fails on
 every PR here — `ai-review.yml@ci/v1.4.3` fetches the trust allowlist from

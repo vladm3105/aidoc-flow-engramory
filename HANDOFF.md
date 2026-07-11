@@ -5,43 +5,43 @@ workspace's memory plane (durable substrate for AI-agent memory that
 other aidoc-flow projects consume as a subscriber). Read at session
 start; refresh at milestones and before context compaction.
 
-## Current state (2026-07-09, session wrap — MVP-1 implementation underway)
+## Current state (2026-07-11, session wrap — PLAN-002 complete: agent-usable memory plane)
 
-**PLAN-001 remediation COMPLETE** (#13–#21; record at
-`plans/PLAN-001_pre-first-run-remediation.md`) and **MVP-1
-implementation is 3 IPLANs deep**, all merged 2026-07-09:
+**PLAN-002 executed end-to-end** (record: `plans/PLAN-002_preprod-agent-readiness.md`,
+verified-planning: 25 cited claims, 4 independent passes). Engramory is
+now **pre-prod usable as memory by external AI agents** via the CLI face.
+Six PRs merged 2026-07-11 (#33 core, #34 ADR-10 Accepted, #35 SPEC-01
+faces amendment, #36 SPEC-07, #37 CLI, #39 agent docs + Skill):
 
-- **IPLAN-02 COMPLETE** (#22 contracts, #23 repository): typed data
-  contracts + Postgres repository — idempotent episodes, soft-supersede
-  with tenant-guarded writes, ADR-07 visibility-ladder retrieval,
-  active-only default. First runtime dep: `psycopg` (spine per SPEC-06).
-- **IPLAN-06 6/7** (#24): pgvector VectorPort dev adapter + factory +
-  no-vendor-imports architecture guard; `get_memories(query_vec)` does
-  real cosine similarity composed with visibility. Remaining:
-  `reembed_and_reproject` (needs an LLMPort dev adapter).
-- **IPLAN-01 COMPLETE** (#25): default-deny `authorize()`, AccessSurface
-  (authorize→audit→execute, fail-closed incl. audit-store-down),
-  governed `knowledge_ingest`, `memory_search` with MemoryHit
-  {retrieval_id, token_count}, PRD token budget (2000) default, scope
-  containment (ungranted ladder levels never leak — review-caught).
+- **SPEC-01 tool set complete**: memory_feedback / memory_forget /
+  agent_profile_get + tenant-scoped get_memory + interim `reflect()`
+  (episodes -> retrievable memories; SPEC-04 engine replaces the body).
+- **ADR-10 (Accepted)**: CLI + reference Skill = dev/CI face over
+  AccessSurface; MCP gateway = authenticated production face; dev-tier
+  trust carve-out fenced by `require_dev_profile()` (ENGRAMORY_PROFILE=dev).
+- **`engramory` CLI** (SPEC-07): init / memory add/search/feedback/forget/
+  distill / profile get / status; exit codes 0/1/2/3; --json; config
+  discovered upward from `.engramory/config.toml`.
+- **Agent docs**: docs/INSTALL.md, AGENT-QUICKSTART.md, AGENT-INTEGRATION.md
+  + skills/engramory-memory/SKILL.md + README agent section.
+- **Verified**: 94 tests vs real Postgres; `make smoke` (full agent loop
+  incl. fence) passing on the dev host (compose store, POSTGRES_HOST_PORT
+  override — host 5432 is foreign-owned).
 
-49 tests across four tiers vs real Postgres (ephemeral-container
-fixture at `tests/conftest.py`; CI skips container tests until a
-`services:` postgres + ENGRAMORY_TEST_DSN is added to ci.yml);
-`mypy --strict` + ruff clean. Every PR carried a multi-agent OPS-0065
-review; 4 security holes were folded pre-push in #25 alone.
+CI note: ai-review runs are frequently superseded-cancelled and read as
+"fail" in the rollup — `gh run rerun --failed` clears them (happened on
+every PR this session). Trust-fetch works App-natively since ci/v1.9.1
+(TODO §1 resolved).
 
 **Next engineering work (pick one):** (a) LLMPort dev adapter
-(LiteLLM/Ollama) → query embeddings + SPEC-03 rank fusion + reembed
-tool (closes IPLAN-06); (b) memory_feedback/memory_forget/
-agent_profile_get tools (SPEC-04 confidence rule; scope
-`Repository.get_memory` to tenant first — see IPLAN-01 handoff
-follow-ups); (c) MCP transport binding over AccessSurface; (d) eval
-harness (MVP-1 exit criterion per ROADMAP).
-
-**Still open (founder-gated):** `AI_REVIEW_TOKEN` secret (`TODO.md` §1)
-and F5 App/branch-protection (`TODO.md` §2; `APP_REVIEWER_1_*` secrets
-already added 2026-07-09).
+(LiteLLM/Ollama) -> query embeddings + SPEC-03 rank fusion + reembed tool
+(closes IPLAN-06); (b) **eval harness** (MVP-1 exit criterion — the CLI
+makes it scriptable now); (c) MCP gateway binding + OIDC ActorContext
+(ADR-10 production face; revisit trigger: CLI may become its thin
+client); (d) Mem0 adoption behind MemoryPort (replaces interim reflect).
+Deferred follow-ups: within-tenant write containment for retire/feedback
+(gateway concern, security review note PR #33); agent_profiles is
+untenanted (dev-tier assumption, revisit with gateway).
 
 ## Open threads
 
