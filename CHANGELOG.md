@@ -4,6 +4,15 @@ All notable changes to Engramory are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+### Changed — re-pin aidoc-flow-ci callers to @ci/v1.9.1; adopt App-native ai-review trust-fetch (2026-07-11)
+
+Re-pinned the four `vladm3105/aidoc-flow-ci` callers (ai-review, audit-trail,
+auto-merge-ai-prs, composition) to `@ci/v1.9.1` via `install.sh --repin`
+(version-only; also fixes the stale audit-trail `v1.6.0` pin). v1.9.1's ai-review
+mints its trust-config read token from the reviewer App instead of a per-repo
+`AI_REVIEW_TOKEN` PAT — fixing the `repository not found` trust-fetch failure with
+no secret needed (App installed on `aidoc-flow-operations` with `contents: read`).
+
 ### Added — MVP-1 implementation: store, adapters, access surface (2026-07-09)
 
 First working code of the memory plane — three IPLANs, TDD-first across
