@@ -1,13 +1,14 @@
 # PLAN-002 — Pre-prod agent readiness: an agent-usable memory plane with full install + usage documentation
 
-**Status:** draft (pending independent review + ADR-10 acceptance)
+**Status:** ready — verified 2026-07-11 (4 review passes, final pass clean);
+ADR-10 accepted per founder OK (gate G0 met); execution underway
 **Date:** 2026-07-11
 **Owner:** Engramory team
 **Origin:** founder goal 2026-07-11 — "make engramory ready for pre-prod run,
 to be used by other agents, including full documentation — how to use
 engramory by other AI agents, how to install and other guidance."
 **Decision foundation:** `sdd/05_ADR/ADR-10_agent_facing_packaging.yaml`
-(Proposed) — layered thin faces over AccessSurface: CLI + reference Skill as
+(Accepted) — layered thin faces over AccessSurface: CLI + reference Skill as
 the dev/CI face now; MCP gateway remains the authenticated production face.
 
 ## Goal
