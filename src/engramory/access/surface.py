@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from engramory.access.authz import ActorContext, AuthzDecision, TargetScope, authorize
-from engramory.core.models import Episode, KBSection
+from engramory.core.models import AgentProfile, Episode, KBSection
 from engramory.core.repository import Repository
 
 # PRD.01.perf.context_token_budget — the default cap on injected context.
@@ -80,17 +80,22 @@ class AccessSurface:
         self._repo = repository
 
     async def _decide(
-        self, ctx: ActorContext, action: str, target: TargetScope
+        self, ctx: ActorContext, action: str, target: TargetScope, note: str | None = None
     ) -> AuthzDecision:
-        """Authorize and audit; raise AuthzError on deny (after the audit lands)."""
+        """Authorize and audit; raise AuthzError on deny (after the audit lands).
+
+        ``note`` appends caller-supplied context (e.g. a forget reason) to the
+        audited decision reason — one audit row per decision, never a second.
+        """
         decision = authorize(ctx, action, target)
+        reason = decision.reason if note is None else f"{decision.reason}: {note}"
         await self._repo.record_audit(
             tenant_id=ctx.tenant_id,
             agent_id=ctx.agent_id,
             project_id=ctx.project_id,
             action=action,
             allowed=decision.allowed,
-            reason=decision.reason,
+            reason=reason,
         )
         if not decision.allowed:
             raise AuthzError(f"{action}: {decision.reason}")
@@ -180,6 +185,40 @@ class AccessSurface:
             metadata=metadata or {},
         )
         return await self._repo.add_episode(episode)
+
+    async def memory_feedback(
+        self, ctx: ActorContext, retrieval_id: str, outcome: str
+    ) -> None:
+        """Record a retrieval outcome (useful | not_useful | harmful) — the
+        signal for the SPEC-04 confidence-update rule. Bound to the caller's
+        tenant; a foreign retrieval_id raises KeyError like a missing one."""
+        await self._decide(
+            ctx, "memory_feedback", TargetScope(tenant_id=ctx.tenant_id, scope="agent")
+        )
+        await self._repo.record_feedback(retrieval_id, outcome, tenant_id=ctx.tenant_id)
+
+    async def memory_forget(
+        self, ctx: ActorContext, memory_id: str, *, reason: str
+    ) -> None:
+        """Retire a memory (soft: end-date + supersede status; audited with the
+        caller's reason). A foreign memory_id raises KeyError like a missing
+        one — existence never crosses the tenant wall."""
+        await self._decide(
+            ctx,
+            "memory_forget",
+            TargetScope(tenant_id=ctx.tenant_id, scope="agent"),
+            note=reason,
+        )
+        await self._repo.retire_memory(memory_id, tenant_id=ctx.tenant_id)
+
+    async def agent_profile_get(self, ctx: ActorContext) -> AgentProfile:
+        """Load the caller's own L3 identity profile — never another agent's.
+        A fresh store yields a default profile (no error)."""
+        await self._decide(
+            ctx, "agent_profile_get", TargetScope(tenant_id=ctx.tenant_id, scope="agent")
+        )
+        profile = await self._repo.get_agent_profile(ctx.agent_id)
+        return profile if profile is not None else AgentProfile(agent_id=ctx.agent_id)
 
     async def knowledge_ingest(
         self,

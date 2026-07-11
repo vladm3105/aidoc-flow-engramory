@@ -1,0 +1,170 @@
+# ADR-10 — Agent-facing packaging: layered thin faces over AccessSurface (CLI + reference Skill now; MCP gateway stays the production surface).
+id: ADR-10
+title: "Agent-facing packaging: CLI + reference Skill as the dev/CI face over AccessSurface; MCP gateway remains the authenticated production surface"
+
+metadata:
+  schema_version: "1.0"
+  document_type: "adr-document"
+  layer: 5
+  lifecycle: mvp-prod-newmvp
+  id_standard: { format: "{doc_type}.{doc_id}.{section_id}.{hash}", hash_algorithm: SHA256, hash_length: 4 }
+
+document_control:
+  status: Proposed
+  date: "2026-07-11"
+  decision_makers: ["Founder", "Technical Lead"]
+  author: "Engramory team"
+  version: "1.0"
+  originating_topic: "@brd: BRD.01.07.6f01"
+  brd_reference: "@brd: BRD.01.07.6f01"
+  spec_ready_score: "[Pending]/100"
+  revision_history:
+    - { version: "1.0", date: "2026-07-11T00:00:00", author: "Engramory team", changes: "Decide how agents reach the access surface before (and after) the MCP gateway exists, applying the workspace evidence from interlog ADR-0003." }
+
+context:
+  problem_statement: |
+    SPEC-01 describes AccessSurface as "the single MCP-exposed surface", but the MCP
+    gateway is a Phase-0 stub (src/engramory/mcp/server.py) and its trust model
+    requires OIDC infrastructure that does not exist yet. Meanwhile the MVP-1
+    vertical slice needs memory_add/memory_search usable by a real agent, and the
+    MVP-1 eval harness needs a scriptable way to drive search -> outcome feedback
+    loops. Separately, interlog resolved the same packaging question on 2026-07-11
+    (interlog docs/adr/ADR-0003): CLI + library as the vendor-neutral SDK, one
+    reference Skill as the interactive face, MCP deferred. The question here:
+    which parts of that packaging apply to Engramory, whose access surface —
+    unlike interlog's local-first outbox — fronts a live, multi-tenant store with
+    a verified-identity trust model?
+  business_driver: "Give the MVP-1 slice and eval harness an agent-usable interface now, without weakening the authenticated production surface BRD-01 promises."
+  key_constraints:
+    - "Trust model (SPEC-01 / access/surface.py): ActorContext is an authenticated principal built exclusively from verified OIDC claims; nothing client-supplied may reach ActorContext.tenant_id or .scopes."
+    - "Every call is authorized (default deny), audited, and fails closed (EARS.01.03.e020, ADR-06); governed writes require approved evidence (EARS.01.03.a700)."
+    - "Engramory state lives in a running Postgres (ADR-01/ADR-05) — not local-first; a face without store connectivity cannot exist."
+    - "BRD.01.04.a1f0 targets all four agent types reading/writing KB + memory via MCP in the MVP."
+    - "Advisory/quarantined memories stay unreachable through any agent-facing face (EARS.01.03.b800) — a new face must not create a bypass."
+
+evidence:
+  source: "interlog docs/adr/ADR-0003 (Accepted 2026-07-11) — four-angle deep-research pass, 24/25 claims confirmed under 3-vote adversarial verification; Anthropic 'Code execution with MCP' + 'Agent Skills' engineering posts as primaries."
+  load_bearing_findings:
+    - "Skills and MCP are complementary: a Skill carries procedural judgment at ~30-100 idle tokens; MCP tool definitions load per connection (~100-900 tokens/tool, Anthropic self-reported 55K-134K for a 58-tool setup)."
+    - "A plain CLI is the only packaging that works with no agent host at all (CI, shell scripts, eval harnesses)."
+    - "The boundary where MCP remains the right layer: state living in another running system, scoped/revocable auth, multi-tenant exposure, no-shell/hosted agent hosts."
+  application_to_engramory: |
+    Engramory sits on the MCP side of that boundary on three counts — live store,
+    OIDC-verified identity, multi-tenant scoping — so interlog's "defer MCP"
+    conclusion does NOT transfer. Its layering does: one core, thin faces, one
+    reference Skill, vendor-neutral CLI. Engramory adopts the layering and keeps
+    the MCP gateway as the production face rather than a deferred one.
+
+decision:
+  chosen_solution:
+    id: "ADR.10.03.a100"
+    title: "Layered thin faces over one core: CLI + reference Skill as the dev/CI face now; MCP gateway unchanged as the authenticated production surface"
+    description: |
+      AccessSurface stays the single core; every face is a thin binding over it.
+        1. FACES ADD NO LOGIC. A face may only construct ActorContext, parse
+           arguments, and map errors; the authorize -> audit -> execute order and
+           all SPEC-01 semantics live in AccessSurface alone. No face bypasses
+           curation (mirrors interlog MCP-TOOLS.md's wrapper rule).
+        2. CLI + LIBRARY = the dev/CI face. An `engramory` console script (and
+           `python -m engramory`) exposing the SPEC-01 tool set (memory add /
+           search / feedback / forget, agent-profile get, knowledge ingest) with
+           `--json` machine-readable output and the interlog exit-code contract
+           (0 success / 1 fail-closed reject / 2 usage-config / 3 retryable).
+        3. DEV-TIER TRUST CARVE-OUT (the one fenced exception to the SPEC-01
+           trust model): the CLI constructs ActorContext from local config
+           (`.engramory/config.toml` + env), i.e. client-supplied identity.
+           Permitted ONLY in the dev tier — single-tenant, local/compose
+           Postgres, no network exposure; the adapter factory refuses the CLI
+           face outside profile=dev. Production access remains gateway-only
+           with OIDC-verified claims. This carve-out is why the CLI can exist
+           before the identity provider does.
+        4. ONE REFERENCE SKILL, authored once. `skills/engramory-memory/SKILL.md`
+           carries the judgment (what is worth remembering, scope discipline,
+           when to send memory_feedback) and delegates mechanics to
+           `engramory --help`. Other vendors point their own instruction files
+           (AGENTS.md / GEMINI.md / copilot-instructions) at the same
+           AGENT-QUICKSTART; no per-vendor tool or skill matrix.
+        5. MCP GATEWAY REMAINS THE PRODUCTION FACE — not deferred indefinitely
+           (contra interlog ADR-0003, per its own boundary). SPEC-01's "single
+           MCP-exposed surface" wording is amended to "single access surface
+           (AccessSurface) with thin transport faces; the MCP gateway is the
+           authenticated production face". BRD.01.04.a1f0's MCP target stands.
+  key_components:
+    - { name: "AccessSurface", role: "The one core: authorize -> audit -> execute; all SPEC-01 semantics (exists: src/engramory/access/surface.py)" }
+    - { name: "engramory CLI + library", role: "Dev/CI face; SPEC-01 tool set over AccessSurface; --json; exit codes 0/1/2/3" }
+    - { name: "Reference Skill", role: "skills/engramory-memory/SKILL.md — judgment layer for Claude-based agents; ~30-100 idle tokens" }
+    - { name: "Agent onboarding docs", role: "AGENT-QUICKSTART.md + AGENT-INTEGRATION.md following the interlog three-part pattern (trigger + discipline + pointer to --help)" }
+    - { name: "MCP gateway", role: "Production face (src/engramory/mcp/) — OIDC-verified ActorContext, multi-tenant, no-shell hosts; SPEC-01 unchanged as its tool contract" }
+  separation_rules:
+    - "No face bypasses AccessSurface; a face never touches Repository or ports directly."
+    - "Client-constructed ActorContext exists only behind the dev-tier fence; the gateway is the only production identity path."
+    - "Procedural agent guidance is authored once (quickstart + one reference Skill); vendor instruction files only point at it."
+  implementation_approach:
+    mvp_scope: "CLI face over the existing AccessSurface + dev Postgres; reference Skill + AGENT-QUICKSTART; SPEC-01 wording amendment; eval harness drives the CLI."
+    next_cycle_scope: "MCP gateway binding + OIDC ActorContext construction (Keycloak dev first); then re-evaluate whether the CLI becomes a thin client of the gateway (see revisit triggers)."
+  reversibility: "two-way"  # faces are additive bindings over one core; removing one deletes no semantics
+
+alternatives:
+  options:
+    - id: "ADR.10.04.a100"
+      name: "Layered faces: CLI + Skill dev face now, MCP gateway as the production face"
+      selected: true
+      description: "Adopt interlog ADR-0003's layering; reject its MCP deferral per its own boundary test."
+      pros: ["MVP-1 slice + eval harness get an agent-usable, scriptable face without OIDC", "One code path shared by CI, agents, humans", "~30-100-token idle interactive face", "Vendor-neutral by construction", "MCP contract (SPEC-01) already written and reviewed — gateway de-risked"]
+      cons: ["A named dev-tier exception to the trust model", "Two faces to keep in sync (mitigated: faces add no logic)"]
+      fit: Best
+    - id: "ADR.10.04.b200"
+      name: "MCP-only first (status-quo reading of SPEC-01)"
+      selected: false
+      description: "Build the MCP gateway + OIDC before any agent can touch the surface."
+      cons: ["No CI/shell/eval-harness path at all", "MVP-1 slice blocked behind identity infrastructure", "Per-session token cost of tool definitions for a ~7-tool surface", "interlog ADR-0003 rejected the analogous MCP-only option for the same reason"]
+      rejection_reason: "Slowest path to the MVP-1 exit criteria (vertical slice + eval harness), and leaves CI/scripted consumers unserved even after it ships."
+      fit: Poor
+    - id: "ADR.10.04.c300"
+      name: "CLI-only; defer MCP indefinitely (full interlog ADR-0003 transplant)"
+      selected: false
+      description: "Treat the CLI as the sole SDK and park the gateway as a B-phase-style deferral."
+      cons: ["Engramory fails interlog's own boundary test: state in a running system, verified multi-tenant identity, expected hosted/no-shell consumers", "Client-constructed identity would have to grow into the production path", "Contradicts BRD.01.04.a1f0 (all agent types over MCP in the MVP)"]
+      rejection_reason: "Interlog could defer MCP because its C-phase is local-first with no live service; Engramory's plane IS the live service."
+      fit: Poor
+
+consequences:
+  positive_outcomes:
+    - { id: "ADR.10.05.a100", outcome: "The MVP-1 vertical slice and eval harness gain a working agent interface (CLI + Skill) with no dependency on identity infrastructure; the production surface and its trust model are untouched." }
+    - { id: "ADR.10.05.a200", outcome: "One authored judgment layer (Skill + quickstart) serves every vendor; no per-vendor tool matrix." }
+  tradeoffs_and_risks:
+    - { id: "ADR.10.05.b200", tradeoff: "Dev-tier carve-out admits client-supplied identity in dev", impact: Medium, mitigation: "Fenced: factory refuses the CLI face outside profile=dev; single-tenant local store only; the fence is stated in SPEC-01's trust-model section, the CLI spec, and the Skill." }
+    - { id: "ADR.10.05.b300", tradeoff: "Two faces could drift", impact: Low, mitigation: "Faces add no logic; conformance tests run once against AccessSurface, faces get thin binding tests only." }
+  what_breaks_if_wrong: "If the CLI face escapes the dev fence into shared or production deployments, client-constructed ActorContext bypasses tenant isolation — the exact failure the SPEC-01 trust model exists to prevent. The fence (factory guard + gateway-only production rule) is the control."
+  revisit_triggers:
+    - "The MCP gateway + OIDC ActorContext construction lands — decide whether the CLI becomes a thin client of the gateway (inheriting verified identity) or stays a dev-only direct face."
+    - "A no-shell / hosted agent consumer appears before the gateway ships — the gateway's priority rises."
+    - "Multi-tenant or shared dev environments appear — the dev-tier fence as specified no longer holds."
+    - "MCP progressive-discovery economics change materially (interlog ADR-0003 carries the same caveat)."
+
+traceability:
+  tags: ["@adr: ADR-10"]
+  originating_topic: "@brd: BRD.01.07.6f01"
+  upstream:
+    ears_references: ["@ears: EARS.01.03.e020", "@ears: EARS.01.03.a700", "@ears: EARS.01.03.b800"]
+  downstream_expected:
+    - { type: SPEC, layer: 6, description: "SPEC-01 amendment: 'single MCP-exposed surface' -> 'single access surface with thin transport faces; MCP gateway = production face' + the dev-tier trust carve-out in the trust-model section." }
+    - { type: SPEC, layer: 6, description: "CLI-face spec (commands, --json result shapes, exit-code contract 0/1/2/3, config discovery) — the engramory analogue of interlog CLI-SPEC.md." }
+    - { type: IPLAN, layer: 8, description: "Implementation plan: engramory CLI + reference Skill + AGENT-QUICKSTART/AGENT-INTEGRATION docs, sequenced with the MVP-1 slice." }
+  cross_links:
+    depends: ["ADR-02", "ADR-06", "ADR-07"]
+    external: ["interlog docs/adr/ADR-0003_agent-facing-packaging-cli-skill-mcp-deferred.md (evidence source; its boundary test applied, its deferral rejected)"]
+  health_score: { spec_ready: "[Pending]%", target_score: ">=90/100" }
+
+related_decisions:
+  dependencies:
+    - { adr: "ADR-02", relationship: "Extends", rationale: "Ports & adapters applied to the north side: AccessSurface is the one core, transports are swappable thin faces." }
+    - { adr: "ADR-06", relationship: "Constrains", rationale: "Fail-closed + governed-write semantics live in AccessSurface and are identical through every face; no face may soften them." }
+    - { adr: "ADR-07", relationship: "Constrains", rationale: "Scope ladder + tenant isolation are enforced below the faces; the dev-tier carve-out is tolerable only because dev is single-tenant." }
+  supersedes: { items: [] }
+
+glossary:
+  terms:
+    - { term: "face", definition: "A thin transport binding over AccessSurface (CLI, MCP gateway) that adds identity construction, argument parsing, and error mapping — never authorization, audit, or business logic." }
+    - { term: "dev tier", definition: "Single-tenant local development: compose/ephemeral Postgres, no network exposure, profile=dev in the adapter factory." }
+    - { term: "reference Skill", definition: "The single Claude SKILL.md carrying when/how judgment for the CLI; other vendors reach the same capability via their own instruction file pointing at the shared quickstart." }

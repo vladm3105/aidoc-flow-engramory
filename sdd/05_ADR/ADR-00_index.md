@@ -36,5 +36,6 @@ Index of Architecture Decision Records for **Engramory**.
 | ADR-07 | Scope ladder (agent/project/domain/space) + tenant_id isolation | Accepted | Two-way | [ADR-07_scope_model.yaml](ADR-07_scope_model.yaml) |
 | ADR-08 | Single platform, two bounded cores — Memory and Knowledge | Accepted | Two-way | [ADR-08_two_bounded_cores.yaml](ADR-08_two_bounded_cores.yaml) |
 | ADR-09 | Independent memory storage; integrate the iplan ledger as an episode source | Accepted | Two-way | [ADR-09_independent_memory_storage.yaml](ADR-09_independent_memory_storage.yaml) |
+| ADR-10 | Agent-facing packaging: CLI + reference Skill dev/CI face over AccessSurface; MCP gateway remains the production surface | Proposed | Two-way | [ADR-10_agent_facing_packaging.yaml](ADR-10_agent_facing_packaging.yaml) |
 
-*Last Updated: 2026-07-09*
+*Last Updated: 2026-07-11*
