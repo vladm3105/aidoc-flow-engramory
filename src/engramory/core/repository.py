@@ -19,7 +19,11 @@ from typing import Any
 import psycopg
 from psycopg.rows import dict_row
 
-from engramory.core.models import Episode, KBSection, Memory
+from engramory.core.models import AgentProfile, Episode, KBSection, Memory
+
+# memory_retrievals.feedback CHECK domain (migration 0003) — enforced here so a
+# bad outcome fails before it reaches Postgres.
+FEEDBACK_OUTCOMES = frozenset({"useful", "not_useful", "harmful"})
 
 # ADR-07 visibility ladder, one clause per level. get_memories() includes ONLY
 # the levels the caller was actually granted — an ungranted level (e.g. 'space')
@@ -167,18 +171,161 @@ class Repository:
                 )
             return str(row["id"])
 
-    async def get_memory(self, memory_id: str) -> Memory:
-        """Fetch one memory by id regardless of status (audit/supersede chains)."""
+    async def get_memory(self, memory_id: str, *, tenant_id: str) -> Memory:
+        """Fetch one memory by id regardless of status (audit/supersede chains).
+
+        Tenant-guarded: a foreign tenant's id raises KeyError exactly like a
+        missing one — existence is never disclosed across the wall (ADR-07).
+        """
         async with self._conn() as conn:
             row = await (
                 await conn.execute(
-                    f"SELECT {_MEMORY_COLUMNS} FROM memories WHERE id = %(id)s",
-                    {"id": memory_id},
+                    f"""
+                    SELECT {_MEMORY_COLUMNS} FROM memories
+                    WHERE id = %(id)s AND tenant_id = %(tenant_id)s
+                    """,
+                    {"id": memory_id, "tenant_id": tenant_id},
                 )
             ).fetchone()
             if row is None:
                 raise KeyError(memory_id)
             return _hydrate_memory(row)
+
+    async def retire_memory(self, memory_id: str, *, tenant_id: str) -> None:
+        """Soft-retire (SPEC-01 memory_forget): end-date + mark superseded;
+        content and provenance are retained, never deleted. Tenant-guarded;
+        KeyError when the id is missing, foreign, or already retired."""
+        async with self._conn() as conn:
+            cur = await conn.execute(
+                """
+                UPDATE memories
+                SET valid_to = now(), status = 'superseded'
+                WHERE id = %(id)s AND tenant_id = %(tenant_id)s AND valid_to IS NULL
+                """,
+                {"id": memory_id, "tenant_id": tenant_id},
+            )
+            if cur.rowcount != 1:
+                raise KeyError(memory_id)
+
+    async def record_feedback(
+        self, retrieval_id: str, outcome: str, *, tenant_id: str
+    ) -> None:
+        """Stamp a retrieval outcome (SPEC-01 memory_feedback -> SPEC-04
+        confidence rule). Tenant-guarded; KeyError when the retrieval is
+        missing or foreign."""
+        if outcome not in FEEDBACK_OUTCOMES:
+            raise ValueError(
+                f"feedback outcome must be one of {sorted(FEEDBACK_OUTCOMES)}: {outcome!r}"
+            )
+        async with self._conn() as conn:
+            cur = await conn.execute(
+                """
+                UPDATE memory_retrievals
+                SET feedback = %(outcome)s, feedback_at = now()
+                WHERE id = %(id)s AND tenant_id = %(tenant_id)s
+                """,
+                {"id": retrieval_id, "outcome": outcome, "tenant_id": tenant_id},
+            )
+            if cur.rowcount != 1:
+                raise KeyError(retrieval_id)
+
+    async def get_retrieval_feedback(
+        self, *, tenant_id: str, memory_id: str
+    ) -> list[str | None]:
+        """Feedback values for a memory's retrievals, oldest first (tests/eval)."""
+        async with self._conn() as conn:
+            rows = await (
+                await conn.execute(
+                    """
+                    SELECT feedback FROM memory_retrievals
+                    WHERE tenant_id = %(tenant_id)s AND memory_id = %(memory_id)s
+                    ORDER BY retrieved_at, id
+                    """,
+                    {"tenant_id": tenant_id, "memory_id": memory_id},
+                )
+            ).fetchall()
+            return [row["feedback"] for row in rows]
+
+    async def get_agent_profile(self, agent_id: str) -> AgentProfile | None:
+        """L3 identity row, or None when the agent has no profile yet.
+
+        NOTE: agent_profiles is keyed by agent_id alone (no tenant column) —
+        acceptable only under the single-tenant dev tier; revisit with the
+        gateway (PLAN-002 Phase 1.3 stated assumption).
+        """
+        async with self._conn() as conn:
+            row = await (
+                await conn.execute(
+                    """
+                    SELECT agent_id, display_name, standing_preferences
+                    FROM agent_profiles WHERE agent_id = %(agent_id)s
+                    """,
+                    {"agent_id": agent_id},
+                )
+            ).fetchone()
+            if row is None:
+                return None
+            return AgentProfile(
+                agent_id=row["agent_id"],
+                display_name=row["display_name"],
+                standing_preferences=row["standing_preferences"] or {},
+            )
+
+    async def upsert_agent_profile(self, profile: AgentProfile) -> None:
+        """Create/update the L3 identity row (updated_at kept by trigger)."""
+        async with self._conn() as conn:
+            await conn.execute(
+                """
+                INSERT INTO agent_profiles (agent_id, display_name, standing_preferences)
+                VALUES (%(agent_id)s, %(display_name)s, %(standing_preferences)s)
+                ON CONFLICT (agent_id) DO UPDATE
+                    SET display_name = EXCLUDED.display_name,
+                        standing_preferences = EXCLUDED.standing_preferences
+                """,
+                {
+                    "agent_id": profile.agent_id,
+                    "display_name": profile.display_name,
+                    "standing_preferences": json.dumps(dict(profile.standing_preferences)),
+                },
+            )
+
+    async def get_unreflected_episodes(
+        self, *, tenant_id: str, agent_id: str, limit: int = 500
+    ) -> list[Episode]:
+        """Episodes not yet projected into memories (interim reflect pass;
+        PLAN-002 Phase 1.4). Projection linkage: memories.provenance->>'episode_id'."""
+        async with self._conn() as conn:
+            rows = await (
+                await conn.execute(
+                    """
+                    SELECT id, agent_id, project_id, domain_id, tenant_id, kind,
+                           content_raw, metadata
+                    FROM episodes e
+                    WHERE tenant_id = %(tenant_id)s AND agent_id = %(agent_id)s
+                      AND NOT EXISTS (
+                          SELECT 1 FROM memories m
+                          WHERE m.tenant_id = e.tenant_id
+                            AND m.provenance->>'episode_id' = e.id::text
+                      )
+                    ORDER BY ts, id
+                    LIMIT %(limit)s
+                    """,
+                    {"tenant_id": tenant_id, "agent_id": agent_id, "limit": limit},
+                )
+            ).fetchall()
+            return [
+                Episode(
+                    agent_id=row["agent_id"],
+                    content_raw=row["content_raw"],
+                    project_id=row["project_id"],
+                    domain_id=row["domain_id"],
+                    tenant_id=row["tenant_id"],
+                    kind=row["kind"],
+                    metadata=row["metadata"] or {},
+                    id=str(row["id"]),
+                )
+                for row in rows
+            ]
 
     async def get_memories(
         self,

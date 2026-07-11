@@ -58,8 +58,8 @@ async def test_supersede_end_dates_predecessor(repo: Repository) -> None:
             supersedes=m1_id,
         )
     )
-    m1 = await repo.get_memory(m1_id)
-    m2 = await repo.get_memory(m2_id)
+    m1 = await repo.get_memory(m1_id, tenant_id="t-sup")
+    m2 = await repo.get_memory(m2_id, tenant_id="t-sup")
     assert m1.valid_to is not None and m1.status == "superseded"
     assert m1.content_raw == "always pin image tags"  # retained, never deleted
     assert m2.supersedes == m1_id
@@ -103,7 +103,7 @@ async def test_store_unavailable_wraps_connectivity() -> None:
 
 async def test_get_memory_missing_raises(repo: Repository) -> None:
     with pytest.raises(KeyError):
-        await repo.get_memory("00000000-0000-0000-0000-000000000000")
+        await repo.get_memory("00000000-0000-0000-0000-000000000000", tenant_id="t")
 
 
 async def test_query_vec_similarity_respects_visibility(repo: Repository) -> None:
