@@ -215,3 +215,5 @@ Multi-agent self-review per OPS-0065 (code-reviewer + documentation-specialist p
 - Scope vocabulary unified across schema/SPEC/docs: isolation column renamed `space_id` → `tenant_id`; the `shared` scope value is retired in favor of `space` (tenant-wide). See ADR-07.
 - `make migrate` now applies **all** `db/migrations/*.sql` in order (was hard-coded to 0001) and loads `.env`.
 - ADR homes clarified: `sdd/05_ADR/` is canonical/implementing; `docs/adr/` is conceptual/descriptive.
+
+<!-- ci: verify ai-review App-native trust-fetch (v1.9.1) — 2026-07-11 -->
