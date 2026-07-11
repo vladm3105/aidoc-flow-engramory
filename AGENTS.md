@@ -5,7 +5,7 @@ This file orients any AI agent (Claude Code, Codex, Hermes, custom) working on t
 
 ## What Engramory is
 The shared memory + knowledge core for our AI projects (aidoc-flow, iplanic, aidoc-flow-operations, ...).
-It provides L0 knowledge base + L1 short-term + L2 long-term distilled + L3 per-agent memory, exposed over MCP.
+It provides L0 knowledge base + L1 short-term + L2 long-term distilled + L3 per-agent memory, exposed through thin faces over one access surface (ADR-10): the `engramory` CLI (dev/CI face) and the MCP gateway (authenticated production face).
 
 ## Architecture you must respect
 - **Ports & adapters.** Import from `engramory.ports`. Never call a vendor SDK or a concrete adapter from core/business code.
