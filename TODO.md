@@ -11,9 +11,11 @@ engramory-side work.
 
 ---
 
-## 1. 🔴 CI `call / trust` fails on `ai-review.yml` — public repo cannot fetch trust config from private `aidoc-flow-operations`
+## 1. ~~🔴 CI `call / trust` fails on `ai-review.yml`~~ — RESOLVED 2026-07-11
 
-**Status:** open. First hit: prior sessions; observed again on PR #6 (Wave 3 canon-adoption, 2026-07-08); merged with `--admin` bypass because `call / verify` (OPS-0069 audit-trail check) passed independently and the failing check is pre-existing infrastructure debt orthogonal to the PR content.
+**Status:** RESOLVED — ci/v1.9.1 mints the trust-config read token from the reviewer App (no `AI_REVIEW_TOKEN` PAT needed); `call / trust` passed on every PLAN-002 PR (#33–#39, 2026-07-11). Original record below.
+
+**Status (original):** open. First hit: prior sessions; observed again on PR #6 (Wave 3 canon-adoption, 2026-07-08); merged with `--admin` bypass because `call / verify` (OPS-0069 audit-trail check) passed independently and the failing check is pre-existing infrastructure debt orthogonal to the PR content.
 
 **Symptom (from PR #6 CI log):**
 
@@ -133,9 +135,11 @@ collisions in `upsert_kb_section`. Decide before multi-project onboarding
 
 **Discovered.** 2026-07-09 (IPLAN-01 security review).
 
-## 6. 🟡 `Repository.get_memory` has no tenant binding — scope before wiring `memory_feedback`
+## 6. ~~🟡 `Repository.get_memory` has no tenant binding~~ — RESOLVED 2026-07-11
 
-**Status:** open. `get_memory(id)` fetches any tenant's row and its
+**Status:** RESOLVED in PR #33 (PLAN-002 Phase 1): `get_memory(memory_id, *, tenant_id)` WHERE-guarded; `memory_feedback`/`memory_forget` ride on tenant-guarded `record_feedback`/`retire_memory` (foreign id ≡ missing id). Original record below.
+
+**Status (original):** open. `get_memory(id)` fetches any tenant's row and its
 `KeyError` echoes the id (existence probe). Safe today — only tests and
 same-tenant supersede flows call it — but `memory_feedback` /
 `memory_forget` (next tools, SPEC-01) take caller-supplied ids and MUST
@@ -156,8 +160,15 @@ and `roadmap/ROADMAP.md`:
 
 - LLMPort dev adapter (LiteLLM/Ollama) → query embeddings, SPEC-03 rank
   fusion, `reembed_and_reproject` (closes IPLAN-06, 7/7)
-- `memory_feedback` / `memory_forget` / `agent_profile_get` tools with the
-  SPEC-04 confidence rule (after §6)
-- MCP transport binding over `AccessSurface` (`engramory.mcp`)
+- ~~`memory_feedback` / `memory_forget` / `agent_profile_get` tools~~ —
+  DONE 2026-07-11 (PR #33, PLAN-002 Phase 1); the SPEC-04 confidence
+  *rule* consuming the recorded feedback is still open
 - Eval harness + retrieval→outcome feedback loop (MVP-1 **exit criteria**
-  per ROADMAP)
+  per ROADMAP) — now scriptable via the `engramory` CLI (PLAN-002
+  delivered the CLI face + docs; outcome *recording* shipped in #33; the
+  SPEC-04 confidence rule consuming it is open)
+- MCP gateway binding over `AccessSurface` (`engramory.mcp`) + OIDC
+  ActorContext construction (ADR-10 production face)
+- Deferred (gateway-cycle) security follow-ups from PLAN-002 reviews:
+  within-tenant write containment for retire/feedback; `agent_profiles`
+  is untenanted (dev-tier assumption)
