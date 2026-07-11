@@ -96,10 +96,27 @@ def _emit(as_json: bool, payload: dict[str, Any], human: str) -> None:
 
 # ── commands ────────────────────────────────────────────────────────────────
 
+def _upsert_profile_best_effort(agent_id: str, dsn: str) -> str:
+    """L3 profile row: init still succeeds when the store is down — the row
+    lands on a later init run (every init retries, including re-runs on an
+    existing config)."""
+    from engramory.core.models import AgentProfile
+
+    try:
+        asyncio.run(Repository(dsn).upsert_agent_profile(AgentProfile(agent_id=agent_id)))
+    except StoreUnavailable as exc:
+        print(f"engramory init: store unreachable, profile deferred: {exc}",
+              file=sys.stderr)
+        return "deferred"
+    return "created"
+
+
 def _cmd_init(args: argparse.Namespace) -> int:
     cfg_path = Path(CONFIG_DIRNAME) / CONFIG_FILENAME
     if cfg_path.exists():
-        _emit(args.json, {"created": False, "config": str(cfg_path)},
+        profile_state = _upsert_profile_best_effort(args.agent_id, args.dsn)
+        _emit(args.json,
+              {"created": False, "config": str(cfg_path), "profile": profile_state},
               f"exists: {cfg_path}")
         return 0
     scopes = args.scopes.split(",") if args.scopes else list(DEFAULT_SCOPES)
@@ -119,19 +136,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
     existing = gitignore.read_text() if gitignore.exists() else ""
     if entry not in existing:
         gitignore.write_text(existing.rstrip("\n") + ("\n" if existing else "") + entry + "\n")
-    # Best-effort L3 profile upsert: init still succeeds when the store is
-    # down (the row lands on the next init run once the store is up).
-    profile_state = "created"
-    try:
-        from engramory.core.models import AgentProfile
-
-        asyncio.run(
-            Repository(args.dsn).upsert_agent_profile(AgentProfile(agent_id=args.agent_id))
-        )
-    except StoreUnavailable as exc:
-        profile_state = "deferred"
-        print(f"engramory init: store unreachable, profile deferred: {exc}",
-              file=sys.stderr)
+    profile_state = _upsert_profile_best_effort(args.agent_id, args.dsn)
     _emit(args.json,
           {"created": True, "config": str(cfg_path), "profile": profile_state},
           f"created: {cfg_path}")

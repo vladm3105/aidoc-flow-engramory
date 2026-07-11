@@ -69,7 +69,10 @@ def test_init_is_idempotent(project_dir: Path, pg_dsn: str) -> None:
         "--tenant-id", "t-cli", "--dsn", pg_dsn,
     )
     assert code == 0
-    assert json.loads(out)["created"] is False
+    payload = json.loads(out)
+    assert payload["created"] is False
+    # a re-run still retries the best-effort profile upsert (deferred rows land)
+    assert payload["profile"] == "created"
 
 
 # ── dev-tier fence (ADR-10) ─────────────────────────────────────────────────
