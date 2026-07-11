@@ -4,6 +4,10 @@ All notable changes to Engramory are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+### Added — canon secret-scan (gitleaks) workflow (2026-07-11)
+
+Adopted the aidoc-flow-ci secret-scan gate (, gitleaks binary).
+
 ### Added — PLAN-002: agent-usable memory plane — CLI face, full SPEC-01 tool set, agent docs (2026-07-11)
 
 Engramory is now usable as memory by external AI agents on a dev/pre-prod
