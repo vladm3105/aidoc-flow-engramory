@@ -10,7 +10,7 @@
 
 Nexus is a **domain-agnostic, enterprise AI knowledge platform on 100% GCP** — and it reads as the **strategic superset that your RAC project plugs into**. RAC provides the **per-project domain-config layer**; Trading is just one example project (not RAC's identity). The platform equation makes the pattern explicit:
 
-```
+```text
 Nexus = Core Platform + Domain Config (one config per project)
   Nexus + Trading config   ← Trading is one example project
   Nexus + USFS config

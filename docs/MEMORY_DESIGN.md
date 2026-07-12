@@ -30,12 +30,15 @@ Your three requirements map onto four memory layers, which mirror cognitive scie
 | Per-agent experience (3) | **L3 — Agent identity & distillation** | Permanent, evolving | Per agent (+ shared) | A person's accumulated life experience |
 
 ### L0 — Knowledge base (documents)
+
 Project documentation, plans, notes, memos. Authoritative, human-curated, citable. **You already have this: it's RAC** (section-level retrieval, Neo4j + pgvector, citations, multi-tenant). Keep it as-is.
 
 ### L1 — Short-term / working memory (per project)
+
 A bounded, project-namespaced store of the *current* project's live state: decisions made, open threads, recent errors, "what we're doing right now." Fast to read/write, scoped so it never mixes projects. At project end it's archived — its durable lessons get promoted to L2, the rest is dropped.
 
 ### L2 — Long-term memory (cross-project, distilled)
+
 The permanent store, organized by the three classic memory types:
 
 - **Semantic** — facts and knowledge: "our auth pattern is X," "client Y prefers Z."
@@ -43,6 +46,7 @@ The permanent store, organized by the three classic memory types:
 - **Procedural** — reusable skills and playbooks distilled from experience: "when you see error pattern X, do Y." This is where *lessons and errors* become *skills*.
 
 ### L3 — Per-agent identity & distillation
+
 Each agent gets its **own memory namespace** — its unique accumulated experience — plus access to a **shared/team namespace**. A **distillation (reflection) process** continuously promotes L1 → L2 and compacts L2 so it stays dense. This loop is what makes the context feel endless.
 
 ---
@@ -51,7 +55,7 @@ Each agent gets its **own memory namespace** — its unique accumulated experien
 
 This is the heart of requirement 3, and the genuinely hard part. The mechanism:
 
-```
+```text
 During work:    agent retrieves relevant L0/L2 memory + L1 project state → acts →
                 writes new episodes (decisions, errors, outcomes) to L1.
 
@@ -67,6 +71,7 @@ Periodically:   CONSOLIDATION pass over L2 → merge duplicates, generalize repe
 ```
 
 Three properties this gives you:
+
 - **Endless, because compressed + retrieved.** Raw episodes are compressed into a dense, high-signal long-term store; the store grows without a fixed cap while each task retrieves only a small relevant slice. You retrieve from a dense library, not an ever-growing transcript.
 - **Self-correcting.** Errors become procedural rules ("don't do X"); superseded facts get invalidated instead of lingering.
 - **Per-agent personality.** Because distillation writes to each agent's namespace, agents genuinely diverge based on what they've each lived through — while still sharing team knowledge.
@@ -102,6 +107,7 @@ This matters a lot for your mixed fleet (Codex, Claude Code, Hermes, custom). Th
 | **Letta** | ✅ MCP-native (but it's a runtime) | ✅ (run inside Letta) | ⚠️ they'd have to run inside Letta | High for closed runtimes |
 
 **So, directly answering "can LangMem work with any agent?"**
+
 - **Custom Python agents:** yes — call the SDK in your code, any storage backend (pgvector, Mongo, Postgres).
 - **Codex / Claude Code / Hermes:** **not out of the box** — LangMem has no MCP server, so you must wrap it behind one. Codex connects via its TOML MCP config, Claude Code via MCP, Hermes via `hermes mcp add`. Once wrapped, all of them work.
 
@@ -111,7 +117,7 @@ This matters a lot for your mixed fleet (Codex, Claude Code, Hermes, custom). Th
 
 ### Recommended split for your stack
 
-```
+```text
             ┌──────────────────────────────────────────────┐
             │   Agents: Claude Code · Codex · Hermes · CLI   │
             └───────────────┬───────────────┬──────────────┘
@@ -146,12 +152,14 @@ This matters a lot for your mixed fleet (Codex, Claude Code, Hermes, custom). Th
 | **Human audit view** (optional) | A **generated, read-only Markdown export** — a *projection* of the Postgres store, built only if a human ever needs to browse provenance | ◻️ Optional, generated — not a source of truth |
 
 **Rationale.**
+
 - Obsidian's entire value is the **human** layer — friendly editor, graph view, wikilinks, Git PR-review. With an agent-written/agent-read KB and **human access mediated through an agent**, none of that value is realized.
 - A Markdown vault behind RAC would only add a **third surface to keep in sync** (vault ↔ Postgres ↔ Neo4j) for storage/retrieval RAC already provides.
 - **Short-term memory** is high-frequency, concurrent, and project-scoped — it needs **structured, queryable** recall (a Postgres query), not a file scan, and Markdown files hit the Git-async/write-contention problem under concurrent agent writes.
 - The **human "extract knowledge via an agent"** pattern means the right human interface is **agent queries over RAC + the memory engine**, not a separate editor. This keeps one canonical store and avoids drift.
 
 **Consequence / guidance.**
+
 - Build human knowledge-extraction as an **agent capability** (the agent reads L0–L2 and answers), not as a vault to browse.
 - If human-readable output is ever needed (audit, sharing, provenance review), generate it **on demand as a read-only Markdown/report export** from Postgres — a downstream artifact, never the primary store. This also doubles as a portability snapshot (plain Markdown).
 - Revisit Obsidian only if the usage pattern changes — i.e. if humans start **hand-authoring and curating** the KB directly. As long as it's agent-written/agent-read with agent-mediated human access, it stays out.
@@ -162,7 +170,7 @@ This matters a lot for your mixed fleet (Codex, Claude Code, Hermes, custom). Th
 
 This is the right thing to optimize for, because it's where lock-in actually hurts. Honest state of play in 2026:
 
-### Do the engines have export/import? Mostly yes — but at different completeness, and there is **no universal cross-tool standard yet**.
+### Do the engines have export/import? Mostly yes — but at different completeness, and there is **no universal cross-tool standard yet**
 
 | Engine | Export / import | Notes |
 |---|---|---|

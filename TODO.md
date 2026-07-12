@@ -19,7 +19,7 @@ engramory-side work.
 
 **Symptom (from PR #6 CI log):**
 
-```
+```text
 call / trust  ##[error]fatal: repository 'https://github.com/vladm3105/aidoc-flow-operations/' not found
 call / trust  The process '/usr/bin/git' failed with exit code 128
 ```

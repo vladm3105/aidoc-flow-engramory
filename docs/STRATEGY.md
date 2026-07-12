@@ -27,12 +27,14 @@ memory algorithm.
 ## Rationale
 
 ### Best practice
+
 - Own the canonical store; treat the engine as replaceable. Already decided (ADR-05).
 - Retrieval, not storage, is the bottleneck — invest in hybrid search, reranking, and
   recency/utility signals rather than raw storage.
 - Evaluate continuously: unmeasured memory regresses without a visible signal.
 
 ### Trends (established, not speculative)
+
 - Temporal / contradiction handling (bi-temporal validity + contradiction invalidation)
   is standard for durable memory — adopt the mechanism, not only the concept.
 - Background ("sleep-time") consolidation is a validated direction; the reflection +
@@ -42,10 +44,11 @@ memory algorithm.
   trust weighting early.
 
 ### Reality (constraints to plan around)
+
 - No engine "solves" agent memory; public benchmark scores do not transfer to a specific
   domain. Re-tuning against local tasks is required.
-- "Human-like / endless memory" overstates the mechanism. The deliverable is compression
-  + retrieval, with a bounded working set (see ARCHITECTURE "What 'endless' means").
+- "Human-like / endless memory" overstates the mechanism. The deliverable is compression +
+  retrieval, with a bounded working set (see ARCHITECTURE "What 'endless' means").
 - Procedural "skills" are re-injected text, not model weight updates. Set that expectation.
 - The graph is optional early: pure Postgres + strong vector retrieval covers most needs;
   promote to Neo4j only when multi-hop retrieval is required (ADR-03).
@@ -88,6 +91,7 @@ Start with one and keep it swappable — possible precisely because Postgres is 
   [../roadmap/ROADMAP.md](../roadmap/ROADMAP.md).
 
 ## Retain unchanged
+
 Postgres-canonical spine, three memory types, provenance, temporal validity, ports &
 adapters, LiteLLM gateway, MCP access, and the scope model (ADR-07). The next design effort
 targets the learning half — feedback, confidence dynamics, contradiction handling,

@@ -5,7 +5,7 @@
 > #8–#10 also merged. Founder-gated residue tracked in `TODO.md` §1
 > (`AI_REVIEW_TOKEN`) and §2 (F5). Checkboxes below retained as authored
 > (execution followed the steps; see CHANGELOG.md 2026-07-09 entry).
-
+>
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Close every contract-level, operational, and documentation gap found in the 2026-07-09 five-agent pre-first-run review, so the first MVP-1 implementation session builds the *reviewed* design (feedback loop, quarantine, idempotency, tenant wall) instead of the pre-review one.
@@ -55,6 +55,7 @@ cd /opt/data/aidoc-flow/engramory
 git fetch origin --prune
 git checkout main && git pull --ff-only
 ```
+
 Expected: main advances to squash commit of PR #12 (67b12d2).
 
 - [ ] **Step 2: Delete merged remote branches (verify each first)**
@@ -65,6 +66,7 @@ gh pr list --state merged --limit 20 --json headRefName -q '.[].headRefName'
 git push origin --delete <branch>
 git branch -d feat/wave3b-plan-003-canon-adoption 2>/dev/null || true
 ```
+
 Expected: `feat/wave3b-plan-003-canon-adoption`, `chore/plan-002-wave-3-adoption`, `docs/todo-trust-config-gap`, `fix/initial-review-findings`, and other merged `docs/adr-*` branches removed. Do NOT delete any branch not in the merged-PR list.
 
 ---
@@ -72,6 +74,7 @@ Expected: `feat/wave3b-plan-003-canon-adoption`, `chore/plan-002-wave-3-adoption
 ### Task 1 (PR-1): Operations reconcile — trust-gap decision + governance bookkeeping
 
 **Files:**
+
 - Modify: `TODO.md`
 - Modify: `roadmap/ROADMAP.md:7,17,25`
 - Modify: `HANDOFF.md:8-20`
@@ -163,6 +166,7 @@ git commit -m "ops: reconcile trust-gap fix (Option A), track F5 + dependabot, P
 # OPS-0065 multi-agent review on the diff BEFORE push, then:
 git push -u origin fix/plan-001-pr1-ops-reconcile && gh pr create --fill
 ```
+
 Expected: `check` (CI) PASS, `call / verify` PASS, `call / trust` FAIL (known, pre-existing) → founder admin-merge.
 
 ---
@@ -170,10 +174,12 @@ Expected: `check` (CI) PASS, `call / verify` PASS, `call / trust` FAIL (known, p
 ### Task 2 (PR-2): Migration 0003 — contract reconciliation schema
 
 **Files:**
+
 - Create: `db/migrations/0003_reconcile_contracts.sql`
 - Modify: `tests/test_migrations.py`
 
 **Interfaces:**
+
 - Produces: tables `memory_retrievals`, `audit_records`, `kb_sections`; columns `episodes.content_hash`, `memories.{status,retrieval_count,last_retrieved_at,source_trust,ts_lex}`; `tenant_id NOT NULL DEFAULT 'default'` on both base tables. PR-3/PR-4 SPEC edits reference these by exact name.
 
 - [ ] **Step 1: Write the failing tests** (append to `tests/test_migrations.py`; also update the ordered-list assertion)
@@ -339,6 +345,7 @@ make migrate && make migrate   # second run proves idempotency
 docker compose exec -T postgres psql -U engramory -d engramory -c "\d memories" | grep -E "status|ts_lex|source_trust"
 docker compose exec -T postgres psql -U engramory -d engramory -c "\dt" | grep -E "memory_retrievals|audit_records|kb_sections"
 ```
+
 Expected: both `make migrate` runs exit 0; columns and tables listed.
 
 - [ ] **Step 6: Commit, review, push, PR**
@@ -355,6 +362,7 @@ git commit -m "feat(db): migration 0003 — contract reconciliation (content_has
 ### Task 3 (PR-3): SDD storage reconciliation (StoragePort semantics + IPLAN truth)
 
 **Files:**
+
 - Modify: `sdd/06_SPEC/SPEC-06_ports_portability.yaml:43-47,107`
 - Modify: `sdd/06_SPEC/SPEC-02_memory_store.yaml:32-40,76-89,114`
 - Modify: `sdd/08_IPLAN/IPLAN-02_memory_store.yaml`
@@ -388,7 +396,9 @@ Line 39 dependency: replace
 ```yaml
     - { name: "StoragePort (SPEC-06)", version: "internal", purpose: "Relational persistence" }
 ```
+
 with
+
 ```yaml
     - { name: "Postgres canonical store (ADR-01)", version: "internal", purpose: "Relational persistence via the Postgres driver — not behind a port; see SPEC-06 StoragePort note" }
 ```
@@ -442,6 +452,7 @@ git commit -m "docs(sdd): StoragePort = object storage; repository over Postgres
 ### Task 4 (PR-4): Learning-loop + retrieval contracts (code + SDD, atomic)
 
 **Files:**
+
 - Modify: `src/engramory/ports/memory.py`
 - Modify: `src/engramory/mcp/server.py`
 - Modify: `tests/test_ports.py`
@@ -453,6 +464,7 @@ git commit -m "docs(sdd): StoragePort = object storage; repository over Postgres
 - Modify: `sdd/07_TDD/TDD-04_distillation_engine.yaml`
 
 **Interfaces:**
+
 - Consumes: `memory_retrievals` / `audit_records` / `status` / `source_trust` names from PR-2; "Postgres driver" vocabulary from PR-3.
 - Produces: `MemoryPort` methods `reflect`, `feedback`, `forget`, `get_profile`; `search(..., include_advisory: bool = False, token_budget: int | None = None)`; MCP tools `memory_feedback`, `memory_forget`, `agent_profile_get`; threshold `PRD.01.perf.context_token_budget` = 2000 tokens.
 
@@ -524,7 +536,7 @@ Rename `distill` → `reflect` (same signature/docstring intent; SPEC-04 is the 
 
 Replace the `Tools (...)` block with:
 
-```
+```text
 Tools (authoritative registry: sdd/06_SPEC/SPEC-01 Access Surface):
     memory_search     — scoped retrieval of knowledge + distilled memory (token-budgeted)
     memory_add        — append an episode in the caller's scope (idempotent by content hash)
@@ -595,7 +607,7 @@ Append to `behavior.validation_rules`:
     - { rule: "Secrets screen: before any episode or memory write, content is screened for credential material (key/token/password patterns + high-entropy strings); matches are rejected (or the span redacted) and an audit_records row is written", source: "@ears: EARS.01.04.c300" }
 ```
 
-Append `"@ears: EARS.01.04.c300"` to `traceability.upstream.ears_references`. Add to `exports` a note on `reflect`: append to its description: ` Port binding: MemoryPort.reflect (renamed from distill, PLAN-001). Validate this batch-reflect surface against the adopted engine's API (Mem0 write-time ADD/UPDATE/DELETE/NOOP) before building the adapter (IPLAN-04 precondition).`
+Append `"@ears: EARS.01.04.c300"` to `traceability.upstream.ears_references`. Add to `exports` a note on `reflect`: append to its description: `Port binding: MemoryPort.reflect (renamed from distill, PLAN-001). Validate this batch-reflect surface against the adopted engine's API (Mem0 write-time ADD/UPDATE/DELETE/NOOP) before building the adapter (IPLAN-04 precondition).`
 
 - [ ] **Step 9: PRD-01 — token-budget threshold**
 
@@ -672,6 +684,7 @@ git commit -m "feat(contracts): learning loop (feedback/forget/profile), ranking
 ### Task 5 (PR-5): Infra + ops-file cleanup
 
 **Files:**
+
 - Modify: `docker-compose.yml:28,43,55,65`
 - Modify: `Makefile:1-2` (+ new target)
 - Modify: `.github/CODEOWNERS:36-37`
@@ -711,7 +724,7 @@ At the top (after the `.PHONY` line — add `help` to it):
 .DEFAULT_GOAL := help
 
 help:          ## Show available targets
-	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
+ @grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
 ```
 
 Run: `make` → prints the target list (no longer silently starts the docker stack).
@@ -720,7 +733,7 @@ Run: `make` → prints the target list (no longer silently starts the docker sta
 
 Replace lines 36-37 (`ops/DECISIONS.md`, `docs/REPO_STANDARDS.md` — neither exists here) with:
 
-```
+```text
 DECISIONS.md                            @vladm3105
 AGENTS.md                               @vladm3105
 ```
@@ -751,6 +764,7 @@ git commit -m "chore(infra): pin all images, make help default goal, fix CODEOWN
 ### Task 6 (PR-6): Documentation cleanup (non-governance docs)
 
 **Files:**
+
 - Modify: `docs/ARCHITECTURE.md:145,151-152,211`
 - Modify: `docs/CORES.md:23-24,59`
 - Modify: `docs/MEMORY_DESIGN.md:64,68,223`
@@ -766,13 +780,13 @@ git commit -m "chore(infra): pin all images, make help default goal, fix CODEOWN
   `(The block above is the memory core as of migration 0001/0002. Migration 0003 adds the contract-reconciliation surfaces — episodes.content_hash, memories.status/source_trust/ts_lex, memory_retrievals, audit_records — and the L0 kb_sections table (MVP-1/BRD-01 knowledge core; see sdd/06_SPEC/SPEC-02).)`
 - Line 145: `agent_profiles(agent_id, display_name, standing_preferences jsonb, created_at)` → `agent_profiles(agent_id, display_name, standing_preferences jsonb, created_at, updated_at)`.
 - Line 211 (verbatim anchor, backticks included): `` `postgres:16` (pgvector) · `redis` · `minio` · `ghcr.io/berriai/litellm` + `ollama` · `keycloak` `` → `` `postgres:16` (pgvector) · `redis` · `minio` · `ghcr.io/berriai/litellm` + `ollama` · `neo4j` · `keycloak` ``.
-- Line 167 (memory processor bullet): append ` **Default engine: Mem0 — decided in [STRATEGY.md](STRATEGY.md).**`
+- Line 167 (memory processor bullet): append `**Default engine: Mem0 — decided in [STRATEGY.md](STRATEGY.md).**`
 
 - [ ] **Step 2: CORES.md**
 
 - Line 23 Schema row: Memory cell → `` `episodes`, `memories`, `agent_profiles`, `consolidation_runs`, `memory_retrievals` ``; Knowledge cell → `` `kb_sections` (migration 0003, MVP-1) ``.
 - Line 24 MCP tools row: Memory cell → `` `memory_add`, `memory_search`, `memory_feedback`, `memory_forget`, `agent_profile_get` ``; Knowledge cell → `` `knowledge_ingest` (reads served through `memory_search` for MVP-1 — see boundary rule 4) ``.
-- Line 59 boundary rule 4 → `**Separate MCP namespaces for writes** — `knowledge_ingest` vs `memory_*`. MVP-1 retrieval is deliberately unified: `memory_search` spans both cores in one scoped, ranked call (SPEC-01); a dedicated `knowledge_search` splits out when the knowledge core grows its own retrieval semantics.`
+- Line 59 boundary rule 4 → `**Separate MCP namespaces for writes** —`knowledge_ingest` vs `memory_*`. MVP-1 retrieval is deliberately unified:`memory_search` spans both cores in one scoped, ranked call (SPEC-01); a dedicated `knowledge_search`splits out when the knowledge core grows its own retrieval semantics.`
 
 - [ ] **Step 3: MEMORY_DESIGN.md (retracted-claim hygiene)**
 
@@ -821,6 +835,7 @@ git commit -m "docs: reconcile kb_sections cycle, tool registry, retracted claim
 ### Task 7 (PR-7): Governance refresh — **governance PR (OPS-0061: ≤3 surfaces, Rule-2 review mandatory)**
 
 **Files (exactly 3 surfaces):**
+
 - Modify: `CLAUDE.md:71-76` (+ governance table Plans row)
 - Modify: `sdd/05_ADR/ADR-00_index.md:20-24,40`
 - Modify: `sdd/05_ADR/ADR-02_ports_and_adapters.yaml:120`
@@ -865,6 +880,7 @@ git add CLAUDE.md sdd/05_ADR/ADR-00_index.md sdd/05_ADR/ADR-02_ports_and_adapter
 git commit -m "docs(governance): refresh CI state, adopt plans/ surface, fix ADR index/StoragePort wording"
 git push -u origin fix/plan-001-pr7-governance && gh pr create --fill
 ```
+
 Note: governance-tier PRs are excluded from auto-merge (`tier=spec`) — founder merges this one.
 
 ---
@@ -910,8 +926,8 @@ Note: governance-tier PRs are excluded from auto-merge (`tier=spec`) — founder
 | 21 | SPEC-01 defines AuditRecord with no backing table anywhere | `- name: "AuditRecord"` | sdd/06_SPEC/SPEC-01_access_surface.yaml:80 |
 | 22 | SPEC-03 ranking spec is a single line | `Hybrid rank fusion (vector + graph signal)` | sdd/06_SPEC/SPEC-03_retrieval_graph.yaml:77 |
 | 23 | SPEC-03 MemoryHit has 4 fields, no retrieval_id | `- name: "MemoryHit"` | sdd/06_SPEC/SPEC-03_retrieval_graph.yaml:58 |
-| 24 | SPEC-04 exports `reflect` (not distill) | `async def reflect(agent_id: str, project_id: str | None) -> int` | sdd/06_SPEC/SPEC-04_distillation_engine.yaml:48 |
-| 25 | Code port method is named `distill` | `async def distill(self, *, agent_id: str, project_id: str | None = None) -> int:` | src/engramory/ports/memory.py:31 |
+| 24 | SPEC-04 exports `reflect` (not distill) | `async def reflect(agent_id: str, project_id: str \| None) -> int` | sdd/06_SPEC/SPEC-04_distillation_engine.yaml:48 |
+| 25 | Code port method is named `distill` | `async def distill(self, *, agent_id: str, project_id: str \| None = None) -> int:` | src/engramory/ports/memory.py:31 |
 | 26 | MemoryPort.search current signature (no include_advisory/token_budget) | `k: int = 8) -> Sequence[Mapping[str, Any]]` | src/engramory/ports/memory.py:26 |
 | 27 | MCP docstring lists 4 tools, names SPEC-01 source of truth | `knowledge_ingest — create/update an SDD-artifact KB entry` | src/engramory/mcp/server.py:6 |
 | 28 | PRD thresholds live under component_decomposition per component | `full_id: "PRD.01.perf.retrieval_p95"` | sdd/02_PRD/PRD-01_engramory_core.yaml:236 |

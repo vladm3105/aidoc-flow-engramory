@@ -33,6 +33,7 @@ It sits in a multi-plane ecosystem:
 | 8 | IPLAN | Implementation Plan | Impl bridge | `@tdd` |
 
 **Depth variants** (exact layers):
+
 - **Lite** — BRD → PRD → IPLAN (3 layers).
 - **Standard** — BRD → PRD → EARS → BDD → ADR → IPLAN (adds requirements, behavior, and architecture decisions; **no SPEC/TDD**, no CHG overlay).
 - **Full** — all 8 layers (BRD → PRD → EARS → BDD → ADR → SPEC → TDD → IPLAN), i.e. Standard **plus SPEC and TDD**, plus the CHG governance overlay and gates.
@@ -48,6 +49,7 @@ Pick by risk: regulated/fintech → Full; core infra → Standard; prototype →
 **Canonical templates: `framework/layers/NN_*/{TYPE}-TEMPLATE.yaml`** — e.g. `framework/layers/01_BRD/BRD-TEMPLATE.yaml`. This path is verified working.
 
 Do **not** use these (they fail or are deprecated):
+
 - `ucx_flow_v3/01_BRD/BRD-TEMPLATE.yaml` and `ucx_flow_v3/LAYER_REGISTRY.yaml` — raw fetch returns **empty**.
 - `mcp_ucx/templates/` — `mcp_ucx/` is **DEPRECATED** (frozen at v1.22.0); use `ucx_hermes/` for the active runtime.
 
@@ -59,7 +61,7 @@ This is the single most common stumbling block; BeeLocal logged it as feedback #
 
 **No implementation without an approved plan.** The required sequence:
 
-```
+```text
 analyze inputs → roadmap → planning index → changelog plan
   → gap review/fix → IPLAN → approval → implementation
 ```
@@ -67,23 +69,28 @@ analyze inputs → roadmap → planning index → changelog plan
 Approval authority: a human reviewer **or** an independent LLM-as-judge (`sdd_review`).
 
 ### Per cycle
+
 1. **Define the cycle.** A cycle is anchored by a **BRD set** — one *platform* BRD plus its *feature* BRDs, linked by `@depends:` — **not** a single BRD. Subsequent cycles: BRD-02, BRD-03, … via `@depends: BRD-01`.
 2. **Author the current cycle's BRD set in full; stub future cycles/features** in the BRD-00 index. Don't over-author distant specs that depreciate before their cycle.
 3. **Treat existing prose docs as input content, not artifacts.** Conversion is *assembly, not redesign*: scaffold via Hermes `sdd_create` from the YAML templates → add cumulative `@`-tags → ID per `ID_NAMING_STANDARDS` → validate with `sdd_validate` / `sdd_consistency` → gate via CHG.
 4. **Authoring order:** BRD → PRD → EARS → BDD → ADR (convert existing decisions) → SPEC → TDD → IPLAN → hand approved IPLAN to code agents.
 
 ### Operating model
+
 - **Hermes** drives the document lifecycle (BRD→IPLAN) via the `sdd_*` MCP tools.
 - **Claude Code / Codex** implement source code **only from an approved IPLAN**.
 - UCX MCP validation/review gates run before and after implementation.
 
 ### CHG gates (Full depth)
+
 GATE-01 after BRD/PRD (scope) · GATE-02 after EARS/BDD (requirements+behavior) · GATE-03 after ADR (architecture) · GATE-04 after SPEC/TDD (design+test) · **GATE-CODE before code generation**.
 
 ### Governance states
+
 `ai:ready → ai:in-progress → ai:review-requested`. Only `ai:ready` issues are eligible for autonomous execution.
 
 ### Plan taxonomy
+
 - **Document-layer IPLAN** — lifecycle output (`docs/IPLAN/`, `UCX/08_IPLAN/`). Permanent.
 - **Permanent development plan** — `plans/`. Cross-session execution + history. Permanent.
 - **Temporary plan** — `tmp/`. Bug fixes, minor one-offs. Disposable.
@@ -109,12 +116,14 @@ Maintaining this file is **part of using the framework correctly**. It is the fr
 **How it works:** while authoring artifacts, whenever you hit a framework inconsistency, error, or ambiguity, log it — and mirror each as a TODO task back to the framework repo. None of it blocks authoring (proceed by working from `framework/layers/` directly); every friction point flows back to harden the framework.
 
 **Format** (from BeeLocal):
+
 - **Header:** source, framework repo, purpose, and the TODO range it mirrors to.
 - **Severity codes:** 🔴 error · 🟠 inconsistency · 🟡 clarification/improvement.
 - **Per item:** a one-line title with severity + TODO number, the concrete place you hit it, and a proposed **Fix:**.
 - **Summary table:** `# | Sev | Issue | TODO`.
 
 **Entry skeleton:**
+
 ```markdown
 ## N. 🟠 Short title  (TODO #NN)
 Where/how it was hit (be concrete — which artifact, which rule).

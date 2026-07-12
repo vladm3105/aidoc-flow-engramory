@@ -25,4 +25,5 @@ The core depends on **8 ports**: Memory, Storage, Vector, Graph, Cache, LLM, Sec
 | Identity/auth (**gateway concern, not a core port**) | Keycloak / OIDC | Identity Platform | Entra ID |
 
 ## Graph engine note
+
 Managed **Apache AGE** exists on Azure Postgres but **not** on GCP Cloud SQL/AlloyDB. Since the cloud is undecided, prefer **Neo4j** (multi-cloud managed Aura) when a dedicated graph engine is needed; keep pure-Postgres while graph needs are shallow. Decision recorded in [adr/0003-graph-engine-neo4j-over-age.md](adr/0003-graph-engine-neo4j-over-age.md).

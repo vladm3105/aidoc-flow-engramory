@@ -4,6 +4,10 @@ All notable changes to Engramory are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+### Changed
+
+- **markdown-lint graduated to blocking (PLAN-007 W3)** — adopted the relaxed canon `.markdownlint.json` (disables MD013/MD024/MD036) + a repo-local `MD025.front_matter_title: ""` tuning (the `sdd/**` docs legitimately carry both a frontmatter `title:` and an `# H1`), cleared the residual violations, and flipped `fail-on-findings: false → true`. Cleanups were targeted + meaning-preserving (a blind `--fix` would corrupt prose by misreading literal `+` in wrapped sentences as list markers): reflowed 4 prose-`+` lines, backticked PR-template placeholders, added `text` language to 10 ASCII-diagram code fences, fixed 2 heading-increment skips, merged 2 blockquote splits, escaped literal `|` in 3 table code spans, plus `--fix` for the structural blank-line/fence rules. Arming as a required status check is the separate founder-executed W4 step (FT-11).
+
 ### Added
 
 - **`pre-commit` CI gate** — added `.github/workflows/pre-commit.yml` (caller of the aidoc-flow-ci reusable @ci/v1.9.5), closing the gate gap in docs/WORKFLOWS.md §2.1.
@@ -116,8 +120,8 @@ review. Plan + claim ledger + review log:
 - **`db/migrations/0003_reconcile_contracts.sql`** (NEW) — episode
   idempotency (`content_hash` + unique index), memory lifecycle
   `status` (quarantine surface for EARS.01.03.b800), `tenant_id`
-  NOT NULL + tenant-leading partial index (ADR-07), lexical `ts_lex`
-  + GIN, feedback signals (`retrieval_count`, `last_retrieved_at`,
+  NOT NULL + tenant-leading partial index (ADR-07), lexical `ts_lex` +
+  GIN, feedback signals (`retrieval_count`, `last_retrieved_at`,
   `source_trust`), `memory_retrievals` + `audit_records` tables,
   `kb_sections` knowledge-core table (ADR-08). Verified idempotent
   ×2 on pgvector:pg16. (#14)
@@ -156,8 +160,8 @@ parser §N handling + rubric fix + canonical-source authority
 disambiguation — all merged 2026-07-08.
 
 Governance drift check (`bash ../aidoc-flow-ci/install/apply-standards.sh
---check`) — `CLAUDE.md#per-repo-governance` now reports OK (6/6 required
-+ 4 additional + 0 errors).
+--check`) — `CLAUDE.md#per-repo-governance` now reports OK (6/6 required +
+4 additional + 0 errors).
 
 - **`HANDOFF.md`** (NEW at repo root) — cross-session resume; seeded
   with Wave 3b state + active surfaces (substantive engineering via
@@ -194,6 +198,7 @@ Governance drift check (`bash ../aidoc-flow-ci/install/apply-standards.sh
 - **`CHANGELOG.md`** — this entry.
 
 Working-tree cleanup (not a diff surface — `tmp/` is gitignored):
+
 - Removed untracked `tmp/TODO.md` + `tmp/SESSION_HANDOFF_2026-07-07.md`
   from disk to enforce the "Never in `tmp/`" memory rule. `tmp/`
   itself is preserved as the workspace scratch directory.
@@ -212,6 +217,7 @@ lost; all dead refs cleared.
 Multi-agent self-review per OPS-0065 (code-reviewer + documentation-specialist parallel dispatch): approved after 1 fold cycle addressing 1 CRITICAL (4 dead refs to deleted docs/ROADMAP.md — code-reviewer flagged; all 4 fixed by migrating Phase 0-3 content into roadmap/ROADMAP.md + updating README + docs/README consumer refs) + 3 HIGH (docs/ROADMAP.md supersession framing was wrong — Phase content wasn't duplicate, was complementary; content-migration path chosen; false "AGENTS.md CHG/GATE-SPEC" claim retracted across HANDOFF + DECISIONS + CLAUDE.md; surface count 6→8 corrected honestly; CHANGELOG TBD → filled) + 4 MEDIUM/LOW (charter/build-in-progress → Phase 0 dev foundation per README wording; tmp cleanup reframed as working-tree hygiene not diff surface; tmp/SESSION_HANDOFF also cleaned; CHANGELOG subsection order preserved — Added-then-Changed acceptable within Unreleased)
 
 ### Added
+
 - **Wave 3 product-tier adoption of aidoc-flow-ci canon** (2026-07-08) —
   self-adopts the workspace-wide standards canon from
   `aidoc-flow-ci@ci/v1.6.0` per PLAN-002 §5.5 Wave 3 (product-code tier).
@@ -273,6 +279,7 @@ Multi-agent self-review per OPS-0065 (code-reviewer + documentation-specialist p
 - Dev tooling: ruff lint rules, pytest + mypy config, `py.typed`, CI workflow, and a test skeleton.
 
 ### Changed
+
 - Scope vocabulary unified across schema/SPEC/docs: isolation column renamed `space_id` → `tenant_id`; the `shared` scope value is retired in favor of `space` (tenant-wide). See ADR-07.
 - `make migrate` now applies **all** `db/migrations/*.sql` in order (was hard-coded to 0001) and loads `.env`.
 - ADR homes clarified: `sdd/05_ADR/` is canonical/implementing; `docs/adr/` is conceptual/descriptive.

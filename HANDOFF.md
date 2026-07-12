@@ -11,8 +11,8 @@ start; refresh at milestones and before context compaction.
 verified-planning: 25 cited claims, 4 independent passes). Engramory is
 now **pre-prod usable as memory by external AI agents** via the CLI face.
 Seven PRs merged 2026-07-11 (#33 core, #34 ADR-10 Accepted, #35 SPEC-01
-faces amendment, #36 SPEC-07, #37 CLI, #39 agent docs + Skill, #40 smoke
-+ currency):
+faces amendment, #36 SPEC-07, #37 CLI, #39 agent docs + Skill, #40 smoke +
+currency):
 
 - **SPEC-01 tool set complete**: memory_feedback / memory_forget /
   agent_profile_get + tenant-scoped get_memory + interim `reflect()`
@@ -24,7 +24,7 @@ faces amendment, #36 SPEC-07, #37 CLI, #39 agent docs + Skill, #40 smoke
   distill / profile get / status; exit codes 0/1/2/3; --json; config
   discovered upward from `.engramory/config.toml`.
 - **Agent docs**: docs/INSTALL.md, AGENT-QUICKSTART.md, AGENT-INTEGRATION.md
-  + skills/engramory-memory/SKILL.md + README agent section.
+  - skills/engramory-memory/SKILL.md + README agent section.
 - **Verified**: 94 tests vs real Postgres; `make smoke` (full agent loop
   incl. fence) passing on the dev host (compose store, POSTGRES_HOST_PORT
   override — host 5432 is foreign-owned).

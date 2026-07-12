@@ -21,6 +21,7 @@ This gives whole-project scope visibility up front, lets scope be corrected earl
 This **extends feedback item #35** ("author current cycle's BRD set in full; stub the rest"): #35 stubs future BRDs as index one-liners; this refines that to proper *draft BRD sketches* + a roadmap.
 
 **Fix:**
+
 - Document the project-initiation step in the README and `framework/layers/01_BRD/README.md`: produce (a) `roadmap/ROADMAP.md` enumerating all MVP cycles, (b) draft BRD **sketches** (scope-only) for all future cycles, (c) the current cycle's BRD at full depth.
 - Add a lightweight **"BRD sketch" sub-form** (or a `status: Sketch` / `_sketch: true` marker) that requires only scope-level sections (document_control, introduction, business_objectives hypothesis+goals, project_scope) and **explicitly forbids downstream-layer content** — so sketches pass lint/validation without being treated as incomplete full BRDs.
 - Clarify in `roadmap/README` how `@depends:` chains the cycles and how a sketch graduates to a full BRD when its MVP cycle begins.
@@ -72,6 +73,7 @@ This **extends feedback item #35** ("author current cycle's BRD set in full; stu
 **Context.** Comparing BRD vs IPLAN on this project, two **core** requirements — L2 (long-term distilled memory) and L3 (per-agent identity) — traced to **no IPLAN**, even though both are fully implemented (SPEC-02 `Memory`/`AgentProfile` + scope, SPEC-04 distillation, SPEC-01 scoping → IPLAN-02/04/01). Root cause: **no EARS line carried `@brd:` for those BRD FRs** — several EARS lines that serve them cite only one upstream BRD FR each. The cumulative tags flow *downward* and are spot-checked per layer, but nothing verifies, **end-to-end and forward**, that *every BRD requirement resolves to ≥1 implementing IPLAN*. So a requirement can be built yet appear uncovered (false gap), or — worse — be genuinely unbuilt yet pass if downstream tags are sloppy (false pass). This is BeeLocal #54 ("no requirements-coverage check, EARS/BDD→SPEC") extended to the full chain through IPLAN — exactly the check an adopter needs before GATE-CODE.
 
 **Fix:**
+
 - Provide a **forward coverage report/gate** (e.g., `sdd_coverage`, or a GATE-CODE pre-check): resolve the `@`-tag graph and assert every BRD functional requirement reaches ≥1 SPEC and ≥1 IPLAN; emit a full BRD→PRD→EARS→BDD→SPEC→TDD→IPLAN matrix and list any requirement with a broken/empty downstream path.
 - **Allow and encourage multi-upstream tagging:** an EARS line frequently serves several BRD FRs; the template/standard should explicitly permit multiple `@brd:` citations per line and lint for any BRD FR with **zero** downstream EARS coverage (the upstream-completeness direction, complementing #54's downstream-coverage direction).
 
