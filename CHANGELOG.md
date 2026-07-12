@@ -4,6 +4,10 @@ All notable changes to Engramory are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+### Added
+
+- **`pre-commit` CI gate** — added `.github/workflows/pre-commit.yml` (caller of the aidoc-flow-ci reusable @ci/v1.9.5), closing the gate gap in docs/WORKFLOWS.md §2.1.
+
 ### Added — canon docs-sync workflow (dry-run) (2026-07-11)
 
 Added `.github/workflows/docs-sync.yml` (thin caller of aidoc-flow-ci
