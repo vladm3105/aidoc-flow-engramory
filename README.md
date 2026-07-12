@@ -99,3 +99,5 @@ Project initiation. Phase 0 (dev foundation) scaffolding. See [roadmap/ROADMAP.m
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE).
+
+<!-- composition verification 2026-07-12 -->
