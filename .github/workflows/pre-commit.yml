@@ -1,0 +1,32 @@
+# Caller template for aidoc-flow-ci's reusable pre-commit workflow.
+#
+# Single template (works for both PRIVATE + PUBLIC). The reusable
+# workflow uses ubuntu-latest by default. PRIVATE consumers per
+# OPS-0049 may override runner_labels to '["self-hosted", "aidoc", "ci-ephemeral"]'.
+#
+# Requires .pre-commit-config.yaml in the consumer repo root. The
+# workflow runs all hooks against all files via
+# `pre-commit run --all-files`.
+
+name: pre-commit
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  call:
+    uses: vladm3105/aidoc-flow-ci/.github/workflows/pre-commit.yml@ci/v1.9.5
+    with:
+      python-version: '3.12'
+      # Override examples:
+      # extra-deps: '-r tests/conformance/requirements.txt'
+      # runner_labels: '["self-hosted", "aidoc", "ci-ephemeral"]'   # PRIVATE per OPS-0049
