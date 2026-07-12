@@ -7,7 +7,7 @@ permissions:
   pull-requests: write
 jobs:
   call:
-    uses: vladm3105/aidoc-flow-ci/.github/workflows/labeler.yml@ci/v1.9.2
+    uses: vladm3105/aidoc-flow-ci/.github/workflows/labeler.yml@ci/v1.9.5
     permissions:
       contents: read
       pull-requests: write

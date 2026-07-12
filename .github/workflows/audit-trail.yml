@@ -9,7 +9,7 @@ on:
 
 jobs:
   call:
-    uses: vladm3105/aidoc-flow-ci/.github/workflows/audit-trail-check.yml@ci/v1.9.1
+    uses: vladm3105/aidoc-flow-ci/.github/workflows/audit-trail-check.yml@ci/v1.9.5
     with:
       runner_labels: '"ubuntu-latest"'
     permissions:
