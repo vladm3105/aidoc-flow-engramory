@@ -6,7 +6,7 @@
 
 > Status: review artifact. Evaluative by purpose. Where it conflicts with an accepted
 > ADR, the ADR governs until amended. Findings marked **Fix** are proposals, not decisions.
-
+>
 > **Status (2026-07-09, PLAN-001):** the contract-level fixes for D1
 > (feedback loop), D2 (confidence dynamics), D4 partially (status +
 > usage columns), and the quarantine/idempotency gaps now live in
@@ -38,6 +38,7 @@ purpose of this review is to move each item from naming to mechanism.
 ## Strong foundations (retain; refine)
 
 ### S1. Own-the-canonical-store
+
 Raw text + provenance + regenerable embeddings in Postgres, with the memory engine treated as a
 replaceable processor. This is the correct portability primitive. It correctly identifies that
 *semantic* portability (re-embed from retained text) is a stronger guarantee than any vendor
@@ -52,6 +53,7 @@ export API.
   is not a silent regression.
 
 ### S2. Three memory types (semantic / episodic / procedural)
+
 A correct taxonomy, correctly tied to "lessons and errors become skills."
 
 - **Refine.** The taxonomy is collapsed into one table, one `type` column, one distillation
@@ -63,6 +65,7 @@ A correct taxonomy, correctly tied to "lessons and errors become skills."
   procedural memory, context/validity on semantic, salience/decay on episodic).
 
 ### S3. Distillation as "sleep" (reflection → consolidation)
+
 A sound framing consistent with reflection in Generative Agents and 2025 sleep-time-compute work.
 
 - **Refine.** The claim "indistinguishable in practice from the agent remembers everything"
@@ -76,54 +79,66 @@ A sound framing consistent with reflection in Generative Agents and 2025 sleep-t
 ## Defects (conceptually wrong or high-risk)
 
 ### D1. No feedback loop — the "whole game" is played blind
+
 Nothing measures whether a retrieved memory helped the task. Consolidation merges, generalizes,
 and prunes on a one-shot write-time judgment that is never corrected by outcome. Memory is
 modeled as store → retrieve, but "learning what to keep" requires retrieve → use → outcome →
 reinforce, and that arc is absent. BRD-01 sets a 95% citation-accuracy gate for the KB; L2
 memory has no equivalent.
+
 - **Fix.** Log each retrieval and bind it to task outcome; let utility-from-use — not only
   birth-time confidence — drive confidence updates and pruning.
 
 ### D2. `confidence` is a placeholder, not a mechanism
+
 `confidence REAL DEFAULT 0.5` with "quarantine below a floor" (SPEC-02, SPEC-04). Its source is
 undefined (an LLM self-estimate, which is poorly calibrated) and it has no update rule — set once
 at write, read as a static gate. A lesson that keeps proving true never gains standing; one that
 causes errors never loses it.
+
 - **Fix.** Define confidence as evidence-based: a prior from distillation, updated by
   retrieval-utility and contradiction signals.
 
 ### D3. Conflict handling is linear; real conflicts are not
+
 `supersedes` + `valid_to` handle "B replaces A." There is no detection of contradiction (the
 supersession link is assumed to already exist) and no context-dependent validity (true in
 project X, false in project Y — where both should survive, scoped, rather than one superseding
 the other). Zep/Graphiti is cited for temporal contradiction resolution but its mechanism is not
 adopted.
+
 - **Fix.** Detect contradictions at reflection time (retrieve neighbors, test for conflict) and
   support context-scoped validity so conflicting-but-both-true memories coexist.
 
 ### D4. "Endless because bounded" conflates two claims, one false
+
 Bounded *working set* (what enters context) is real and correct. Bounded *total store* is false:
 genuinely new facts across projects grow L2 monotonically regardless of consolidation quality.
 The endlessness derives from retrieval bounding, not from consolidation bounding the store. There
 is also no forgetting policy — "prune low-value noise" has no value function, whereas functional
 forgetting reduces interference.
+
 - **Fix.** Separate the two claims; add a retention/forgetting policy (recency × frequency ×
   utility decay); plan archival tiers for a growing canonical store; treat forgetting as a
   first-class, evaluated operation.
 
 ### D5. Retrieval is top-K similarity + scope filter — too thin
+
 The stated goal ("the right lesson at the right time") is a relevance/timing problem; similarity
 to query text is a different problem. It is especially wrong for procedural memory, which should
 fire on situation match (the agent is in state X), not text similarity. There is no re-ranking by
 recency/confidence/utility, no query-intent routing to memory type, and no associative/graph
 retrieval for the multi-hop cases the graph engine exists to serve.
+
 - **Fix.** Multi-signal ranking (similarity × recency × confidence × utility × scope-priority),
   query-intent routing, and situation-triggered procedural recall.
 
 ### D6. The L1→L2 promotion trigger is brittle for continuous agents
+
 "At project end" / "post-session" is not well defined for an agent that runs for days or crashes
 mid-run. Reflection firing only at a clean session end lets L1 grow unbounded, and an ungraceful
 exit loses undistilled episodes — L1 is specified in Redis (ephemeral), so the loss is real.
+
 - **Fix.** Define explicit reflection triggers (time, episode-count, salience/surprise) and make
   L1 durable enough to survive a crash without losing undistilled experience.
 
@@ -132,40 +147,50 @@ exit loses undistilled episodes — L1 is specified in Redis (ephemeral), so the
 ## Gaps (missing concepts)
 
 ### G1. Memory safety / poisoning
+
 A system built on durable, self-authored memory that is re-injected into future tasks carries an
 error-amplification and prompt-injection surface: one malicious document or one wrong inference,
 once distilled into a "lesson," becomes durable and re-contaminates later tasks. ADR-06 governs
 KB writes; episode and distilled-memory writes are agent-authored with no injection screening and
 no provenance-trust weighting.
+
 - **Fix.** Trust-weight memory by source (human-approved > agent-inferred), screen for injection
   at reflection, and quarantine + review before any memory crosses an agent or tenant boundary.
 
 ### G2. Cross-agent promotion is undefined
+
 "Shared/team namespace" does not state what makes one agent's lesson safe for others. There is no
 corroboration threshold before a per-agent lesson graduates to `space` scope, and no attribution
 when one agent uses another's memory. L3 "agent identity" is asserted but implemented as a
 `standing_preferences` JSONB bag — a preferences dictionary, not an evolving identity.
+
 - **Fix.** Require corroboration (across agents/projects) before graduating a memory to shared
   scope; attribute shared memories; either build an identity model or rename the layer
   "agent-scoped memory."
 
 ### G3. No evaluation concept
+
 The platform thesis is "distilled memory makes agents better," and nothing measures it: no memory
 benchmark (LoCoMo / LongMemEval-style), no task-success with-vs-without memory, no retrieval
 precision/recall target, no memory-utilization metric. This is deferred to BRD-06 (a sketch).
+
 - **Fix.** Make a memory-quality eval harness a first-class, early deliverable — the "whole game"
   cannot be tuned without a scorecard.
 
 ### G4. Context assembly / working-memory manager under-designed
+
 The runtime bottleneck is what exactly enters the finite context window, in what order, at what
 token budget — the core of MemGPT/Letta. The design borrows the "bounded working set" idea but
 not the mechanism: no context-budget manager, no prioritization when retrieved memories exceed
 budget, no summary-vs-full-text tradeoff.
+
 - **Fix.** Specify a context-assembly component (the operative "working memory").
 
 ### G5. Episodes flattened to text
+
 `content_raw TEXT` discards the structure of real agent episodes (tool calls, diffs, file paths,
 error traces, outcomes) that would sharpen both retrieval and distillation.
+
 - **Fix.** A typed episode schema (structured events), not a prose blob.
 
 ---
@@ -178,6 +203,7 @@ lock-in; `MEMORY_DESIGN` shifts to Postgres-canonical + LangMem-behind-RAC; `ARC
 on building Engramory as a platform. The final position is the strongest of the three but
 overrides the landscape document's own advice ("do not build your own; defer the infrastructure")
 without stating that it does.
+
 - **Fix.** State the leap explicitly — why per-agent distillation, consolidation control, and
   portability justify building a platform rather than adopting Mem0/Cipher — and record that this
   is a larger commitment than "adopt a tool." Mark the two research documents as historical input

@@ -38,7 +38,7 @@ Both cores share, and must not duplicate:
 - **Ports & adapters** ([ADR-02](../sdd/05_ADR/ADR-02_ports_and_adapters.yaml)) — the same StoragePort/VectorPort/GraphPort/… serve both cores.
 - **Portability** — canonical text in Postgres; embeddings/graph are rebuildable projections.
 
-```
+```text
               Agents  ──MCP──►  ONE GATEWAY  (auth + scope, per call)
                                    │        │
                      memory_*  ◄───┘        └───►  knowledge_*

@@ -260,7 +260,7 @@ Docs follow the global language rules (objective, no promotional claims).
 | 15 | ROADMAP MVP-1 targets memory_add/memory_search over MCP; eval harness + feedback loop are exit criteria | `**Next (MVP-1):**` | roadmap/ROADMAP.md:23 |
 | 16 | HANDOFF names feedback/forget/profile tools + tenant-scoping get_memory as recorded next work | `memory_feedback/memory_forget/` | HANDOFF.md:36 |
 | 17 | ADR-10 permits client-constructed ActorContext only behind the dev-tier fence | `DEV-TIER TRUST CARVE-OUT` | sdd/05_ADR/ADR-10_agent_facing_packaging.yaml:73 |
-| 18 | Interlog CLI exit-code contract is 0/1/2/3 (success / reject / usage / retryable) | `| \`0\` | success |` | docs/standards/CLI-SPEC.md:29 (repo: interlog — resolve with `--root /opt/data/aidoc-flow/interlog`) |
+| 18 | Interlog CLI exit-code contract is 0/1/2/3 (success / reject / usage / retryable) | `\| \`0\` \| success \|` | docs/standards/CLI-SPEC.md:29 (repo: interlog — resolve with `--root /opt/data/aidoc-flow/interlog`) |
 | 19 | SPEC-01 currently reads "The single MCP-exposed surface" | `The single MCP-exposed surface` | sdd/06_SPEC/SPEC-01_access_surface.yaml:26 |
 | 20 | SPEC numbering occupied through SPEC-06; SPEC-07 is free | `SPEC-06_ports_portability.yaml` | sdd/06_SPEC/SPEC-00_index.md:29 |
 | 21 | memory_feedback / memory_forget / agent_profile_get are already in the authorize() action set | `KNOWN_ACTIONS` | src/engramory/access/authz.py:14 |

@@ -69,8 +69,8 @@ semver-tagged (`ci/v1.0.0`, `ci/v1.0.1`, …). Plan + charter live in
 `ops/iplans/IPLAN-0017-CHARTER_aidoc-flow-ci.md`.
 
 **Per-repo state (2026-07-09):** public repo. Adopts unified CI via
-`.github/workflows/ai-review.yml`@ci/v1.4.3 + `composition.yml`@ci/v1.3.0
-+ `auto-merge-ai-prs.yml`@ci/v1.5.1 + `audit-trail.yml` (canon
+`.github/workflows/ai-review.yml`@ci/v1.4.3 + `composition.yml`@ci/v1.3.0 +
+`auto-merge-ai-prs.yml`@ci/v1.5.1 + `audit-trail.yml` (canon
 `audit-trail-check.yml`@ci/v1.6.0) + `standards-drift.yml` (fetches canon
 at ci/v1.6.0). Runner topology:
 `ubuntu-latest` (matches existing `ci.yml`). Reviewer: `claude`

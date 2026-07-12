@@ -51,7 +51,7 @@ The PR body below records the outcome for reviewers.
 
 **Agents dispatched:**
 
-- `<agent-name>` — <verdict summary>
+- `<agent-name>` — `<verdict summary>`
 
 **Fold outcome:** <!-- e.g. "cycle 1 APPROVED, 0 findings" or "cycle 1 REVISIONS-NEEDED, N findings folded". Cap at 3 fold cycles per OPS-0066. -->
 
@@ -78,4 +78,4 @@ per docs/REPO_STANDARDS.md §2 branch-protection table:
 - [ ] `call / composition` gate
 - [ ] `Lint / format / security hooks` green
 - [ ] `Secret scan (gitleaks)` green
-- [ ] <domain-specific verification>
+- [ ] `<domain-specific verification>`

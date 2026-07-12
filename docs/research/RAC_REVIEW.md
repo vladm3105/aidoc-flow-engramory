@@ -27,6 +27,7 @@ In short: you've built the **hard infrastructure** — KG + vectors + MCP + mult
 You're right that there's real overlap, but they sit at different layers. Here's the honest mapping.
 
 ### Where they genuinely overlap
+
 - **MCP as the agent interface** — both expose memory/knowledge to agents over MCP.
 - **Same storage trio** — Postgres + Neo4j + vectors (Cipher uses Qdrant/Milvus; you use pgvector).
 - **Workspace memory shared across sessions/agents** — both have this concept by name.

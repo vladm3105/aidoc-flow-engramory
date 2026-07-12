@@ -1,6 +1,6 @@
 # aidoc-flow-engramory
 
-### Engramory — the memory & knowledge plane of the aidoc-flow ecosystem
+## Engramory — the memory & knowledge plane of the aidoc-flow ecosystem
 
 **Shared agent knowledge & memory core.** Engramory is the persistent, distilled "brain" that the aidoc-flow ecosystem and your AI projects build on — it gives agents long-term memory (knowledge, skills, and experience) that survives across sessions, projects, and platforms.
 

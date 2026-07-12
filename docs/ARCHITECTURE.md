@@ -1,6 +1,6 @@
 # Engramory — Target Architecture
 
-### Shared Agent Knowledge & Memory Core
+## Shared Agent Knowledge & Memory Core
 
 *June 22, 2026 · Consolidates RAC + the Nexus v3 design into one platform, adds per-agent distilled memory, runs self-hosted for dev, migrates to GCP or Azure.*
 
@@ -31,7 +31,7 @@ The third constraint drives everything: **portability is a first-class design go
 
 ## Target architecture (logical)
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────────────┐
 │  AGENTS / CLIENTS:  Claude Code · Codex · Hermes · custom CLI · Web UI │
 └───────────────────────────────┬──────────────────────────────────────┘
@@ -92,6 +92,7 @@ Verified June 2026: **Apache AGE is a managed extension on Azure Database for Po
 - **Neo4j** → managed **Aura is multi-cloud (both GCP and Azure)**, so it is **more portable across "GCP or Azure" than AGE**. It is also RAC's existing choice, a mature graph engine, and well-suited to the **multi-hop reasoning / GraphRAG / entity-timeline** work the knowledge layer needs (native Cypher, GDS algorithms, built-in vector index).
 
 **Decision:**
+
 1. **Default to pure Postgres** for the graph while needs are shallow (entity/edge tables + recursive CTEs over the same pgvector DB) — cheapest dev option, zero extra infra, 100% portable.
 2. **Promote to Neo4j** — not AGE — the moment you need real multi-hop traversal, graph algorithms, or GraphRAG. **Neo4j Community (Docker) in dev → Neo4j Aura (GCP or Azure) in cloud.** This keeps a single graph engine across dev and *both* clouds and reuses RAC's proven Neo4j work.
 3. **Keep AGE only as a fallback** if you later commit firmly to Azure and want the graph inside Postgres (one backup, travels with `pg_dump`).
@@ -107,6 +108,7 @@ This resolves the RAC↔Nexus divergence cleanly in favor of your existing inves
 Merge Nexus's scope-based memory (Session/Space/User) with the type-based, per-agent model from [MEMORY_DESIGN.md](MEMORY_DESIGN.md). The result keeps Nexus's tiers **and** adds the two missing dimensions: **memory type** and **agent identity**.
 
 ### Scoping dimensions (every memory row carries these)
+
 `agent_id` · `project_id` · `domain_id` · `tenant_id` · `scope ∈ {agent, project, domain, space}`
 
 `tenant_id` is the hard isolation boundary; `scope` sets how widely a memory is shared *within* a
@@ -115,6 +117,7 @@ tenant — agent → project → domain → space, where `space` = tenant-wide. 
 This is the key upgrade: memory is no longer only per-tenant — **each agent has its own namespace**, with project, domain, and tenant-wide sharing above it.
 
 ### Layers
+
 | Layer | Lifespan | Backend (dev → cloud) | Notes |
 |---|---|---|---|
 | **L0 Knowledge base** | permanent | Postgres + object storage | Documents/sections (RAC ingestion + Nexus spaces) |
@@ -123,6 +126,7 @@ This is the key upgrade: memory is no longer only per-tenant — **each agent ha
 | **L3 Agent identity + distillation** | permanent, evolving | Postgres + worker | Per-agent profile + reflection/consolidation jobs |
 
 ### Canonical memory schema (engine-neutral, lives in your Postgres)
+
 ```sql
 -- Raw experience (episodic source material)
 episodes(id, agent_id, project_id, tenant_id, domain_id, ts, kind, content_raw, metadata jsonb)
@@ -156,6 +160,7 @@ knowledge core; see `sdd/06_SPEC/SPEC-02`).)
 Because `content_raw` and `provenance` are always kept and `embedding` is marked regenerable, **the brain survives any model or platform migration** — you re-embed from `content_raw`, you don't re-architect.
 
 ### The distillation loop (domain-agnostic generalization of Nexus's Trading learning loop)
+
 - **Per task:** retrieve top-K from L2 (agent + shared) + L1 project state + L0 docs → act → append new episodes to L1.
 - **Reflection (async, post-session):** worker reads recent episodes → writes distilled semantic/episodic/procedural memories to L2 under the agent's namespace.
 - **Consolidation (periodic):** worker compacts L2 — merge duplicates, generalize repeated lessons, `valid_to`-expire stale facts, prune noise. Keeps L2 dense and high-signal so the *retrieved working set* stays bounded even as the store grows.
@@ -165,7 +170,9 @@ Because `content_raw` and `provenance` are always kept and `embedding` is marked
 Nexus's existing Trading `learning:` block (`post_trade_review`, `meta_review_frequency`, bias/accuracy tracking) becomes **one domain's configuration of this general engine**, not a bespoke feature.
 
 ### Memory processor (the swappable engine on top)
+
 The cores call a `MemoryPort`. Adapter options, all keeping Postgres canonical:
+
 - **Dev / self-host:** **LangMem** (MIT, explicit sem/epi/proc + consolidation) or **Mem0** (Apache-2.0) running against your Postgres; **Cipher** if you want turnkey reflection. **Default engine: Mem0 — decided in [STRATEGY.md](STRATEGY.md).**
 - **Cloud (optional accelerator):** Vertex AI Memory Bank (GCP) / Azure equivalent — used as cache/index only, **never the source of truth**.
 

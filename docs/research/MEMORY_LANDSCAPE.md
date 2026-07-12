@@ -62,6 +62,7 @@ There is **no built-in cap on the number of `.md` files** in a vault. (The only 
 | ~280,000 notes | Reported as still handled by a community stress test, near the practical edge. |
 
 **The key reframe for an agent second brain:** Obsidian's file ceiling is almost never the real constraint, because **your agents never load the whole vault** — they search via the MCP layer and pull a handful of notes into context. So the practical limit is set by **retrieval quality and the LLM context window, not by Obsidian**. Two implications:
+
 - The editor is interchangeable/optional — agents read the Markdown directly. Obsidian is just a convenient human front-end.
 - Past ~tens of thousands of notes, invest in the **retrieval layer** (hybrid-search MCP server, or a memory engine like MemPalace/Mem0) and consider **splitting into domain vaults** (e.g. `software/`, `knowledge/`, `business/`) rather than worrying about Obsidian's limits.
 
@@ -163,6 +164,7 @@ Once the vault is large enough that "just search the Markdown" returns junk, put
 **Defer:** Mem0/Letta/Zep/Cognee until you're building a product feature around memory or outgrow local tooling. They're excellent but they're the heavyweight tier — and the hosted ones give back the lock-in you avoided.
 
 ### Why this fits you specifically
+
 - **Many agents (Codex, Claude Code, Hermes, custom):** plain Markdown + MCP is the one substrate every one of them speaks. No agent is privileged; no agent is locked out.
 - **Small team:** files in Git give you sharing, history, and review with tools you already use — no new SaaS, no per-seat cost.
 - **Software + knowledge + business mix:** `AGENTS.md` covers the code side, the vault covers notes/business context, and they live side by side.
@@ -185,10 +187,12 @@ This is the real goal: an agent that *keeps what it learns* — facts, how-to sk
 ### The two best off-the-shelf fits for you
 
 **1. Cipher (ByteRover) — purpose-built for exactly this.** It's an open-source memory layer designed specifically for *coding agents across projects, tools, and teams*. Its **dual memory** maps almost one-to-one onto your ask: **System 1 (Knowledge Memory)** holds codebase knowledge and business logic; **System 2 (Reflection Memory)** captures the agent's reasoning steps and problem-solving patterns — i.e. its skills and experience. **Workspace Memory** shares that across IDEs, sessions, and teammates. It's **MCP-native**, so it plugs into Claude Code, Codex (via its TOML MCP config), Gemini CLI, Cursor, and any other MCP client with near-zero code — which is the "avoid building my own" outcome you want. Self-hosts on the exact stack you already named: **PostgreSQL + Neo4j (knowledge graph) + Qdrant/Milvus (vectors)**.
+
 - **License caveat (be aware):** Cipher is **Elastic License 2.0** — *source-available*, not OSI-"open source." In practice that's free to self-host, modify, and use internally; the only real restriction is you can't resell it as a managed service. For an internal team tool, that's a non-issue.
 - **Fit:** ★★★★★ for a coding team that wants turnkey cross-project memory with no custom RAG.
 
 **2. LangMem (LangChain) — the most "textbook" human memory model, fully OSI open source.** MIT-licensed SDK that explicitly exposes **semantic, episodic, and procedural** memory through one API, with a **Memory Manager that decides what to store/update/delete and consolidates knowledge over time** — the closest thing to a built-in "learning/consolidation" loop. Backends are flexible: **Postgres/pgvector**, vector DBs, key-value.
+
 - **Trade-off:** it's an SDK you wire into agent code, and it's most seamless inside the **LangGraph** ecosystem. Your Codex/Claude Code/Hermes aren't LangGraph, so you'd run LangMem as a **memory service/MCP endpoint they call** — more integration effort than Cipher, but maximally clean licensing and the richest explicit memory-type model.
 - **Fit:** ★★★★☆ if you want pure MIT + the canonical three-type model and don't mind a little glue code.
 
@@ -213,19 +217,27 @@ The file vault + MCP layer above is *no-code* memory — great for the off-the-s
 - Your agents are heterogeneous — Codex and Claude Code are their own runtimes, Hermes is its own runtime, plus custom ones. A memory **layer** (call `add()`/`search()` from any of them, or reach it over MCP) fits this. A memory **runtime** means rebuilding agents inside it — invasive, and impossible for Codex/Claude Code which you don't control.
 
 ### Mem0 — memory *layer* (the pragmatic pick)
+
 A library you drop into any agent: `memory.add()` / `memory.search()`, two calls. Apache-2.0, ~53k stars, v2.0 (April 2026). Python **and** Node SDK, or run it as a self-hosted server with a dashboard and per-agent isolation. Goes fully offline — swap OpenAI for **Ollama**, back it with **Qdrant** (vectors) + optionally **Neo4j / Apache AGE** (graph). Community MCP servers already wire self-hosted Mem0 into Claude Code and Codex. Tuned for "recall this user's/project's stable facts + recent context" (91.6 LoCoMo).
+
 - **Fit:** ★★★★★ — speaks to every agent you run, smallest integration cost, free self-hosted, mixed-content friendly.
 
 ### Letta (MemGPT) — memory *runtime* (powerful, but a commitment)
+
 The agent *is* its memory: an "LLM-as-OS" runtime managing three tiers (core in-context / recall / archival) and the whole agent loop. Open source, `pip install letta` or `docker run letta/letta`, SDKs in Python/TS/Go, MCP-native. Ships **Letta Code**, a memory-first coding agent that tops the OSS Terminal-Bench leaderboard.
+
 - **Fit:** ★★★☆☆ — excellent *if you build a brand-new flagship custom agent from scratch* and want memory to be the architecture. Wrong tool for adding memory to Codex/Claude Code, which you can't move inside Letta. Consider it for *one* greenfield agent, not as the shared layer.
 
 ### Zep / Graphiti — temporal *knowledge graph* (add-on for "what was true when")
+
 Graphiti is the open-source engine (Apache-2.0, Neo4j / FalkorDB / Kuzu backend); it excels at multi-hop temporal queries — "what changed between Q2 and Q3," facts with validity windows so retracted info doesn't resurface. **Caveat: the self-hostable Zep Community Edition was deprecated** — to self-host you now run **Graphiti directly** and manage the graph DB yourself (Zep proper is becoming cloud-centric).
+
 - **Fit:** ★★★☆☆ — reach for it specifically when *time-varying business/client facts* become a real problem. It's a complement to Mem0, not a replacement, and the CE deprecation means a bit more DIY.
 
 ### Cognee — *knowledge pipeline* (add-on for reasoning over your docs)
+
 An ETL/"cognify" pipeline that ingests PDFs, Slack, Notion, images, audio and builds a hybrid graph+vector store (Neo4j / Kuzu / NetworkX). Best when the problem is *knowledge management over an existing corpus* rather than chat recall.
+
 - **Fit:** ★★★☆☆ — relevant to your knowledge + business notes if you want agents to reason over a big document pile. Overlaps with what the Markdown vault already gives you, so only add it if vault search proves too shallow.
 
 ### Framework comparison
@@ -247,6 +259,7 @@ An ETL/"cognify" pipeline that ingests PDFs, Slack, Notion, images, audio and bu
 **Default to Mem0, self-hosted, as the memory framework for your custom and CLI agents.** It's the only one of the four whose model — a thin layer any agent calls — matches a multi-runtime, small-team setup, and it's free and fully local (Qdrant + Ollama, add Neo4j when you want graph relations). It also slots cleanly under the two-layer plan: the Markdown vault stays your human-readable source of truth; Mem0 becomes the programmatic recall engine your code talks to, exposed to Codex/Claude Code via a community MCP server.
 
 Then add **one** specialist later, only if a concrete need appears:
+
 - time-varying facts your agents keep getting wrong → bolt on **Graphiti**;
 - agents need to reason across a large document corpus → bolt on **Cognee**.
 
@@ -258,7 +271,7 @@ Keep **Letta** in your back pocket for a *single greenfield flagship agent* wher
 
 ## Suggested starter structure
 
-```
+```text
 your-knowledge-vault/                 # Obsidian-compatible, in Git
 ├── AI Wiki/                          # agent-owned, machine-maintained
 │   ├── _INDEX.md                     # generated page index
