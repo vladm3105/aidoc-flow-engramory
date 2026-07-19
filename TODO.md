@@ -183,9 +183,11 @@ founder-decision fold (§10).
 Execute in PR order (1 → 2a → 2b → **7** → 3 → 4a → 4b → 4c → 5 → 6);
 rebase 4c on 3 and 6 on 4a — they collide on `README.md` /
 `roadmap/ROADMAP.md` / index files. PR 7 (the ADR-10 `knowledge ingest`
-binding — the plan's one code deliverable) sits right after 2b so the
-doc qualifier does not outlive the gap it describes. Each PR carries its
-own doc-currency.
+binding — the plan's one code deliverable) sits right after 2b because
+until it lands there is no agent-facing writer for `kb_sections`, which
+is what makes the §10 deferral coherent. 2b writes no doc qualifier (it
+would breach the ≤3-surface cap to say something PR 7 deletes). Each PR
+carries its own doc-currency.
 
 Numbered **004**, not 003: `PLAN-003` already refers in this repo's
 prose to the *external* aidoc-flow-ci canon-adoption plan
@@ -394,8 +396,9 @@ Pass 4.
 
 ## 11. 🔴 `call / ai-review` fails — reviewer resolves to `codex`, no `OPENAI_API_KEY`
 
-**Status:** open, founder-gated. First observed 2026-07-19 on PR #50.
-Blocks the ai-review gate on **every** PR in this repo until resolved.
+**Status:** open — **actionable without founder action** (see Option B).
+First observed 2026-07-19 on PR #50. Blocks the ai-review gate on
+**every** PR in this repo until resolved.
 
 **Symptom** (run 29696493943, reviewer step):
 
@@ -407,38 +410,49 @@ authentication in header, url: https://api.openai.com/v1/responses
 codex rc=1
 ```
 
-Job env showed `REVIEWER: codex`, `APP_KEY_PRESENT: 1` — so the reviewer
-App credentials are fine; the *engine* auth is not.
+Job env showed `REVIEWER: codex`, `APP_KEY_PRESENT: 1` — the reviewer App
+credentials are fine; the *engine* auth is not.
 
-**Root cause.** The reviewer engine is **config-driven**: this repo's
-`.github/workflows/ai-review.yml` leaves `reviewer:` unset, so the
-reusable reads `.reviewer` from the trust-config repo
-(`vladm3105/aidoc-flow-operations@main` → `.github/ai-review/config.json`).
-That config resolves to `codex`, which requires an `OPENAI_API_KEY` repo
-secret. engramory does not have one.
+**Root cause: version skew, and `codex` is a fallback — not a choice.**
+This repo's `.github/workflows/ai-review.yml` leaves `reviewer:` unset,
+so the reusable resolves the engine from the trust-config repo. At the
+pinned `@ci/v1.9.5` that resolution is
+`R="${REVIEWER_IN:-$(jq -r '.reviewer // "codex"' .github/ai-review/config.json)}"`
+(canon `ai-review.yml:525`). But `aidoc-flow-operations@main`'s
+`.github/ai-review/config.json` is now a **v2-schema** file
+(`$schema` pinned at `ci/v2.0.1`, `"version": 2`) that expresses the
+engine as `litellm.model: "ai-reviewer"` and **has no `.reviewer` key at
+all**. So the `// "codex"` fallback fires, and codex demands an
+`OPENAI_API_KEY` this repo does not have.
+
+The underlying condition is therefore **consumer/config version skew**:
+engramory reads a v1 field from a config that moved to the v2 shape.
 
 **Doc drift this exposes.** `CLAUDE.md` § Unified CI states "Reviewer:
 `claude` (subscription-auth via `CLAUDE_CODE_OAUTH_TOKEN`)" — no longer
-true. Folded into PLAN-004 Phase 3, which already rewrites that block.
+what CI does. Folded into PLAN-004 Phase 3, which already rewrites that
+block.
 
 **Resolution options:**
 
 | Option | Effort | Notes |
 | --- | --- | --- |
-| **A. Set `OPENAI_API_KEY` on engramory** | Small | Matches the central config as-is. Founder-only (secret). |
-| **B. Pin `reviewer: claude` in this repo's `ai-review.yml`** | Small | The workflow documents this override explicitly. Needs `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` present. Keeps engramory on the engine CLAUDE.md already claims. |
-| **C. Change `.reviewer` centrally in `aidoc-flow-operations`** | Medium | Cross-repo write — 🔴 per the autonomy tiers; goes through `ops/inbox`, not in-session. Affects every consumer, not just this repo. |
+| **B. Pin `reviewer: claude` in this repo's `ai-review.yml`** (recommended) | One line | Uncomment the override the canon workflow already documents. **Needs no new secret**: `CLAUDE_CODE_OAUTH_TOKEN` has been set on this repo since 2026-07-08, and the reusable wires it into the claude adapter's env. Zero founder action. Restores the engine `CLAUDE.md` already claims. |
+| A. Set `OPENAI_API_KEY` on engramory | Small | Keeps codex. Founder-only (secret creation). Buys nothing over B unless codex is specifically wanted here. |
+| C. Add `.reviewer` back to the operations config | Medium | Cross-repo write — 🔴 per the autonomy tiers; routes through `ops/inbox`, not in-session. Also fights the v2 schema, which dropped the field deliberately, and would affect every consumer. |
+| D. Re-pin engramory to `ci/v2.x` | Medium | Removes the skew at the root, but **does not work here**: v2 routes review through the private LiteLLM proxy, and engramory is a **public** repo running on `ubuntu-latest`, which cannot reach it. Revisit only if the runner/proxy topology changes. |
 
-**Recommendation:** B, then reconcile CLAUDE.md — it keeps this repo on
-the engine its own governance doc already names, and it is a local
-override the canon workflow explicitly supports. A is fine if the
-founder wants engramory to follow the central codex default instead.
+**Recommendation: B**, then reconcile `CLAUDE.md` (already in PLAN-004
+Phase 3 scope). It is a one-line change, needs no secret, and is the only
+option that is both executable today and correct for a public repo. Note
+it touches `.github/workflows/ai-review.yml`, which is a governance
+surface excluded from auto-merge — so it wants its own PR with founder
+sign-off, not a fold into an unrelated one.
 
 **Note.** `main` is not branch-protected (verified 2026-07-19: `gh api
 .../branches/main/protection` → 404), so ai-review is **not a required
-check** — `mergeStateStatus` reads UNSTABLE, not BLOCKED. Merges are
-therefore possible while this is open, but per the auto-merge carve-out
-(red CI) they need explicit founder OK rather than the standing
-authorization.
+check** — `mergeStateStatus` reads UNSTABLE, not BLOCKED. Merges remain
+possible while this is open, but per the auto-merge carve-out (red CI)
+they need explicit founder OK rather than the standing authorization.
 
 **Discovered.** 2026-07-19 (PR #50 — PLAN-004).

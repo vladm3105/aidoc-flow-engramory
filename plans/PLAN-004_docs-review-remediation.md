@@ -438,10 +438,13 @@ CI Postgres fix as out of scope, but worth stating rather than assuming.
 
 PR 1 → 2a → 2b → 7 → 3 → 4a → 4b → 4c → 5 → 6. Phase 1 first: it is the only
 finding that breaks a working command for every integrated agent. **PR 7 runs
-directly after 2b** — 2b discloses the ADR-10 gap in the docs and 7 closes it,
-so keeping them adjacent stops the qualifier from outliving the gap it
-describes. Phases are **not** fully independent — see the file-collision note in
-Phase 4; rebase in order.
+directly after 2b** because 2b notes the ADR-10 non-conformance in its PR body
+and 7 closes it — and, more substantively, because until PR 7 lands there is no
+agent-facing writer for `kb_sections`, which is what makes the Phase-2a
+deferral coherent. (Per Pass 5, 2b writes **no** doc qualifier — that would be a
+4th surface on a ≤3-cap governance PR, written only to be deleted one PR later.)
+Phases are **not** fully independent — see the file-collision note in Phase 4;
+rebase in order.
 
 ## Verification
 
