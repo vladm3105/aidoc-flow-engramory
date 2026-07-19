@@ -176,11 +176,14 @@ and `roadmap/ROADMAP.md`:
 ## 8. 🔴 PLAN-004 — documentation review remediation (20 findings)
 
 **Status:** open — plan READY 2026-07-19
-(`plans/PLAN-004_docs-review-remediation.md`): 57 cited claims, 3 review
+(`plans/PLAN-004_docs-review-remediation.md`): 62 cited claims, 4 review
 passes incl. an independent adversarial pass that returned 10
-load-bearing findings, all folded. Execute in PR order (1 → 2a → 2b → 3
-→ 4a → 4b → 4c → 5 → 6); rebase 4c on 3 and 6 on 4a — they collide on
-`README.md` / `roadmap/ROADMAP.md` / index files. Each PR carries its
+load-bearing findings (all folded) and a founder-decision fold (§10).
+Execute in PR order (1 → 2a → 2b → **7** → 3 → 4a → 4b → 4c → 5 → 6);
+rebase 4c on 3 and 6 on 4a — they collide on `README.md` /
+`roadmap/ROADMAP.md` / index files. PR 7 (the ADR-10 `knowledge ingest`
+binding — the plan's one code deliverable) sits right after 2b so the
+doc qualifier does not outlive the gap it describes. Each PR carries its
 own doc-currency.
 
 Numbered **004**, not 003: `PLAN-003` already refers in this repo's
@@ -235,8 +238,10 @@ Not a governance PR (AGENTS.md is in 2b), though ai-review's
 in no agent doc, while SKILL.md advises "prefer specific queries".
 (b) `knowledge_ingest` has no CLI binding — this is an **ADR-10
 conformance gap**, not a doc overclaim: `ADR-10:71` (Accepted) mandates
-the CLI expose it. The doc qualifier is interim disclosure of a
-non-conformance; the binding is filed at §10. (c) Config/env honesty:
+the CLI expose it. Noted in the PR body only — **no doc qualifier**,
+since PR 7 closes the gap one PR later and the qualifier would both
+breach the ≤3-surface governance cap and be deleted immediately.
+(c) Config/env honesty:
 only `ENGRAMORY_PROFILE` is read (`adapters/factory.py:32`);
 `REDIS_URL`/`OLLAMA_HOST`/`EMBEDDING_MODEL`/`EMBEDDING_DIMS`/
 `POSTGRES_HOST`/`PORT` are read by neither `src/` nor compose (dead),
@@ -329,32 +334,59 @@ its own spec + plan; none is documentation work.
 
 **Discovered.** 2026-07-19 (PLAN-004 field research).
 
-## 10. 🟡 Conformance gaps surfaced by the PLAN-004 review
+## 10. 🟡 Conformance gaps surfaced by the PLAN-004 review — DECIDED 2026-07-19
 
-Three items where an artifact and its normative contract disagree. Each
-is *code* work; PLAN-004 only discloses them in the docs.
+Three items where an artifact and its normative contract disagree. All
+three were decided by the founder 2026-07-19; see PLAN-004 Review log
+Pass 4.
 
-- **`kb_sections` retrieval leg.** `memory_search` reads `FROM memories`
-  only (`core/repository.py:369`), so knowledge ingested per ADR-06 is
-  unretrievable through the documented unified read that
+- **`kb_sections` retrieval leg — DEFERRED behind a trigger (ratified).**
+  `memory_search` reads `FROM memories` only (`core/repository.py:369`),
+  so knowledge is unretrievable through the unified read that
   `docs/CORES.md:59` calls "deliberately unified" and
-  `sdd/06_SPEC/SPEC-01_access_surface.yaml:56` contracts. PLAN-004 PR 2a
-  downgrades the claim to "planned" as an explicit, recorded spec
-  deviation. **Decide:** implement the leg, or ratify the deviation and
-  move the unified read to a later cycle.
-- **`engramory knowledge ingest` CLI binding.** `ADR-10:71` (Accepted)
-  mandates the CLI expose the full SPEC-01 tool set *including* knowledge
-  ingest; `_build_parser` registers `init`/`memory`/`profile`/`status`
-  only (`cli.py:262-305`). The sixth tool is Python-API-only, so the CLI
-  face is non-conformant with an accepted ADR.
-- **SPEC-07 invocation widening (optional).** Five doc sites independently
-  drifted to a post-subcommand `--json`, which is evidence the normative
-  global-first form (`SPEC-07:46`) is the unnatural one for agents.
-  Accepting both positions is feasible — verified empirically: a shared
-  parent parser needs `add_help=False` (else construction raises on
-  `-h/--help`) and `default=argparse.SUPPRESS` (else a leaf silently
-  overwrites a root-supplied `--json` with `False`, breaking the smoke
-  script and the whole CLI suite). **Requires a SPEC-07 amendment +
-  decision record — not a silent code change.**
+  `sdd/06_SPEC/SPEC-01_access_surface.yaml:56` contracts. **Decided:
+  ratify the deviation** — the blocker is definition, not effort.
+  SPEC-03's fusion is undefined for knowledge rows: `:80` names
+  `memories.ts_lex` for the lexical leg and `:81`'s multipliers need
+  `confidence` + `source_trust`, none of which `kb_sections` has
+  (`db/migrations/0003_reconcile_contracts.sql:90-105`). Building it
+  against today's recency-only ranking would interleave authoritative
+  knowledge with inferred memory, inverting the trust separation at
+  `docs/CORES.md:20`. **Unified retrieval lands when all three hold:**
+  (1) LLMPort dev adapter supplies query embeddings — alone this closes
+  the vector leg, since `kb_sections.embedding` already exists (§7);
+  (2) migration 0004 adds `ts_lex` + GIN index to `kb_sections`;
+  (3) SPEC-03 is amended to define post-fusion multipliers for knowledge
+  rows. Condition (3) — not (2) — owns the trust handling: `confidence`
+  and `source_trust` are the *memory* core's markers for inferred
+  content, so adding them to `kb_sections` would dissolve the very
+  separation this deferral protects (they would be constants anyway).
+  **Scope:** the trigger gates *unified* retrieval only —
+  `sdd/06_SPEC/SPEC-05_kb_compatibility.yaml:59` already specs a
+  knowledge-only `kb_context(scope, query)` route needing just (1).
+- **`engramory knowledge ingest` CLI binding — PROMOTED to near-term
+  (PLAN-004 Phase 7).** `ADR-10:71` (Accepted) mandates the CLI expose
+  the full SPEC-01 tool set *including* knowledge ingest;
+  `_build_parser` registers `init`/`memory`/`profile`/`status` only
+  (`cli.py:262-305`). **Decided: fix it now** — it is a non-conformance
+  with an accepted ADR (not a missing feature), it is small (a subparser
+  over the already-authorized `access/surface.py:223`), and it is the
+  prerequisite that makes the deferral above coherent: with no writer
+  face, `kb_sections` is empty, so the read leg would serve nothing and
+  its fusion weights could not be tuned against real data.
+- **SPEC-07 invocation widening — DECLINED (revisit only on recurrence).**
+  Five doc sites independently drifted to a post-subcommand `--json`,
+  which is evidence the normative global-first form (`SPEC-07:46`) is the
+  unnatural one for agents. Accepting both positions is feasible —
+  verified empirically: a shared parent parser needs `add_help=False`
+  (else construction raises on `-h/--help`) and
+  `default=argparse.SUPPRESS` (else a leaf silently overwrites a
+  root-supplied `--json` with `False`, breaking the smoke script and the
+  whole CLI suite). **Decided: do not widen.** The docs-conformance test
+  in PLAN-004 PR 1 prevents recurrence at zero risk and zero contract
+  churn; widening costs a normative amendment for an ergonomic gain.
+  Revisit only if drift recurs *after* that test lands — that would be
+  evidence the test cannot hold it.
 
 **Discovered.** 2026-07-19 (PLAN-004 Pass 2 independent review).
+**Decided.** 2026-07-19 (founder; PLAN-004 Pass 4).

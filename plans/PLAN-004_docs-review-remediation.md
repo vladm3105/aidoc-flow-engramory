@@ -1,6 +1,7 @@
 # PLAN-004 — Documentation review remediation: restore the agent-facing contract, re-sync the governance layer, close the security-doc gap
 
-**Status:** DRAFT — ready for execution (Pass 2 independent review folded)
+**Status:** READY for execution — 66 cited claims, 5 review passes (2
+independent adversarial, 1 founder-decision fold). 10 PRs, sequenced.
 **Date:** 2026-07-19
 **Owner:** Engramory team
 **Origin:** founder request 2026-07-19 — review `engramory/` and especially
@@ -46,6 +47,13 @@ recorded as tracked debt (`TODO.md` §9) rather than built here:
 - **`knowledge_search` split** — CORES.md boundary rule 4 already defers it.
 - **Widening the SPEC-07 invocation contract** — see Phase 1; deliberately
   demoted to an optional, separately-decided enhancement.
+- **The `kb_sections` retrieval leg** — ratified as a deviation behind a
+  three-condition trigger; see Phase 2a.
+
+**One carve-out:** the `engramory knowledge ingest` CLI binding (Phase 7) *is*
+code, admitted deliberately because it closes a non-conformance with an accepted
+ADR rather than adding a feature, and because it is the prerequisite that makes
+the Phase-2a decision coherent. See Phase 7 for the full justification.
 
 ## Findings → phase map
 
@@ -60,7 +68,7 @@ recorded as tracked debt (`TODO.md` §9) rather than built here:
 | 7 | `memory_search` does not span the knowledge core — 4 surfaces say it does | P2 | 2a |
 | 8 | "feedback drives confidence updates" — no confidence update exists (3 surfaces) | P2 | 2a |
 | 9 | Search ranking is recency-only; agent docs imply relevance ranking | P2 | 2b |
-| 10 | `knowledge_ingest` has no CLI binding — an **ADR-10 conformance gap**, not a doc overclaim | P2 | 2b |
+| 10 | `knowledge_ingest` has no CLI binding — an **ADR-10 conformance gap**, not a doc overclaim | P2 | 7 (fix; noted in 2b's PR body) |
 | 11 | IPLAN statuses `Draft` while manifests are `DONE, verified: true` | P2 | 4a |
 | 12 | docs/README.md index omits INSTALL / AGENT-QUICKSTART / AGENT-INTEGRATION + Skill | P2 | 4a |
 | 13 | docs/adr/README.md missing the ADR-10 row | P2 | 6 |
@@ -148,8 +156,59 @@ the same claims standing in the normative artifacts. Both sides are fixed here.
    **Framing correction:** CORES rule 4 calls this a deliberate MVP-1 design
    choice and SPEC-01 is a signed contract, so downgrading it to "planned" is a
    **spec deviation, not bookkeeping**. Record it as an explicit deviation in
-   the PR body with a `DECISIONS.md` entry, and file the `kb_sections`
-   retrieval leg as a TODO item. Do not let the amendment land as a silent edit.
+   the PR body with a `DECISIONS.md` entry. Do not let the amendment land as a
+   silent edit.
+
+   **Founder decision 2026-07-19 — ratify the deviation with a trigger, do not
+   build the leg now.** The unified read is not merely unimplemented: SPEC-03's
+   ranking formula is **undefined for knowledge rows**. `SPEC-03:80` fuses
+   vector cosine (0.5) + lexical `ts_rank` over **`memories.ts_lex`** (0.3) +
+   recency (0.2), then `SPEC-03:81` multiplies by
+   `confidence × scope proximity × source_trust` — and `kb_sections`
+   (`db/migrations/0003_reconcile_contracts.sql:90-105`) has no `ts_lex`, no GIN
+   index, no `confidence`, and no `source_trust` (claims 58, 59). `embedding`
+   *is* present (claim 61), so the vector leg alone is closable; the lexical leg
+   and the multipliers are not. There is currently no defined way to rank a
+   knowledge section **against a memory in one fused list**.
+
+   **Scope of that claim (Pass 5 correction):** it is true of *unified*
+   retrieval only. `sdd/06_SPEC/SPEC-05_kb_compatibility.yaml:57` already specs
+   `kb_context(scope, query) -> list[KBHit]` (claim 63) — a **knowledge-only**
+   retrieval route that needs no cross-corpus fusion and therefore neither
+   condition (2) nor (3) below, only (1). The trigger gates the unified read;
+   it does not gate SPEC-05's separate route, which remains the deferred
+   alternative if knowledge retrieval is wanted before fusion is defined.
+
+   Building it against today's recency-only ranking would also interleave
+   authoritative knowledge with inferred memory in one undifferentiated list —
+   the opposite of the trust separation `docs/CORES.md`'s trust row exists to
+   enforce ("Authoritative, citable" vs "Inferred — needs confidence + safety
+   screening", claim 60).
+
+   So the SPEC-01/CORES amendment states MVP-1 retrieval covers the **memory
+   core**, knowledge is reachable by citation rather than by search, and unified
+   retrieval lands when **all three** conditions hold:
+   1. the LLMPort dev adapter supplies query embeddings — this alone closes the
+      vector leg, since `kb_sections.embedding` already exists (IPLAN-06,
+      `TODO.md` §7);
+   2. a migration 0004 adds `ts_lex` + a GIN index to `kb_sections`, closing the
+      lexical leg;
+   3. SPEC-03 is amended to define the post-fusion multipliers for knowledge
+      rows.
+
+   **Condition (3) deliberately owns the trust handling, and (2) deliberately
+   does not (Pass 5 correction).** An earlier draft had (2) add `confidence` and
+   `source_trust` columns to `kb_sections` — which would have contradicted the
+   very argument justifying this deferral. Knowledge is authoritative *because*
+   it carries no confidence score; `confidence` and `source_trust` are the
+   memory core's markers for inferred content (claim 60). Adding them to
+   `kb_sections` would import memory's trust machinery into knowledge and
+   dissolve the separation, and the columns would be constants anyway
+   (`confidence = 1.0`, `source_trust = human`). The right shape is for SPEC-03
+   to define **constant multipliers for knowledge rows**, leaving the schema
+   boundary intact.
+
+   An open-ended "planned" is what produced this drift; the trigger replaces it.
 2. **The confidence claim also lives in SPEC-01** (claims 18–20, 23):
    `sdd/06_SPEC/SPEC-01_access_surface.yaml:66` says feedback *"drives the
    SPEC-04 confidence-update rule"* in the present tense — the same
@@ -182,9 +241,14 @@ ai-review's `tier=spec` exclusion may still catch it since it edits
    29): `ADR-10:71` (**Accepted**) mandates the CLI expose the SPEC-01 tool set
    *including* `knowledge ingest`; the CLI registers `init` / `memory` /
    `profile` / `status` only. So this is **not** a doc overclaim to be papered
-   over — the doc qualifier in AGENT-QUICKSTART is an *interim disclosure of an
-   ADR non-conformance*, and the missing `engramory knowledge ingest` binding
-   is filed as a TODO item citing ADR-10 clause 2. Say so in the PR body.
+   over — it is a non-conformance, and **PR 7 closes it one PR later**.
+   **No doc edit here (Pass 5 correction).** The Pass-4 draft qualified
+   `docs/AGENT-QUICKSTART.md:100`'s "all six agent tools" as an interim
+   disclosure — but that added a **4th surface to a governance PR** (breaching
+   the ≤3 cap) to write a caveat PR 7 would immediately delete. The gap stays
+   open for exactly one PR; disclosing it costs more churn than it buys. PR 7
+   corrects that line directly instead. Note the non-conformance in the PR body,
+   not in the docs.
 6. **Config/env honesty** (claims 30–33): verified split —
    `REDIS_URL`, `OLLAMA_HOST`, `EMBEDDING_MODEL`, `EMBEDDING_DIMS`,
    `POSTGRES_HOST/PORT` are read by neither `src/` nor compose (genuinely
@@ -302,18 +366,82 @@ Sources: <https://cloud.google.com/blog/products/data-analytics/how-the-open-kno
 `docs/STRATEGY.md` one-line note that managed-memory churn in the field
 reinforces ADR-05. 3 surfaces.
 
-**Already landed (Pass 2 finding):** the six field-alignment debt items and the
-plan's execution tracker are already recorded at `TODO.md` §8–§9 (claims 53,
-54); PR 6 does **not** re-file them. It adds only the new items this plan
-surfaced: the `kb_sections` retrieval leg (2a), the `engramory knowledge ingest`
-ADR-10 binding (2b), and the optional SPEC-07 contract widening (Phase 1).
+**PR 6 files nothing new into TODO (Pass 5 correction).** The six
+field-alignment debt items and the plan's execution tracker are already at
+`TODO.md` §8–§9 (claims 53, 54), and both remaining deferred decisions — the
+`kb_sections` trigger and the declined SPEC-07 widening — are already recorded
+at `TODO.md` §10, written in this same branch. PR 6's scope is therefore the new
+ADR + the `docs/adr/README.md` ADR-10 row + the STRATEGY note, nothing else.
+
+## Phase 7 — Close the ADR-10 conformance gap: `engramory knowledge ingest` (P2)
+
+**Founder decision 2026-07-19 — promoted from tracked debt to near-term work.**
+This is the plan's one code deliverable, and it is carved out of the
+"no engineering tracks" non-goal deliberately, on three grounds:
+
+1. **It is a non-conformance with an *accepted* decision, not a missing
+   feature.** `ADR-10:71` mandates the CLI expose the full SPEC-01 tool set
+   *including* knowledge ingest (claim 28); `_build_parser` registers
+   `init` / `memory` / `profile` / `status` only.
+2. **It is small.** `AccessSurface.knowledge_ingest` already exists, fully
+   authorized and ADR-06 evidence-gated (claim 62) — this is a subparser and a
+   thin command body over an existing method, in the shape the other five
+   commands already establish.
+3. **It unblocks the sequencing.** Nothing can write `kb_sections` through any
+   agent face today, so the Phase-2a read leg would serve an empty table. Fix
+   the writer, let real knowledge accumulate, then build retrieval against
+   actual data — which is also the only honest way to tune the SPEC-03 fusion
+   weights when condition (3) of the 2a trigger comes due.
+
+Scope: `engramory knowledge ingest --doc-id … --citation … --text … --evidence-ref …`
+with `--scope` and `--version`, mapping 1:1 to the surface signature (claim 62).
+
+**`--evidence-ref` must NOT be `required=True` (Pass 5 correction — load-bearing).**
+Every other mandatory flag in `_build_parser` uses `required=True` (claim 64), so
+"follow the shape the other commands establish" would make argparse reject a
+missing evidence ref with **exit 2** — contradicting this phase's own
+verification criterion. The ADR-06 gate at `surface.py:240-251` must be the
+thing that rejects, so the refusal is *audited* and exits **1**
+(`GovernedWriteRejected` is matched before the `PermissionError` fence clause at
+`cli.py:324-327`, verified). This is the one deliberate deviation from the
+established parser shape, and the reason for it belongs in a code comment.
+
+Tests: happy path + missing-evidence rejection (mirroring
+`test_bad_outcome_is_fail_closed_reject`). **Not** a dev-tier fence test — the
+fence runs at `cli.py:317` before `args.func` dispatch, so it is
+command-independent and already covered by `test_fence_refuses_non_dev_profile`.
+
+Docs — three surfaces, not one: SPEC-07's `commands:` table (which omits
+`knowledge ingest`, making SPEC-07 itself non-conformant with ADR-10),
+`docs/AGENT-QUICKSTART.md:100`'s "all six agent tools" pointer, and
+**`docs/AGENT-INTEGRATION.md:12-13`**, which enumerates the complete command set
+(`init · memory add · … · status`) and becomes wrong the moment this lands
+(claim 65).
+
+**No new decision record required:** this restores conformance with ADR-10
+clause 2 (Accepted). Contrast Phase 1's SPEC-07 widening, which would *create*
+new contract and therefore does need one.
+
+**PR 7** — full surface list: `src/engramory/cli.py` +
+`tests/integration/test_cli.py` + `scripts/smoke_preprod.sh` (the ingest leg
+required by Verification) + `sdd/06_SPEC/SPEC-07_cli_face.yaml` +
+`docs/AGENT-QUICKSTART.md` + `docs/AGENT-INTEGRATION.md` + `CHANGELOG.md`. Not a
+governance PR, but it will likely trip ai-review's `tier=spec` for editing
+`sdd/06_SPEC/`. Runs directly after PR 2b.
+
+**Gate caveat:** these tests are `pg_dsn`-backed, and `ci.yml:25` is a bare
+`pytest` with no `services:` block (claim 43), so Phase 7's gate is a
+**local/compose gate, not a CI gate** — consistent with this plan declining the
+CI Postgres fix as out of scope, but worth stating rather than assuming.
 
 ## Sequencing
 
-PR 1 → 2a → 2b → 3 → 4a → 4b → 4c → 5 → 6. Phase 1 first: it is the only
-finding that breaks a working command for every integrated agent. Phases are
-**not** fully independent — see the file-collision note in Phase 4; rebase in
-order.
+PR 1 → 2a → 2b → 7 → 3 → 4a → 4b → 4c → 5 → 6. Phase 1 first: it is the only
+finding that breaks a working command for every integrated agent. **PR 7 runs
+directly after 2b** — 2b discloses the ADR-10 gap in the docs and 7 closes it,
+so keeping them adjacent stops the qualifier from outliving the gap it
+describes. Phases are **not** fully independent — see the file-collision note in
+Phase 4; rebase in order.
 
 ## Verification
 
@@ -327,6 +455,11 @@ order.
   non-blocking, so a green run is not proof of external-link health.
 - **Phase 5:** no security claim without an enforcing test or an explicit "not
   defended" note.
+- **Phase 7:** `engramory knowledge ingest` round-trips against the compose
+  store — a section written by the CLI is visible to `count_kb_sections` via
+  `engramory status`; missing `--evidence-ref` exits 1 (not 2); the dev-tier
+  fence still trips. Extend `make smoke` with the ingest leg so the agent loop
+  covers both cores' writes.
 - **All PRs:** OPS-0065 multi-agent review pre-push; governance PRs (2b, 3, 6)
   additionally under the ≤3-surface cap + Rule 2 adversarial self-review.
 
@@ -387,10 +520,19 @@ order.
 | 51 | the same boundary is restated in the integration doc | `## Trust boundary` | docs/AGENT-INTEGRATION.md:89 |
 | 52 | `memory forget` is soft — end-dated, provenance retained, no purge | `provenance retained` | docs/AGENT-QUICKSTART.md:83 |
 | 53 | the plan's execution tracker is already filed in TODO | `documentation review remediation` | TODO.md:176 |
-| 54 | the six field-alignment debt items are already filed in TODO | `Field-alignment design debt` | TODO.md:303 |
+| 54 | the six field-alignment debt items are already filed in TODO | `Field-alignment design debt` | TODO.md:308 |
 | 55 | README's MEMORY_DESIGN row lacks the historical qualifier | `Layered memory (L0–L3), distillation loop, schema, portability` | README.md:81 |
 | 56 | the conceptual ADR index ends at ADR-09 | `Independent memory storage` | docs/adr/README.md:21 |
 | 57 | this repo's prose already cites an external PLAN-003 | `PLAN-003 §4.2` | CLAUDE.md:39 |
+| 58 | SPEC-03's lexical fusion leg is defined over `memories.ts_lex` only | `lexical ts_rank over memories.ts_lex` | sdd/06_SPEC/SPEC-03_retrieval_graph.yaml:80 |
+| 59 | SPEC-03's post-fusion multipliers require confidence + source_trust | `Post-fusion multipliers` | sdd/06_SPEC/SPEC-03_retrieval_graph.yaml:81 |
+| 60 | CORES separates authoritative knowledge from inferred memory by trust | `Authoritative, citable` | docs/CORES.md:20 |
+| 61 | `kb_sections` has no ts_lex, confidence, or source_trust column | `CREATE TABLE IF NOT EXISTS kb_sections` | db/migrations/0003_reconcile_contracts.sql:90 |
+| 62 | `knowledge_ingest` already exists on the surface, authorized + evidence-gated | `async def knowledge_ingest(` | src/engramory/access/surface.py:223 |
+| 63 | SPEC-05 already specs a knowledge-only retrieval route | `async def kb_context(scope: Scope, query: str)` | sdd/06_SPEC/SPEC-05_kb_compatibility.yaml:59 |
+| 64 | every mandatory CLI flag uses `required=True`, so a required `--evidence-ref` would exit 2 | `p_add.add_argument("--content", required=True)` | src/engramory/cli.py:274 |
+| 65 | AGENT-INTEGRATION enumerates the complete command set | `feedback · memory forget · profile get · status` | docs/AGENT-INTEGRATION.md:13 |
+| 66 | SPEC-07's commands table omits `knowledge ingest` | `commands:` | sdd/06_SPEC/SPEC-07_cli_face.yaml:55 |
 
 **Absence claims** (no citation is possible for a file that does not exist;
 verification method recorded instead): `SECURITY.md` exists at neither the repo
@@ -474,5 +616,85 @@ Re-verified each Pass-2 load-bearing finding against source before folding:
 present) ✓. All 10 load-bearing findings folded, none rejected. Plan renumbered,
 ledger expanded to 57 rows, PR structure re-cut from 6 to 9 PRs to hold the
 governance cap.
+
+**Result:** ready — no further load-bearing findings.
+
+### Pass 4 — 2026-07-19 — founder decision fold
+
+The Pass-2 fold left two open forks for the founder (the SPEC-01 deviation and
+the ADR-10 binding's priority). Both were investigated against source and
+decided:
+
+1. **`kb_sections` retrieval leg — ratify the deviation, do not build it now.**
+   Investigation found the blocker is not effort but definition: SPEC-03's
+   fusion is undefined for knowledge rows (`SPEC-03:80` names `memories.ts_lex`
+   for the lexical leg; `:81`'s multipliers need `confidence` + `source_trust`,
+   neither of which `kb_sections` has — claims 58, 59, 61). Building it against
+   today's recency-only ranking would also interleave authoritative knowledge
+   with inferred memory, inverting the trust separation at `docs/CORES.md:20`
+   (claim 60). **Folded:** Phase 2a's amendment now carries a three-condition
+   trigger (LLMPort query embeddings · migration 0004 adding `ts_lex` + trust
+   fields · a SPEC-03 cross-corpus amendment) instead of an open-ended
+   "planned", since open-ended deferral is what produced this drift.
+2. **ADR-10 `knowledge ingest` binding — promote to near-term work.** It is a
+   non-conformance with an *accepted* ADR, it is small (a subparser over the
+   already-authorized `AccessSurface.knowledge_ingest`, claim 62), and it is the
+   prerequisite that makes decision 1 coherent: with no writer face,
+   `kb_sections` is empty, so the read leg would serve nothing and its fusion
+   weights could not be tuned against real data. **Folded** as Phase 7 — the
+   plan's one admitted code deliverable, with the non-goals carve-out stated
+   explicitly. Sequenced directly after PR 2b so the doc qualifier does not
+   outlive the gap.
+
+Ledger extended to 62 rows (claims 58–62), all opened and verified by the author
+against source. No Pass-2 finding was reopened or reversed.
+
+**Result:** decisions folded — sent to Pass 5 for independent re-review.
+
+### Pass 5 — 2026-07-19 — independent pre-push review of the Pass-4 delta
+
+Pass 4 changed the document without re-running its own consistency checks
+against it. A fresh-context adversarial pass on the delta returned **7
+load-bearing + 6 minor** findings; all verified against source and folded, none
+rejected. It confirmed the Pass-4 *reasoning* is sound — every source fact
+behind the deferral resolves verbatim, and the Phase-7 promotion is justified
+rather than scope creep — so the defects are integration defects, not judgement
+errors.
+
+1. **Trigger condition (2) contradicted its own justification.** It required
+   adding `confidence` + `source_trust` to `kb_sections` — importing the memory
+   core's trust machinery into knowledge, dissolving the exact separation the
+   deferral exists to protect, with columns that would be constants. **Folded:**
+   (2) is now `ts_lex` + GIN only; the trust handling moved to (3) as constant
+   multipliers for knowledge rows.
+2. **SPEC-05 `kb_context` was unacknowledged** (claim 63), making the trigger
+   read as necessary-and-sufficient when it gates *unified* retrieval only.
+   **Folded** as an explicit scope note.
+3. **`--evidence-ref` as `required=True` would have broken the exit-code
+   criterion** — every other mandatory flag uses it (claim 64), so following
+   "the established shape" would exit 2 from argparse instead of the audited
+   exit 1 from the ADR-06 gate. **Folded** as a stated deliberate deviation.
+4. **PR 2b was 4 surfaces on a ≤3 governance cap** — the interim QUICKSTART
+   qualifier was the 4th, written in 2b only to be deleted in 7. **Folded:**
+   qualifier dropped; PR 7 corrects the line directly. This also resolved 2b's
+   stale "filed as a TODO item" wording, which Pass 4 had missed when it
+   promoted the binding.
+5. **PR 7 omitted `docs/AGENT-INTEGRATION.md:12-13`** (claim 65), which
+   enumerates the command set and is falsified by the change; and its "code +
+   tests + SPEC-07" surface line understated the real set. **Folded** as a full
+   seven-surface list.
+6. **Claim 54's line drifted** (`TODO.md:303` → `:306`) — displaced by Pass 4's
+   own TODO edits. **Folded.**
+7. **PR 6's "files the deferred items" was a no-op** — §10 already carries both.
+   **Folded** to ADR + index row + STRATEGY note only.
+
+Minors folded: the `embedding`-is-present clarification (condition 1 alone
+closes the vector leg); the redundant dev-tier fence test dropped (the fence is
+command-independent, already covered); Phase 7's gate marked local/compose
+rather than CI; and the "no new decision record" distinction stated, since
+Phase 7 restores conformance while Phase 1's widening would create contract.
+Confirmed sound and unchanged: PR count, findings→phase map, non-goals
+carve-out, governance list `(2b, 3, 6)`, TODO↔plan agreement, and ledger rows
+58–62.
 
 **Result:** ready — no further load-bearing findings.
