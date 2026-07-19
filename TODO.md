@@ -264,7 +264,7 @@ Governance PR, exactly 3 surfaces, Rule 2 self-review before push.
 The single bundle was ~10 surfaces, 3× the governance cap.
 **4a (indexes):** IPLAN doc-level `status: Draft` vs `DONE, verified:
 true` manifests (`sdd/08_IPLAN/IPLAN-01_access_surface.yaml:8` vs `:19`)
-+ index rows; `docs/README.md` missing INSTALL / AGENT-QUICKSTART /
+plus index rows; `docs/README.md` missing INSTALL / AGENT-QUICKSTART /
 AGENT-INTEGRATION rows + Skill pointer.
 **4b (live state):** §4 above's "30 of 49 tests" → 94 (item stays open —
 `ci.yml:25` is a bare `pytest` with no `services:`); HANDOFF ~9 PRs

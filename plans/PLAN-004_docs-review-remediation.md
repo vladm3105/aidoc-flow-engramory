@@ -232,12 +232,12 @@ ai-review's `tier=spec` exclusion may still catch it since it edits
 
 ### PR 2b — ranking, tool reachability, config honesty (3 surfaces)
 
-4. **Ranking** (claims 26, 27): the module docstring already discloses that
+1. **Ranking** (claims 26, 27): the module docstring already discloses that
    ranking is recency-based and that the query scopes only the audit trail; no
    agent-facing doc does. Add one interim line to
    `skills/engramory-memory/SKILL.md` and drop its "prefer specific queries"
    advice, which implies relevance ranking that does not exist.
-5. **`knowledge_ingest` reachability is an ADR-10 conformance gap** (claims 28,
+2. **`knowledge_ingest` reachability is an ADR-10 conformance gap** (claims 28,
    29): `ADR-10:71` (**Accepted**) mandates the CLI expose the SPEC-01 tool set
    *including* `knowledge ingest`; the CLI registers `init` / `memory` /
    `profile` / `status` only. So this is **not** a doc overclaim to be papered
@@ -249,7 +249,7 @@ ai-review's `tier=spec` exclusion may still catch it since it edits
    open for exactly one PR; disclosing it costs more churn than it buys. PR 7
    corrects that line directly instead. Note the non-conformance in the PR body,
    not in the docs.
-6. **Config/env honesty** (claims 30–33): verified split —
+3. **Config/env honesty** (claims 30–33): verified split —
    `REDIS_URL`, `OLLAMA_HOST`, `EMBEDDING_MODEL`, `EMBEDDING_DIMS`,
    `POSTGRES_HOST/PORT` are read by neither `src/` nor compose (genuinely
    dead/reserved), while `KEYCLOAK_*`, `NEO4J_*`, `S3_*`, `LITELLM_MASTER_KEY`
@@ -286,8 +286,8 @@ The first files every agent session reads assert a pre-implementation repo.
    while in the file — qualify it as `aidoc-flow-ci PLAN-003`. The remaining
    references are handled in 4c.
 
-**PR 3** — governance PR, exactly 3 surfaces: `CLAUDE.md` + `roadmap/ROADMAP.md`
-+ `README.md`. Rule 2 adversarial self-review before push, focused on dead refs
+**PR 3** — governance PR, exactly 3 surfaces: `CLAUDE.md`,
+`roadmap/ROADMAP.md`, and `README.md`. Rule 2 adversarial self-review before push, focused on dead refs
 and status consistency.
 
 ## Phase 4 — Bookkeeping currency (P2/P3) — split three ways
@@ -473,12 +473,12 @@ Phase 4; rebase in order.
 | 4 | INSTALL teaches the failing post-subcommand form (smoke check) | `engramory status --json` | docs/INSTALL.md:62 |
 | 5 | INSTALL teaches it again for search | `engramory memory search --query "fact" --json` | docs/INSTALL.md:71 |
 | 6 | AGENT-QUICKSTART teaches the failing form | `engramory memory search --query "postgres version" --json` | docs/AGENT-QUICKSTART.md:38 |
-| 7 | AGENT-INTEGRATION teaches it in the paste-verbatim vendor snippet | `**Session start:** ` | docs/AGENT-INTEGRATION.md:73 |
+| 7 | AGENT-INTEGRATION teaches it in the paste-verbatim vendor snippet | `Session start:` | docs/AGENT-INTEGRATION.md:73 |
 | 8 | the shipped Skill teaches the failing form | `--json` before repeating work | skills/engramory-memory/SKILL.md:26 |
 | 9 | the smoke script uses the working global-first form | `engramory --json init` | scripts/smoke_preprod.sh:22 |
 | 10 | Track B's CI snippet runs `memory add` with no `init` step | `- name: Record run outcome into engramory` | docs/AGENT-QUICKSTART.md:50 |
-| 11 | Track B's documented guard covers exit 3 only | `Exit `3` is retryable` | docs/AGENT-QUICKSTART.md:57 |
-| 12 | CORES claims knowledge reads are served through `memory_search` | `reads served through `memory_search` for MVP-1` | docs/CORES.md:24 |
+| 11 | Track B's documented guard covers exit 3 only | `is retryable (store unreachable)` | docs/AGENT-QUICKSTART.md:57 |
+| 12 | CORES claims knowledge reads are served through `memory_search` | `for MVP-1 — see boundary rule 4` | docs/CORES.md:24 |
 | 13 | CORES boundary rule 4 calls the unified read deliberate | `MVP-1 retrieval is deliberately unified` | docs/CORES.md:59 |
 | 14 | SPEC-01 contracts search over knowledge + memory | `Scoped retrieval of knowledge + distilled memory` | sdd/06_SPEC/SPEC-01_access_surface.yaml:56 |
 | 15 | the MCP server docstring repeats the unified-read claim | `scoped retrieval of knowledge + distilled memory` | src/engramory/mcp/server.py:4 |
@@ -514,7 +514,7 @@ Phase 4; rebase in order.
 | 45 | CHANGELOG says six PRs for a seven-PR delivery | `Six PRs` | CHANGELOG.md:40 |
 | 46 | HANDOFF says seven PRs merged for PLAN-002 | `Seven PRs merged 2026-07-11` | HANDOFF.md:13 |
 | 47 | ARCHITECTURE names Mem0 the decided default engine | `Default engine: Mem0` | docs/ARCHITECTURE.md:176 |
-| 48 | ARCHITECTURE's Phase-2 row still says wire LangMem/Cipher | `wire LangMem/Cipher via `MemoryPort`` | docs/ARCHITECTURE.md:201 |
+| 48 | ARCHITECTURE's Phase-2 row still says wire LangMem/Cipher | `wire LangMem/Cipher via` | docs/ARCHITECTURE.md:201 |
 | 49 | ROADMAP's Phase-2 row names all three engines | `wire a MemoryPort adapter (LangMem/Cipher/Mem0)` | roadmap/ROADMAP.md:45 |
 | 50 | trust-boundary prose lives scattered in agent docs | `## Trust boundary (dev tier)` | docs/AGENT-QUICKSTART.md:85 |
 | 51 | the same boundary is restated in the integration doc | `## Trust boundary` | docs/AGENT-INTEGRATION.md:89 |
