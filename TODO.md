@@ -172,3 +172,189 @@ and `roadmap/ROADMAP.md`:
 - Deferred (gateway-cycle) security follow-ups from PLAN-002 reviews:
   within-tenant write containment for retire/feedback; `agent_profiles`
   is untenanted (dev-tier assumption)
+
+## 8. 🔴 PLAN-004 — documentation review remediation (20 findings)
+
+**Status:** open — plan READY 2026-07-19
+(`plans/PLAN-004_docs-review-remediation.md`): 57 cited claims, 3 review
+passes incl. an independent adversarial pass that returned 10
+load-bearing findings, all folded. Execute in PR order (1 → 2a → 2b → 3
+→ 4a → 4b → 4c → 5 → 6); rebase 4c on 3 and 6 on 4a — they collide on
+`README.md` / `roadmap/ROADMAP.md` / index files. Each PR carries its
+own doc-currency.
+
+Numbered **004**, not 003: `PLAN-003` already refers in this repo's
+prose to the *external* aidoc-flow-ci canon-adoption plan
+(`CLAUDE.md:39`, `docs/README.md:10`, `DECISIONS.md:14,18,25,33,57`,
+`HANDOFF.md:72`). Disambiguating those references is PR 3 + PR 4c work.
+
+Origin: founder-requested review 2026-07-19 (repo + `docs/` vs best
+practice and current trends). Three-agent review — internal doc
+consistency, docs-vs-code drift, 2026 field research.
+
+**PR 1 — 🔴 P1: five doc sites teach a CLI invocation that exits 2.**
+`sdd/06_SPEC/SPEC-07_cli_face.yaml:46` defines the invocation contract
+**normatively** as `engramory [--json] [--config PATH] <command> [args]`
+— global-first. The code conforms (`src/engramory/cli.py:256,260`); the
+**docs are the deviation**, teaching a post-subcommand `--json` that
+argparse rejects: `docs/INSTALL.md:62,71` (the documented smoke check
+itself), `docs/AGENT-QUICKSTART.md:38`, `docs/AGENT-INTEGRATION.md:73`
+(the paste-verbatim vendor snippet — highest blast radius),
+`skills/engramory-memory/SKILL.md:26`. `scripts/smoke_preprod.sh:22` and
+`tests/integration/test_cli.py` use the correct form, which is why CI
+never caught it.
+**Fix:** correct the five doc sites to global-first (NOT a code change —
+widening the contract would require a SPEC-07 amendment; see §10), add a
+docs-conformance test so doc invocations are parse-checked, and fix
+Track B's CI snippet (`docs/AGENT-QUICKSTART.md:50`), which has no
+`engramory init` so it exits 2 on a fresh checkout — uncovered by the
+documented `|| [ $? -eq 3 ]` guard (`:57`).
+
+**PR 2a — 🟡 P2: docs AND normative specs overstate the code.**
+(a) The unified read is asserted on **four** surfaces, not two —
+`docs/CORES.md:24`, `docs/CORES.md:59` (boundary rule 4, calling it
+"deliberately unified"), `sdd/06_SPEC/SPEC-01_access_surface.yaml:56`,
+and `src/engramory/mcp/server.py:4` (whose docstring says "keep this
+docstring in sync"). The code reads `FROM memories` only
+(`core/repository.py:369`); `kb_sections` is written and counted, never
+read back (`:505`). Downgrading this to "planned" is a **spec
+deviation**, not bookkeeping — record it in `DECISIONS.md` and file the
+retrieval leg (§10). (b) The confidence overstatement also lives in
+`SPEC-01:66` ("drives the SPEC-04 confidence-update rule", present
+tense) alongside `docs/AGENT-QUICKSTART.md:23` and
+`skills/engramory-memory/SKILL.md:54` — nothing updates
+`memories.confidence`; the surface calls it the signal *for* the future
+rule (`access/surface.py:193`). (c) SPEC-01 signature drift:
+`interfaces.exports` declares narrower signatures than `surface.py:104`
+implements, and `EpisodeIn`/`KBEntryIn`/`AuditRecord` do not exist.
+Not a governance PR (AGENTS.md is in 2b), though ai-review's
+`tier=spec` may catch it.
+
+**PR 2b — 🟡 P2/P3: ranking, tool reachability, config honesty.**
+(a) Ranking is recency-only (`access/surface.py:16`) — disclosed in code,
+in no agent doc, while SKILL.md advises "prefer specific queries".
+(b) `knowledge_ingest` has no CLI binding — this is an **ADR-10
+conformance gap**, not a doc overclaim: `ADR-10:71` (Accepted) mandates
+the CLI expose it. The doc qualifier is interim disclosure of a
+non-conformance; the binding is filed at §10. (c) Config/env honesty:
+only `ENGRAMORY_PROFILE` is read (`adapters/factory.py:32`);
+`REDIS_URL`/`OLLAMA_HOST`/`EMBEDDING_MODEL`/`EMBEDDING_DIMS`/
+`POSTGRES_HOST`/`PORT` are read by neither `src/` nor compose (dead),
+while `KEYCLOAK_*`/`NEO4J_*`/`S3_*` are compose-consumed — label them
+differently. `AGENTS.md:15` presents `LITELLM_BASE_URL` as live,
+`config/domains/*.yaml` is inert, `AGENTS.md:13` omits the
+psycopg-in-core carve-out the tests enforce. **Governance PR**
+(AGENTS.md) — 3 surfaces.
+
+**PR 3 — 🔴 P1: governance layer describes a pre-implementation repo.**
+`CLAUDE.md:13` "no adapters or running gateway yet" (false since
+PLAN-002); `CLAUDE.md:71` per-repo CI state pins `@ci/v1.4.3`–`v1.6.0`
+(actual: `@ci/v1.9.5` across 11 callers) and cites the `AI_REVIEW_TOKEN`
+blocker §1 above marks RESOLVED; `roadmap/ROADMAP.md:25` prescribes that
+superseded fix for the resolved problem; `README.md:97` "Project
+initiation … scaffolding" contradicts README's own agent section.
+Governance PR, exactly 3 surfaces, Rule 2 self-review before push.
+
+**PR 4a/4b/4c — 🟡 P2/P3: bookkeeping currency (split to hold the cap).**
+The single bundle was ~10 surfaces, 3× the governance cap.
+**4a (indexes):** IPLAN doc-level `status: Draft` vs `DONE, verified:
+true` manifests (`sdd/08_IPLAN/IPLAN-01_access_surface.yaml:8` vs `:19`)
++ index rows; `docs/README.md` missing INSTALL / AGENT-QUICKSTART /
+AGENT-INTEGRATION rows + Skill pointer.
+**4b (live state):** §4 above's "30 of 49 tests" → 94 (item stays open —
+`ci.yml:25` is a bare `pytest` with no `services:`); HANDOFF ~9 PRs
+behind + its superseded CI note; `CHANGELOG.md:40` "Six PRs" → seven.
+**4c (labels + disambiguation):** engine-default drift (Mem0 decided at
+`docs/ARCHITECTURE.md:176`, LangMem/Cipher at `:201` and
+`roadmap/ROADMAP.md:45`); README's MEMORY_DESIGN row missing the
+historical qualifier; the remaining external `PLAN-003` references.
+`docs/adr/README.md`'s ADR-10 row moves to PR 6, which already owns
+that file.
+
+**PR 5 — 🟡 P2: no security or retention doc.** Add `SECURITY.md`
+consolidating the trust boundary now scattered across AGENT-QUICKSTART,
+AGENT-INTEGRATION and §5 here — dev-tier fence, default-deny, tenant
+wall, audit-before-return, fail-closed, and what the CLI face
+deliberately does *not* defend. Plus the sharper gap: docs tell agents
+never to store secrets/PII, but `memory_forget` is a **soft** retire with
+provenance retained and **no documented purge path**. State what
+soft-retire guarantees, that the episode body persists, and the operator
+purge path (or say explicitly that none exists and file it as debt).
+Every security claim traced to its enforcing test or marked "not
+defended". The retention policy lands as a section *inside*
+`SECURITY.md`, keeping this PR at one surface.
+
+**PR 6 — 🟡 P2: field alignment (2026).** Author a conceptual ADR
+proposing L0 ↔ **Open Knowledge Format** projection — Google Cloud's
+vendor-neutral knowledge-interchange spec (announced 2026-06-12: bundle =
+directory of markdown files with YAML frontmatter, file path = concept
+identity, markdown links form the graph, reserved `index.md`/`log.md`).
+It is an interchange format, not a memory engine: it maps onto the L0
+knowledge core and would give MEMORY_DESIGN's existing "read-only
+Markdown export" idea conformance with a published spec, filling the
+interchange gap those docs flag as standardless. Does not touch L1–L3.
+Proposal only — founder accepts separately. Also carries the ADR-10 row
+missing from `docs/adr/README.md:21` and a one-line `docs/STRATEGY.md`
+note that managed-memory churn in the field reinforces ADR-05.
+**Governance PR** — 3 surfaces.
+
+**Discovered.** 2026-07-19 (founder-requested repo + docs review).
+
+## 9. ⚪ Field-alignment design debt (recorded by PLAN-004 — not built there)
+
+Recorded so the gaps are tracked rather than silently absent. Each needs
+its own spec + plan; none is documentation work.
+
+- **Bi-temporal validity + contradiction detection (D3)** — the schema
+  carries one time dimension (`valid_from`/`valid_to` + `supersedes`);
+  the field standard adds an ingestion/transaction dimension and
+  invalidate-not-delete on contradiction. The largest measured
+  differentiator in the current benchmark literature.
+- **Hybrid retrieval** — Postgres full-text/BM25 alongside pgvector, a
+  rerank stage, and query-type routing. Blocked behind the LLMPort dev
+  adapter (§7) which supplies query embeddings; vector-only loses on
+  temporal and multi-hop questions.
+- **Named eval benchmarks + targets** — "lead with evaluation"
+  (`docs/STRATEGY.md`) currently has no yardstick. Report accuracy per
+  category (knowledge-update and temporal reasoning especially) *and*
+  tokens-per-query. Pairs with the §7 eval-harness exit criterion.
+- **Injection / poisoning screen (G1)** — beyond the `source_trust`
+  column; quarantine on scope-crossing writes is already doctrine.
+- **MCP gateway naming + spec target** — when the gateway lands (§7),
+  align tool shapes to the de-facto memory surface and target the
+  post-2026-07-28 MCP spec (stateless core, Tasks).
+- **OTel GenAI semconv on memory-operation spans** — dual-emit opt-in
+  while the conventions remain Development status; fits the interlog
+  logging-standard direction.
+
+**Discovered.** 2026-07-19 (PLAN-004 field research).
+
+## 10. 🟡 Conformance gaps surfaced by the PLAN-004 review
+
+Three items where an artifact and its normative contract disagree. Each
+is *code* work; PLAN-004 only discloses them in the docs.
+
+- **`kb_sections` retrieval leg.** `memory_search` reads `FROM memories`
+  only (`core/repository.py:369`), so knowledge ingested per ADR-06 is
+  unretrievable through the documented unified read that
+  `docs/CORES.md:59` calls "deliberately unified" and
+  `sdd/06_SPEC/SPEC-01_access_surface.yaml:56` contracts. PLAN-004 PR 2a
+  downgrades the claim to "planned" as an explicit, recorded spec
+  deviation. **Decide:** implement the leg, or ratify the deviation and
+  move the unified read to a later cycle.
+- **`engramory knowledge ingest` CLI binding.** `ADR-10:71` (Accepted)
+  mandates the CLI expose the full SPEC-01 tool set *including* knowledge
+  ingest; `_build_parser` registers `init`/`memory`/`profile`/`status`
+  only (`cli.py:262-305`). The sixth tool is Python-API-only, so the CLI
+  face is non-conformant with an accepted ADR.
+- **SPEC-07 invocation widening (optional).** Five doc sites independently
+  drifted to a post-subcommand `--json`, which is evidence the normative
+  global-first form (`SPEC-07:46`) is the unnatural one for agents.
+  Accepting both positions is feasible — verified empirically: a shared
+  parent parser needs `add_help=False` (else construction raises on
+  `-h/--help`) and `default=argparse.SUPPRESS` (else a leaf silently
+  overwrites a root-supplied `--json` with `False`, breaking the smoke
+  script and the whole CLI suite). **Requires a SPEC-07 amendment +
+  decision record — not a silent code change.**
+
+**Discovered.** 2026-07-19 (PLAN-004 Pass 2 independent review).
