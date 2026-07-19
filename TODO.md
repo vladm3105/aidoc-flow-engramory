@@ -390,3 +390,54 @@ Pass 4.
 
 **Discovered.** 2026-07-19 (PLAN-004 Pass 2 independent review).
 **Decided.** 2026-07-19 (founder; PLAN-004 Pass 4).
+
+## 11. 🔴 `call / ai-review` fails — reviewer resolves to `codex`, no `OPENAI_API_KEY`
+
+**Status:** open, founder-gated. First observed 2026-07-19 on PR #50.
+Blocks the ai-review gate on **every** PR in this repo until resolved.
+
+**Symptom** (run 29696493943, reviewer step):
+
+```text
+ERROR codex_api::endpoint::responses_websocket: failed to connect to
+websocket: HTTP error: 401 Unauthorized, url: wss://api.openai.com/v1/responses
+ERROR: unexpected status 401 Unauthorized: Missing bearer or basic
+authentication in header, url: https://api.openai.com/v1/responses
+codex rc=1
+```
+
+Job env showed `REVIEWER: codex`, `APP_KEY_PRESENT: 1` — so the reviewer
+App credentials are fine; the *engine* auth is not.
+
+**Root cause.** The reviewer engine is **config-driven**: this repo's
+`.github/workflows/ai-review.yml` leaves `reviewer:` unset, so the
+reusable reads `.reviewer` from the trust-config repo
+(`vladm3105/aidoc-flow-operations@main` → `.github/ai-review/config.json`).
+That config resolves to `codex`, which requires an `OPENAI_API_KEY` repo
+secret. engramory does not have one.
+
+**Doc drift this exposes.** `CLAUDE.md` § Unified CI states "Reviewer:
+`claude` (subscription-auth via `CLAUDE_CODE_OAUTH_TOKEN`)" — no longer
+true. Folded into PLAN-004 Phase 3, which already rewrites that block.
+
+**Resolution options:**
+
+| Option | Effort | Notes |
+| --- | --- | --- |
+| **A. Set `OPENAI_API_KEY` on engramory** | Small | Matches the central config as-is. Founder-only (secret). |
+| **B. Pin `reviewer: claude` in this repo's `ai-review.yml`** | Small | The workflow documents this override explicitly. Needs `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` present. Keeps engramory on the engine CLAUDE.md already claims. |
+| **C. Change `.reviewer` centrally in `aidoc-flow-operations`** | Medium | Cross-repo write — 🔴 per the autonomy tiers; goes through `ops/inbox`, not in-session. Affects every consumer, not just this repo. |
+
+**Recommendation:** B, then reconcile CLAUDE.md — it keeps this repo on
+the engine its own governance doc already names, and it is a local
+override the canon workflow explicitly supports. A is fine if the
+founder wants engramory to follow the central codex default instead.
+
+**Note.** `main` is not branch-protected (verified 2026-07-19: `gh api
+.../branches/main/protection` → 404), so ai-review is **not a required
+check** — `mergeStateStatus` reads UNSTABLE, not BLOCKED. Merges are
+therefore possible while this is open, but per the auto-merge carve-out
+(red CI) they need explicit founder OK rather than the standing
+authorization.
+
+**Discovered.** 2026-07-19 (PR #50 — PLAN-004).
