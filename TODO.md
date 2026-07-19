@@ -176,9 +176,10 @@ and `roadmap/ROADMAP.md`:
 ## 8. 🔴 PLAN-004 — documentation review remediation (20 findings)
 
 **Status:** open — plan READY 2026-07-19
-(`plans/PLAN-004_docs-review-remediation.md`): 62 cited claims, 4 review
-passes incl. an independent adversarial pass that returned 10
-load-bearing findings (all folded) and a founder-decision fold (§10).
+(`plans/PLAN-004_docs-review-remediation.md`): 66 cited claims, 5 review
+passes incl. **two** independent adversarial passes that returned 10 and
+7 load-bearing findings (all folded, none rejected) plus a
+founder-decision fold (§10).
 Execute in PR order (1 → 2a → 2b → **7** → 3 → 4a → 4b → 4c → 5 → 6);
 rebase 4c on 3 and 6 on 4a — they collide on `README.md` /
 `roadmap/ROADMAP.md` / index files. PR 7 (the ADR-10 `knowledge ingest`
