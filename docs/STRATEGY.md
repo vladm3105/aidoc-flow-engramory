@@ -9,62 +9,48 @@ agent-memory best practice, current trends, and production reality. Companion to
 
 ## Recommendation
 
-**Build the plane, adopt the engine, lead with evaluation.**
+**Own the spine, run native hybrid search, adopt distillation heuristics, lead with evaluation.**
 
-- **Build the plane** — the Postgres-canonical spine, ports, MCP gateway, scope model,
-  and governance. This is Engramory's own layer and the decisions here are retained.
-- **Adopt the engine** — do not hand-write the distillation/consolidation algorithm.
-  Use a proven memory engine behind `MemoryPort`. Owning the canonical store in Postgres
-  means adoption carries no lock-in.
-- **Lead with evaluation** — a task-success-with-vs-without-memory harness on Engramory's
-  own workloads is a first-class deliverable, not a later observability item.
+- **Own the spine** — the Postgres-canonical store (`kb_sections`, `episodes`, `memories`, `audit_records`), `pgvector` dense embeddings, `ts_lex` lexical search, ports, access surface, scope model, and governance. Engramory natively executes storage, indexing, and hybrid retrieval.
+- **No external RAG needed** — Engramory does **not** rely on third-party RAG frameworks like LightRAG or external vector databases. Embeddings, full-text indexes, and rank fusion live natively in PostgreSQL.
+- **Adopt distillation heuristics (optional)** — for advanced multi-pass background consolidation (merging, generalizing lessons, pruning noise), pluggable processors may be adapted behind `MemoryPort`. For baseline dev and CI, Engramory provides an in-process native reflection worker (`engramory memory distill`) that runs without external dependencies.
+- **Lead with evaluation** — a task-success-with-vs-without-memory harness on Engramory's own workloads is a first-class deliverable, not a later observability item.
 
-This resolves the tension between the predecessor advice ("adopt a tool; defer
-infrastructure", `research/MEMORY_LANDSCAPE.md`) and the platform ambition
-(`ARCHITECTURE.md`): the two apply to different layers — build the platform, adopt the
-memory algorithm.
+This resolves the tension between adopting a tool vs. building infrastructure: Engramory builds the platform and owns the native data/retrieval spine, while treating advanced distillation algorithms as swappable processors.
 
 ## Rationale
 
 ### Best practice
 
 - Own the canonical store; treat the engine as replaceable. Already decided (ADR-05).
-- Retrieval, not storage, is the bottleneck — invest in hybrid search, reranking, and
-  recency/utility signals rather than raw storage.
+- Retrieval, not storage, is the bottleneck — invest in native hybrid search (vector cosine + `ts_lex` GIN + recency + source-trust weighting) rather than layered external services.
 - Evaluate continuously: unmeasured memory regresses without a visible signal.
 
 ### Trends (established, not speculative)
 
-- Temporal / contradiction handling (bi-temporal validity + contradiction invalidation)
-  is standard for durable memory — adopt the mechanism, not only the concept.
-- Background ("sleep-time") consolidation is a validated direction; the reflection +
-  consolidation loop is aligned with it.
+- Temporal / contradiction handling (bi-temporal validity + contradiction invalidation) is standard for durable memory — adopt the mechanism, not only the concept.
+- Background ("sleep-time") consolidation is a validated direction; the reflection + consolidation loop is aligned with it.
 - MCP is the durable access standard for cross-agent memory — keep it as the surface.
-- Memory safety (poisoning of self-authored memory) is a rising concern — address source
-  trust weighting early.
+- Memory safety (poisoning of self-authored memory) is a rising concern — address source trust weighting early.
 
 ### Reality (constraints to plan around)
 
-- No engine "solves" agent memory; public benchmark scores do not transfer to a specific
-  domain. Re-tuning against local tasks is required.
-- "Human-like / endless memory" overstates the mechanism. The deliverable is compression +
-  retrieval, with a bounded working set (see ARCHITECTURE "What 'endless' means").
+- No engine "solves" agent memory; public benchmark scores do not transfer to a specific domain. Re-tuning against local tasks is required.
+- "Human-like / endless memory" overstates the mechanism. The deliverable is compression + retrieval, with a bounded working set (see ARCHITECTURE "What 'endless' means").
 - Procedural "skills" are re-injected text, not model weight updates. Set that expectation.
-- The graph is optional early: pure Postgres + strong vector retrieval covers most needs;
-  promote to Neo4j only when multi-hop retrieval is required (ADR-03).
-- Building a platform is a larger commitment than adopting one; it is justified here by
-  the per-agent memory, portability, and governance requirements — not by the memory
-  algorithm, which should be adopted.
+- The graph is optional early: pure Postgres + strong vector retrieval covers most needs; promote to Neo4j only when multi-hop retrieval is required (ADR-03).
+- Building a platform is a larger commitment than adopting one; it is justified here by the per-agent memory, hierarchical multi-agent access control, supervisory audit loop, and portability requirements.
 
 ## Engine selection (behind `MemoryPort`)
 
-| Option | License | Integration | When to choose |
-|--------|---------|-------------|----------------|
-| **Mem0** (default) | Apache-2.0 | Lowest; MCP-ready | Pragmatic start; a memory layer the core calls |
-| **LangMem** | MIT | SDK; wrap in MCP | Explicit semantic/episodic/procedural + consolidation control matters most |
-| **Cipher** | Elastic 2.0 (source-available) | MCP-native | Turnkey coding-agent reflection; license acceptable for internal use |
+| Option | License | Role | When to choose |
+|--------|---------|------|----------------|
+| **Native reflection worker** (default) | Apache-2.0 / internal | Native in-process reflection (`engramory memory distill`) | Zero-dependency baseline in dev, CI, and local test suites |
+| **Mem0** (adapter) | Apache-2.0 | Pluggable background processor | Pragmatic start for external distillation service |
+| **LangMem** (adapter) | MIT | Pluggable SDK | Explicit semantic/episodic/procedural + consolidation control |
+| **Cipher** (adapter) | Elastic 2.0 (source-available) | MCP-native | Turnkey coding-agent reflection; license acceptable for internal use |
 
-Start with one and keep it swappable — possible precisely because Postgres is canonical.
+The native PostgreSQL reflection worker is active out-of-the-box. Any external processor is strictly an adapter behind `MemoryPort`, keeping PostgreSQL canonical.
 
 ## Sequence
 

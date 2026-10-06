@@ -1,30 +1,37 @@
 # Engramory — Target Architecture
 
-## Shared Agent Knowledge & Memory Core
+## Shared Agent Knowledge & Memory Operating System
 
-*June 22, 2026 · Consolidates RAC + the Nexus v3 design into one platform, adds per-agent distilled memory, runs self-hosted for dev, migrates to GCP or Azure.*
+*Agent-first governance and memory/knowledge operating system with hierarchical access control, native PostgreSQL spine, and swappable hexagonal ports.*
 
-**Naming & positioning.** **Engramory** is the **shared memory + knowledge core** — the persistent, distilled "brain" that all your AI projects build on. Consumer projects (`aidoc-flow`, `iplanic`, `aidoc-flow-operations`, …) plug into Engramory over MCP/API; each is a domain config / client, not a separate stack. The two predecessors — **RAC** (working build) and the **Nexus v3** design — merge *into* Engramory. Throughout this doc, "Nexus v3" refers only to the existing design artifact being absorbed; the go-forward platform is **Engramory**.
+**Naming & positioning.** **Engramory** is the **shared memory + knowledge operating system** — the persistent, distilled "brain" and governed technical repository for multi-agent software engineering ecosystems. Consumer projects (`b-local-privy`, `aidoc-flow`, `aidoc-flow-operations`, `iplanic`, …) plug into Engramory over MCP or the `engramory` CLI; each is a project workspace on the shared infrastructure, not a separate siloed stack.
+
+Engramory is designed **agent-first**:
+
+- **Project Executors (Headless Coding Agents):** Run in isolated repository worktrees (e.g. Claude Code, Codex, Cursor in `b-local-privy`), strictly restricted to their own `project_id` and private memory. They cannot inspect or mutate other projects.
+- **Operations Assistant (Supervisor Agent / Virtual CTO):** Orchestrates multi-project workflows, reviews code, and enforces standards with cross-project visibility (`domain` and `space` scopes).
+- **Near-Real-Time Supervisory Audit Loop:** Every agent action, authorization check (default-deny, fail-closed), and episode streams into PostgreSQL (`audit_records`, `episodes`), enabling the Operations Assistant to monitor and audit worker agents near real-time.
+- **Large-Scale Technical Knowledge Base (`kb_sections`):** Natively stores, indexes, and queries deep SDD technical documentation trees (e.g. 160+ markdown files across 10 layers, 17 MB) using `pgvector` dense embeddings and `ts_lex` full-text search with cumulative `@-tag` citation lineage.
 
 ---
 
-## What this design has to satisfy
+## What this design satisfies
 
-1. **One platform** — merge RAC (working, Neo4j/OpenAI; Trading was just its example domain) and Nexus v3 (domain-agnostic, GCP-native, AGE/Vertex) into a single stack instead of two divergent ones. **Each project becomes a domain config** on the shared core; Trading is one example among many.
-2. **Per-agent, distilled, endless memory** — the layer neither project has: each agent accumulates its own knowledge + skills + experience across projects, consolidated over time.
-3. **Self-hosted for development (minimize cost), migratable to cloud** — runs on free/OSS containers now; swaps to GCP **or** Azure cloud-native services later without re-architecting.
-
-The third constraint drives everything: **portability is a first-class design goal, not an afterthought.**
+1. **One unified infrastructure, isolated project access** — A shared PostgreSQL spine with multi-tenant and hierarchical scope control (`agent → project → domain → space`). A single deployment safely serves the global Operations Assistant alongside multiple project-specific executor agents without data leakage.
+2. **Per-agent, distilled, endless memory** — Each agent accumulates its own episodic experience, semantic knowledge, and procedural skills across sessions, consolidated over time via reflection.
+3. **Large-scale governed technical knowledge** — Native PostgreSQL indexing of massive technical documentation bases (`kb_sections`) with hybrid vector + lexical search, replacing external RAG tools (no LightRAG needed).
+4. **Supervisory audit & governance** — Continuous, fail-closed audit stream (`audit_records`) allowing supervisor agents to verify execution health, policy compliance, and tool invocations online.
+5. **Self-hosted for development, migratable to cloud** — Runs on free/OSS containers (Docker Compose) in dev; swaps to GCP or Azure cloud-native services via hexagonal ports and adapters without re-architecting.
 
 ---
 
 ## Guiding principles
 
-1. **Ports & adapters (hexagonal).** The application core talks to **interfaces** (ports); each infrastructure dependency has swappable **adapters** (self-hosted / GCP / Azure). RAC already does this for storage (local/GCS factory) — generalize it to *every* dependency. This single decision is what makes the platform cloud-migratable.
-2. **PostgreSQL is the spine.** Relational + vectors (**pgvector**) + (optionally) graph live in Postgres, which exists *identically* self-hosted, on GCP (Cloud SQL / AlloyDB), and on Azure (Flexible Server). Your canonical data never leaves Postgres, so migration = `pg_dump` + restore.
-3. **Own the canonical store; engines are replaceable processors.** Distilled memory lives as plain rows (raw text + provenance + regenerable embeddings) in Postgres — never locked inside a managed memory service. (See [MEMORY_DESIGN.md](MEMORY_DESIGN.md) → Portability.)
+1. **Ports & adapters (hexagonal).** The application core talks to **interfaces** (ports); each infrastructure dependency has swappable **adapters** (self-hosted / GCP / Azure). This single decision is what makes the platform cloud-migratable.
+2. **PostgreSQL is the spine.** Relational + vectors (**pgvector**) + lexical full-text search (**ts_lex** GIN) + (optionally) graph live in Postgres, which exists *identically* self-hosted, on GCP (Cloud SQL / AlloyDB), and on Azure (Flexible Server). Your canonical data never leaves Postgres, so migration = `pg_dump` + restore.
+3. **Own the canonical store; engines are replaceable processors.** Distilled memory and knowledge live as plain rows (raw text + provenance + regenerable embeddings) in Postgres — never locked inside a managed third-party service or opaque RAG framework.
 4. **One model gateway.** All LLM/embedding calls go through a self-hosted **LiteLLM** proxy (OpenAI-compatible). Dev points it at **Ollama** (free, local); cloud points it at **Vertex AI** or **Azure OpenAI** — a config change, not a code change.
-5. **Config over code (from Nexus).** Domains (Trading, Legal, USFS…) are YAML configuration on a domain-agnostic core. RAC becomes the Trading domain config.
+5. **Config over code.** Domains and projects are declarative configuration on a domain-agnostic core.
 6. **Everything containerized.** Docker Compose in dev → the same images on Cloud Run/GKE or Container Apps/AKS in cloud.
 
 ---
@@ -32,37 +39,47 @@ The third constraint drives everything: **portability is a first-class design go
 ## Target architecture (logical)
 
 ```text
-┌──────────────────────────────────────────────────────────────────────┐
-│  AGENTS / CLIENTS:  Claude Code · Codex · Hermes · custom CLI · Web UI │
-└───────────────────────────────┬──────────────────────────────────────┘
-                                 │  MCP  (+ REST/WebSocket for UI)
-┌────────────────────────────────▼─────────────────────────────────────┐
-│  MCP GATEWAY  (unified tool surface — knowledge, memory, ingest, admin)│
-└───────────────┬───────────────────────────────────┬──────────────────┘
-                │                                   │
-┌───────────────▼──────────────┐      ┌──────────────▼───────────────────┐
-│  KNOWLEDGE CORE              │      │  MEMORY CORE                      │
-│  • ingestion / parsing       │      │  • L1 short-term (project/session)│
-│  • semantic + graph search   │      │  • L2 long-term (sem/epi/proc)    │
-│  • verification / citations  │      │  • L3 per-agent identity          │
-│  • domain config (YAML)      │      │  • distillation + consolidation   │
-└───────────────┬──────────────┘      └──────────────┬────────────────────┘
-                │                                    │
-        ┌───────▼────────────────────────────────────▼────────┐
-        │  PORTS (interfaces the core depends on)              │
-        │  StoragePort · VectorPort · GraphPort · CachePort    │
-        │  LLMPort · SecretsPort · EventsPort · MemoryPort     │
-        └───────┬───────────────┬───────────────┬─────────────┘
-                │ adapters       │ adapters       │ adapters
-        ┌───────▼──────┐ ┌──────▼───────┐ ┌──────▼──────────┐
-        │  SELF-HOSTED │ │     GCP      │ │     AZURE        │
-        │  (dev)       │ │  (option A)  │ │  (option B)      │
-        └──────────────┘ └──────────────┘ └──────────────────┘
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│  MULTI-AGENT FLEET & CLIENTS                                                           │
+│  ┌─────────────────────────────────────────┐  ┌──────────────────────────────────────┐ │
+│  │ Project Executors (Coding Agents)       │  │ Operations Assistant (Supervisor)    │ │
+│  │ • Isolated worktrees (e.g. b-local)     │  │ • Virtual CTO / Fleet Orchestrator   │ │
+│  │ • Scope: agent + project                │  │ • Scope: domain + space              │ │
+│  └────────────────────┬────────────────────┘  └──────────────────┬───────────────────┘ │
+└───────────────────────┼──────────────────────────────────────────┼─────────────────────┘
+                        │ MCP / CLI (ActorContext)                 │
+┌───────────────────────▼──────────────────────────────────────────▼─────────────────────┐
+│  UNIFIED ACCESS SURFACE (AccessSurface: ADR-02, ADR-06, ADR-10, SPEC-01)              │
+│  • Default-deny authorization (Scope ladder: agent → project → domain → space)         │
+│  • Evidence-backed governed writes for SDD artifacts                                   │
+│  • Real-time Audit Sink (audit_records table) for supervisor streaming                 │
+└───────────────────────┬──────────────────────────────────────────┬─────────────────────┘
+                        │                                          │
+        ┌───────────────▼──────────────┐            ┌──────────────▼───────────────────┐
+        │  KNOWLEDGE CORE (L0)         │            │  MEMORY CORE (L1–L3)             │
+        │  • kb_sections (PostgreSQL)  │            │  • episodes (content hash dedupe)│
+        │  • 160+ SDD docs at scale    │            │  • memories (sem / epi / proc)   │
+        │  • Dense + Sparse search     │            │  • agent_profiles (L3 identity)  │
+        │  • @-tag citation lineage    │            │  • memory_retrievals + feedback  │
+        └───────────────┬──────────────┘            └──────────────┬───────────────────┘
+                        │                                          │
+                ┌───────▼──────────────────────────────────────────▼────────┐
+                │  PORTS (Hexagonal Interfaces)                             │
+                │  StoragePort · VectorPort · GraphPort · CachePort         │
+                │  LLMPort · SecretsPort · EventsPort · MemoryPort          │
+                └───────┬───────────────────┬───────────────────┬───────────┘
+                        │ adapters          │ adapters          │ adapters
+                ┌───────▼──────┐    ┌───────▼───────┐   ┌───────▼──────────┐
+                │  SELF-HOSTED │    │     GCP       │   │     AZURE        │
+                │  Postgres 16 │    │ Cloud SQL /   │   │ Azure DB Flex    │
+                │  + pgvector  │    │ AlloyDB       │   │ (pgvector)       │
+                │  MinIO/Redis │    │ GCS / Vertex  │   │ Blob / OpenAI    │
+                └──────────────┘    └───────────────┘   └──────────────────┘
 ```
 
-The MCP gateway means **all your agents (Codex, Claude Code, Hermes, custom)** use the same knowledge + memory through one interface. The ports layer means **the backends swap per environment** with no change to the cores.
+The unified access surface means **all agents (Project Executors, Operations Assistant, CI runners)** interact through consistent tool contracts. The ports layer means **backends swap per environment** with zero code changes.
 
-The **Knowledge core** and **Memory core** are two *bounded cores of one platform*, not two projects — they share the spine (Postgres, scope/tenant model, gateway, ports) and are separated by schema, write-governance, lifecycle, and MCP tool namespace. See [CORES.md](CORES.md) and [ADR-08](../sdd/05_ADR/ADR-08_two_bounded_cores.yaml).
+The **Knowledge core** and **Memory core** are two *bounded cores of one platform*, not two projects — they share the spine (Postgres, scope/tenant model, gateway, ports) and are separated by schema, write-governance, lifecycle, and tool namespace. See [CORES.md](CORES.md) and [ADR-08](../sdd/05_ADR/ADR-08_two_bounded_cores.yaml).
 
 ---
 
@@ -169,12 +186,134 @@ Because `content_raw` and `provenance` are always kept and `embedding` is marked
 
 Nexus's existing Trading `learning:` block (`post_trade_review`, `meta_review_frequency`, bias/accuracy tracking) becomes **one domain's configuration of this general engine**, not a bespoke feature.
 
-### Memory processor (the swappable engine on top)
+### Memory processor & native PostgreSQL spine
 
-The cores call a `MemoryPort`. Adapter options, all keeping Postgres canonical:
+Engramory's primary storage and retrieval spine is implemented **natively in PostgreSQL** (migration 0003):
 
-- **Dev / self-host:** **LangMem** (MIT, explicit sem/epi/proc + consolidation) or **Mem0** (Apache-2.0) running against your Postgres; **Cipher** if you want turnkey reflection. **Default engine: Mem0 — decided in [STRATEGY.md](STRATEGY.md).**
-- **Cloud (optional accelerator):** Vertex AI Memory Bank (GCP) / Azure equivalent — used as cache/index only, **never the source of truth**.
+- **Native storage & indexing:** `memories` table with `VECTOR` embeddings, generated `ts_lex` full-text search GIN index, and partial indexes for active valid memories.
+- **Native hybrid retrieval:** Reciprocal Rank Fusion combining dense vector cosine similarity (w=0.5), sparse full-text lexical ranking (w=0.3), recency (w=0.2), and post-fusion confidence/scope multipliers (SPEC-03).
+- **Native distillation:** Built-in in-process reflection worker (`engramory memory distill`) projecting raw episodes into dense memories.
+
+The cores define an optional `MemoryPort` for advanced distillation algorithms:
+
+- **Dev / self-host:** The native PostgreSQL reflection worker serves as the default baseline. External processors (**Mem0**, **LangMem**, **Cipher**) can be plugged behind `MemoryPort` for advanced multi-pass compaction without altering canonical data.
+- **Cloud accelerator (optional):** Managed services (Vertex AI Memory Bank, Azure equivalents) may act as cache accelerators, **never the source of truth**.
+
+---
+
+## Multi-Agent Operating Model: Executors, Operations Assistant, and Supervisory Audit
+
+Engramory is designed specifically for multi-agent software engineering workflows with strict role and scope separation:
+
+```text
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                        GLOBAL OPERATIONS ASSISTANT                                     │
+│                  (Virtual CTO / Meta-Orchestrator / Auditor)                           │
+│  • Scopes: domain, space (tenant-wide)                                                 │
+│  • Supervises cross-project planning, architecture standards, and code reviews         │
+│  • Inspects real-time audit_records stream and cross-project episodes                  │
+└──────────────────────────────────────────┬─────────────────────────────────────────────┘
+                                           │
+                    Fleet Governance & Policy Verification
+                                           │
+    ┌──────────────────────────────────────┴──────────────────────────────────────┐
+    │                                                                             │
+┌───▼─────────────────────────────────────┐   ┌───▼─────────────────────────────────────┐
+│ PROJECT EXECUTOR A                      │   │ PROJECT EXECUTOR B                      │
+│ (Coding Agent in Worktree: Repo A)      │   │ (Coding Agent in Worktree: Repo B)      │
+│ • Scopes: agent, project (Repo A only)  │   │ • Scopes: agent, project (Repo B only)  │
+│ • Isolated: cannot access Repo B        │   │ • Isolated: cannot access Repo A        │
+│ • Appends episodes & reads local KB     │   │ • Appends episodes & reads local KB     │
+└───────────────────┬─────────────────────┘   └───────────────────┬─────────────────────┘
+                    │                                             │
+                    └──────────────────────┬──────────────────────┘
+                                           │
+                             AccessSurface (Default Deny)
+                                           │
+                         ┌─────────────────▼─────────────────┐
+                         │      CENTRAL POSTGRESQL SPINE     │
+                         │ • audit_records (Fail-Closed Log) │
+                         │ • episodes (Idempotent Stream)    │
+                         │ • kb_sections (Governed SDD Docs) │
+                         │ • memories (L1–L3 Brain)          │
+                         └───────────────────────────────────┘
+```
+
+### 1. Project Executors (Coding Agents in Worktrees)
+
+- **Role:** Autonomous or pair-programming coding agents (e.g. Claude Code, Codex, Cursor) running inside a specific repository worktree (e.g., `/home/ya/dev/b-local/b-local-privy` or `aidoc-flow-operations`).
+- **Isolation:** Configured with `scopes = ["agent", "project"]` and their specific `project_id`. The AccessSurface enforces default-deny isolation: a coding agent working on Project A cannot search, read, or overwrite memories or episodes belonging to Project B.
+- **Workflow:** At session start, the executor searches project knowledge and lessons (`memory search`); during work, it records durable facts and decisions (`memory add`); upon completing tasks, it closes the loop with feedback (`memory feedback`).
+
+### 2. Operations Assistant (Global Supervisor Agent / Virtual CTO)
+
+- **Role:** Fleet-wide orchestrator, specification reviewer, and virtual CTO.
+- **Oversight Scope:** Granted higher scope privileges (`domain` or `space`). The Operations Assistant can inspect across all projects in a domain or tenant, allowing it to:
+  - Coordinate multi-repository refactorings and cross-project standards.
+  - Review implementation plans (IPLANs) against business and architecture requirements (BRD→ADR).
+  - Verify that coding agents adhere to governance guidelines before merge.
+
+### 3. Near-Real-Time Supervisory Audit Loop
+
+- **Streaming Audit Trail:** Every single tool call, authorization attempt, and memory manipulation passes through `AccessSurface.authorize()` and immediately logs an `audit_records` row:
+  - `(tenant_id, agent_id, project_id, action, allowed, reason, ts)`
+- **Immediate Anomaly Detection:** If an executor agent attempts an out-of-scope query, invalid governed write, or repeats failed tool patterns, the Operations Assistant can observe this in `audit_records` near real-time without needing to poll individual git branches.
+- **Continuous Learning:** The `memory_retrievals` table logs which memories were served and subsequent feedback (`useful`, `not_useful`, `harmful`), giving the supervisor immediate visibility into retrieval efficacy.
+
+---
+
+## Large-Scale Technical Knowledge Base (L0 & `kb_sections`)
+
+Engramory's Knowledge Core is engineered to handle massive, multi-layered technical documentation bases common in AI-First Specification-Driven Development (SDD):
+
+### 1. Document Scale & Multi-Layer SDD
+
+In production repositories like `b-local-privy`, documentation comprises 160+ markdown files spanning 17 MB across 10 SDD layers (`01_BRD` through `08_IPLAN` plus `DECISIONS.md`, `CHANGELOG.md`, `ROADMAP.md`). Traditional RAG tools fail on this scale due to flat chunking, lack of schema context, and loss of document lineage.
+
+### 2. Native PostgreSQL `kb_sections` Schema
+
+Engramory represents technical documentation in the `kb_sections` table:
+
+```sql
+kb_sections(
+  id UUID PRIMARY KEY,
+  tenant_id TEXT NOT NULL,
+  project_id TEXT,
+  domain_id TEXT,
+  scope TEXT NOT NULL,          -- 'project' | 'domain' | 'space'
+  doc_id TEXT NOT NULL,         -- e.g. 'BRD-01', 'SPEC-02', 'ADR-07'
+  citation TEXT NOT NULL,       -- Section anchor or heading path
+  text TEXT NOT NULL,           -- Authoritative section content
+  version INTEGER NOT NULL,     -- Immutable versioning (new versions append)
+  embedding VECTOR,             -- Regenerable dense embedding (pgvector)
+  embedding_model TEXT,
+  embedding_dims INTEGER
+)
+```
+
+### 3. Hybrid Retrieval & Cumulative `@-tag` Lineage
+
+- **Hybrid Dense + Sparse Search:** Queries against `kb_sections` leverage `pgvector` cosine similarity combined with full-text search over structured headers and section text.
+- **Traceability Graph:** SDD documents carry cumulative traceability tags (`@brd`, `@prd`, `@ears`, `@bdd`, `@adr`, `@spec`, `@tdd`, `@ip-lan`, `@depends`). Engramory models these links to enable lineage and impact queries (e.g., "Find all SPECs and code units impacted by changes to ADR-07").
+- **Evidence-Backed Governed Writes (ADR-06 / SPEC-05):** Unlike conversational memories, L0 SDD documentation cannot be modified arbitrarily by coding agents. Writes require an approved evidence reference (`evidence_ref`, such as an approved IPLAN completion record); unauthorized writes fail closed and trigger an audit entry.
+
+---
+
+## Native Storage Spine vs. External RAG (Why LightRAG Is Not Needed)
+
+A common point of confusion is whether Engramory requires external RAG frameworks (such as **LightRAG**, **Zep/Graphiti**, or third-party vector databases). The answer is **no**:
+
+1. **Native PostgreSQL Spine (`pgvector` + `ts_lex`):**
+   Engramory implements vector storage, cosine distance matching, lexical GIN indexes, and relational integrity natively inside PostgreSQL. External vector stores or RAG wrappers introduce unnecessary network hops, data duplication, and synchronization failures.
+2. **Native Hybrid Rank Fusion:**
+   Engramory's `RetrievalService` (SPEC-03) performs weighted Reciprocal Rank Fusion (RRF) directly across:
+   - Dense vector embeddings (`memories.embedding` and `kb_sections.embedding`).
+   - Sparse lexical search (`memories.ts_lex` tsvector).
+   - Recency and source-trust multipliers (`human` > `tool` > `agent`).
+3. **Graph Projections over Relational Data:**
+   Rather than making a graph database the primary source of truth, Engramory stores canonical entities and lineage in PostgreSQL and projects them into Neo4j (via `GraphPort`) only when multi-hop graph algorithms or deep topological traversal are required. The graph is completely rebuildable from PostgreSQL.
+4. **Conclusion:**
+   Engramory is self-contained. You do not need LightRAG, external vector databases, or hosted RAG services. PostgreSQL provides the complete canonical spine for both knowledge and memory.
 
 ---
 

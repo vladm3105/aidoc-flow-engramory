@@ -22,8 +22,8 @@ flags from memory — run `engramory <cmd> --help`, and read
 
 ## When to recall
 
-- **Session start / new task:** `engramory memory search --query "<topic>"
-  --json` before repeating work — prior lessons, decisions, and constraints
+- **Session start / new task:** `engramory --json memory search --query "<topic>"`
+  before repeating work — prior lessons, decisions, and constraints
   may already exist.
 - Prefer specific queries (an error message, a component name) over broad
   ones; hits are token-budgeted.

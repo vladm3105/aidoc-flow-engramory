@@ -35,7 +35,7 @@ engramory memory add --content "this workspace pins postgres at pg16" --kind not
 
 # make it retrievable, then find it
 engramory memory distill
-engramory memory search --query "postgres version" --json
+engramory --json memory search --query "postgres version"
 
 # close the loop with the retrieval_id from the hit
 engramory memory feedback --retrieval-id <id> --outcome useful

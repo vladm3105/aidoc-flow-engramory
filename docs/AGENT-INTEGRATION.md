@@ -70,7 +70,7 @@ Paste into the vendor's instruction file:
 This repo uses Engramory as agent memory (CLI: `engramory`; requires a one-time
 `engramory init` — see `docs/INSTALL.md`).
 
-- **Session start:** `engramory memory search --query "<current task topic>" --json`
+- **Session start:** `engramory --json memory search --query "<current task topic>"`
   and read the hits before repeating work.
 - **When you learn a durable fact** (decision, constraint, lesson, outcome —
   not transcripts, never secrets/credentials/personal data):
@@ -81,14 +81,33 @@ This repo uses Engramory as agent memory (CLI: `engramory`; requires a one-time
 - **When a memory is wrong/superseded:**
   `engramory memory forget --memory-id <id> --reason "<why>"`.
 
-Exit codes: 0 ok · 1 rejected (fix the input, don't route around) ·
+Global flags: `--json` and `--config` must precede the command (e.g. `engramory --json memory search ...`).
+Exit codes: 0 ok · 1 rejected (authz deny / invalid input; boundary working, do not route around) ·
 2 config/usage (run `engramory init`) · 3 retryable (store down; try later).
 Mechanics: `engramory <cmd> --help` / `docs/AGENT-QUICKSTART.md`.
 ```
 
-## Trust boundary
+## Multi-Agent Scoping & Trust Boundary
 
-The CLI trusts `.engramory/config.toml` identity **only** in the dev tier
-(`ENGRAMORY_PROFILE=dev`; anything else exits 2 per ADR-10). Every call is
-authorized default-deny, audited, and fails closed — a denial (exit 1) is the
-authorization boundary working, not an error to work around.
+### Project Executor Isolation
+
+Project executors initialize with their specific repository ID and isolated scopes:
+
+```bash
+engramory init \
+  --agent-id my-coding-agent \
+  --project-id my-project \
+  --tenant-id default \
+  --scopes "agent,project" \
+  --dsn "$ENGRAMORY_DSN"
+```
+
+The AccessSurface enforces strict default-deny isolation: a coding agent configured for `my-project` cannot search or alter memories belonging to other repositories.
+
+### Operations Assistant (Supervisor) Scope
+
+The Operations Assistant (Virtual CTO / fleet orchestrator) runs with broader scope grants (`domain` or `space`), allowing it to inspect specifications, cross-project architectural lessons, and the real-time `audit_records` stream.
+
+### Trust Boundary
+
+The CLI trusts `.engramory/config.toml` identity **only** in the dev tier (`ENGRAMORY_PROFILE=dev`; anything else exits 2 per ADR-10). Every call is authorized default-deny, audited, and fails closed — a denial (exit 1) is the authorization boundary working, not an error to work around.

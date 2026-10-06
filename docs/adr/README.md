@@ -19,3 +19,4 @@ implementing decisions in `sdd/05_ADR/`; keep this file for the conceptual summa
 | — | Scope ladder (agent/project/domain/space) + tenant_id isolation | sdd/05_ADR/ADR-07 |
 | — | Single platform, two bounded cores — Memory and Knowledge | sdd/05_ADR/ADR-08 |
 | — | Independent memory storage; iplan ledger as an episode source (not a backend) | sdd/05_ADR/ADR-09 |
+| — | Agent-facing packaging: CLI + Skills for dev, MCP gateway for production | sdd/05_ADR/ADR-10 |

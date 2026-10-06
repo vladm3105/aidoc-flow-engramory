@@ -59,7 +59,7 @@ the CLI refuses to run when `ENGRAMORY_PROFILE` is anything but `dev`
 ## 4. Smoke check
 
 ```bash
-engramory status --json
+engramory --json status
 # {"store": "ok", "episodes": 0, "kb_sections": 0}
 ```
 
@@ -68,7 +68,7 @@ First full round-trip (see `AGENT-QUICKSTART.md` for the agent workflow):
 ```bash
 engramory memory add --content "first remembered fact"
 engramory memory distill        # interim reflect: episodes -> retrievable memories
-engramory memory search --query "fact" --json
+engramory --json memory search --query "fact"
 ```
 
 ## Exit codes (normative, SPEC-07)

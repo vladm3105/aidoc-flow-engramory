@@ -6,16 +6,20 @@
 
 ## Ecosystem map
 
-Engramory is the **shared memory + knowledge plane** for a three-plane ecosystem:
+Engramory is the **shared memory + knowledge plane** for a four-plane multi-agent ecosystem:
 
 | Plane | Repo / component | Role |
 |---|---|---|
-| **Control plane** | `aidoc-flow-framework` (UCX) | AI-First SDD: BRD→PRD→EARS→BDD→ADR→SPEC→TDD→IPLAN. Hermes orchestrates; UCX MCP lifecycle gates are source of truth. |
-| **Execution plane** | `iplan-runner` | Turns an approved IPLAN into auditable execution: **Ledger → Gate → Monitor**. Engine-agnostic; `hermes`/`claude` runtimes. Local-first, optional sync. |
+| **Control plane** | `aidoc-flow-framework` (UCX) | AI-First SDD: BRD→PRD→EARS→BDD→ADR→SPEC→TDD→IPLAN. Lifecycle gates and consistency checks are source of truth. |
+| **Supervisory plane** | `aidoc-flow-operations` (Operations Assistant) | Meta-orchestrator, Virtual CTO, and governance reviewer. Fleet-wide scope (`domain`, `space`); inspects real-time `audit_records` and supervises executor agents. |
+| **Execution plane** | `iplan-runner` (Executors) | Turns an approved IPLAN into auditable execution in project worktrees (e.g. `b-local-privy`): **Ledger → Gate → Monitor**. Isolated `agent` + `project` scope. |
 | **System-of-record** | `iplanic` | Online lifecycle manager iplan-runner syncs to: dispatch, immutable versioning, completion gate, audit-grade evidence. |
-| **Memory + knowledge plane** | **Engramory** (this repo) | Shared KB + per-agent distilled memory. **Replaces `ucx_kb`.** Consumed by Hermes, the runners, and product projects (`aidoc-flow`, `aidoc-flow-operations`, …). |
+| **Memory + knowledge plane** | **Engramory** (this repo) | Shared governed KB (`kb_sections`) + per-agent distilled memory (L1–L3) + audit sink (`audit_records`). **Replaces `ucx_kb`.** Serves both supervisors and executors. |
 
-Engramory is the brain the other planes read from and write to. It must serve the SDD KB duties `ucx_kb` performs today **and** add the per-agent experiential memory the ecosystem lacks.
+Engramory is the common memory and specification backbone the other planes read from and write to:
+
+- **Project Executors** (coding agents in repo worktrees) access their project-scoped documentation and record episodic decisions.
+- **Operations Assistant** (the global supervisor) inspects fleet-wide audit streams, validates cross-project architectural conformance, and directs work across repositories.
 
 ---
 
