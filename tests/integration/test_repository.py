@@ -5,6 +5,7 @@ Covers the relational half of the store: idempotent episode persistence
 derivation), soft-supersede (BDD.01.03.a700 lifecycle), the ADR-07 scope
 visibility ladder, and the SPEC-03 active-only default filter.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -70,9 +71,7 @@ async def test_supersede_end_dates_predecessor(repo: Repository) -> None:
 async def test_scope_visibility_ladder(repo: Repository) -> None:
     """ADR-07: own agent rows + shared space rows visible; other agents' private rows not."""
     await repo.upsert_memory(_memory(tenant_id="t-vis", agent_id="agent-a"))
-    await repo.upsert_memory(
-        _memory(tenant_id="t-vis", agent_id="agent-b", summary="b private")
-    )
+    await repo.upsert_memory(_memory(tenant_id="t-vis", agent_id="agent-b", summary="b private"))
     await repo.upsert_memory(
         _memory(tenant_id="t-vis", agent_id=None, scope="space", summary="team lesson")
     )

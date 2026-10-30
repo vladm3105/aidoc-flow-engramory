@@ -18,6 +18,7 @@ is client-supplied and therefore trusted ONLY under the dev tier —
 ``require_dev_profile`` refuses anything else. Production access is
 gateway-only with OIDC-verified claims.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -96,6 +97,7 @@ def _emit(as_json: bool, payload: dict[str, Any], human: str) -> None:
 
 # ── commands ────────────────────────────────────────────────────────────────
 
+
 def _upsert_profile_best_effort(agent_id: str, dsn: str) -> str:
     """L3 profile row: init still succeeds when the store is down — the row
     lands on a later init run (every init retries, including re-runs on an
@@ -105,8 +107,7 @@ def _upsert_profile_best_effort(agent_id: str, dsn: str) -> str:
     try:
         asyncio.run(Repository(dsn).upsert_agent_profile(AgentProfile(agent_id=agent_id)))
     except StoreUnavailable as exc:
-        print(f"engramory init: store unreachable, profile deferred: {exc}",
-              file=sys.stderr)
+        print(f"engramory init: store unreachable, profile deferred: {exc}", file=sys.stderr)
         return "deferred"
     return "created"
 
@@ -115,9 +116,11 @@ def _cmd_init(args: argparse.Namespace) -> int:
     cfg_path = Path(CONFIG_DIRNAME) / CONFIG_FILENAME
     if cfg_path.exists():
         profile_state = _upsert_profile_best_effort(args.agent_id, args.dsn)
-        _emit(args.json,
-              {"created": False, "config": str(cfg_path), "profile": profile_state},
-              f"exists: {cfg_path}")
+        _emit(
+            args.json,
+            {"created": False, "config": str(cfg_path), "profile": profile_state},
+            f"exists: {cfg_path}",
+        )
         return 0
     scopes = args.scopes.split(",") if args.scopes else list(DEFAULT_SCOPES)
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
@@ -137,9 +140,11 @@ def _cmd_init(args: argparse.Namespace) -> int:
     if entry not in existing:
         gitignore.write_text(existing.rstrip("\n") + ("\n" if existing else "") + entry + "\n")
     profile_state = _upsert_profile_best_effort(args.agent_id, args.dsn)
-    _emit(args.json,
-          {"created": True, "config": str(cfg_path), "profile": profile_state},
-          f"created: {cfg_path}")
+    _emit(
+        args.json,
+        {"created": True, "config": str(cfg_path), "profile": profile_state},
+        f"created: {cfg_path}",
+    )
     return 0
 
 
@@ -240,23 +245,30 @@ def _cmd_status(args: argparse.Namespace) -> int:
         }
 
     payload = asyncio.run(counts())
-    _emit(args.json, payload,
-          f"store ok — {payload['episodes']} episode(s), "
-          f"{payload['kb_sections']} kb section(s)")
+    _emit(
+        args.json,
+        payload,
+        f"store ok — {payload['episodes']} episode(s), {payload['kb_sections']} kb section(s)",
+    )
     return 0
 
 
 # ── parser + entry point ────────────────────────────────────────────────────
+
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="engramory",
         description="Agent memory plane — dev/CI face over AccessSurface (ADR-10).",
     )
-    parser.add_argument("--json", action="store_true",
-                        help="one machine-readable JSON object on stdout")
-    parser.add_argument("--config", help="explicit config path "
-                        f"(default: {CONFIG_DIRNAME}/{CONFIG_FILENAME} discovered upward)")
+    parser.add_argument(
+        "--json", action="store_true", help="one machine-readable JSON object on stdout"
+    )
+    parser.add_argument(
+        "--config",
+        help="explicit config path "
+        f"(default: {CONFIG_DIRNAME}/{CONFIG_FILENAME} discovered upward)",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_init = sub.add_parser("init", help="scaffold .engramory/config.toml + L3 profile")
@@ -283,8 +295,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_fb = mem_sub.add_parser("feedback", help="record a retrieval outcome")
     p_fb.add_argument("--retrieval-id", required=True)
-    p_fb.add_argument("--outcome", required=True,
-                      help="useful | not_useful | harmful")
+    p_fb.add_argument("--outcome", required=True, help="useful | not_useful | harmful")
     p_fb.set_defaults(func=_cmd_memory_feedback)
 
     p_forget = mem_sub.add_parser("forget", help="retire a memory (soft, audited)")

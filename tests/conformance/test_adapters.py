@@ -7,6 +7,7 @@ a stub-only test would assert nothing real.
 
 Reuses the shared ephemeral-Postgres fixture from tests/conftest.py.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -17,7 +18,6 @@ from engramory.core.models import Memory
 from engramory.core.repository import Repository, StoreUnavailable
 
 pytestmark = pytest.mark.asyncio
-
 
 
 def _memory(summary: str, **overrides: object) -> Memory:

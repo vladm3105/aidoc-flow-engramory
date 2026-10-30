@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://unified-test-suite/schemas/lock.schema.json",
+  "title": "unified-test-suite lock (unified-test-suite.lock.json)",
+  "description": "Written only by `uts init` / `uts sync`. Pins the vendored canon and the sha256 of every vendored file so local edits are detected.",
+  "type": "object",
+  "required": ["canon", "version", "files"],
+  "properties": {
+    "canon": { "const": "unified-test-suite" },
+    "version": { "type": "string" },
+    "source": { "type": ["string", "null"] },
+    "ref": { "type": ["string", "null"] },
+    "commit": { "type": ["string", "null"] },
+    "syncedAt": { "type": "string", "format": "date-time" },
+    "files": { "type": "object", "additionalProperties": { "type": "string", "pattern": "^[0-9a-f]{64}$" } }
+  }
+}

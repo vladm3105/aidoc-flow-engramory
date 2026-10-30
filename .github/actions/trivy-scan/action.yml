@@ -1,0 +1,253 @@
+# trivy-scan composite action — v3 packaging of the ci/v2.x `trivy-scan`
+# reusable. The run body is a VERBATIM PORT (PLAN-025 §1) apart from the
+# `timeout` wrapper and the precondition guard, both additive.
+#
+# CHECKOUT IS THE CALLER'S JOB (§3.2).
+#
+# ── DEFENSES CARRIED (PLAN-025 §2 — do not remove) ───────────────────────────
+#   D20  The trivy tarball is SHA-256 verified BEFORE extraction.
+#   D21  trivy is installed as a BINARY, never via aquasecurity/trivy-action —
+#        a non-allowlisted publisher is a run-init startup_failure. This is why
+#        the body is hand-rolled shell.
+#   D25  `--misconfig-scanners dockerfile,kubernetes,cloudformation,azure-arm` is
+#        LOAD-BEARING. terraform/helm/ansible fetch remote sources from
+#        PR-controlled fields — a `.tf` `module { source = "https://…" }` makes
+#        the runner clone an attacker-chosen URL (SSRF/egress). Verified:
+#        `--tf-exclude-downloaded-modules` does NOT prevent the fetch. Never add
+#        those scanners here without network isolation.
+#   D23  **THE GATE, NOT THE SCANNED PR, DECIDES COVERAGE.** PR-committed
+#        `.trivyignore` / `trivy.yaml` are honoured independently of the flags
+#        above and take misconfigurations 3 -> 0 (MEASURED, #425). Stripped —
+#        symlinks included, repo root included — with a post-condition that
+#        refuses to scan if one survives. Erasing coverage here also erases
+#        Code Scanning alerts on `push: main`, so it outlives the PR.
+#   D14  `fail-on-findings` is a real toggle honoured with `exit 1`.
+#   D15  `set -euo pipefail`.
+#
+# ── NOT HERE, DELIBERATELY (§3.2a) ───────────────────────────────────────────
+#   D27  Fork guard is a JOB-LEVEL `if:` and stays on the CALLER — a step-level
+#        skip runs after the fork's code is already checked out.
+#   D35  SARIF upload stays a CALLER step (`continue-on-error` inside a
+#        composite action is undocumented).
+#
+# HONEST CAVEAT PRESERVED FROM v2: trivy exit 0 + empty SARIF cannot distinguish
+# "scanned, all clean" from "no config files present". Unlike dep-scan there is
+# no zero-coverage signal (no D12 equivalent), so a green here is NOT a coverage
+# guarantee, and the body says so rather than asserting "clean".
+name: trivy-scan
+description: IaC/misconfig scanning via trivy config (binary, checksum-verified).
+
+inputs:
+  scan-path:
+    description: 'Path to scan. MUST be "." (the repo root) — a narrower subtree is a COVERAGE choice and is REFUSED (D26/§4.3i), because the caller is PR-mutable on pull_request.'
+    required: false
+    default: '.'
+  fail-on-findings:
+    description: 'Fail on misconfiguration findings. Default false — PLAN-014 Phase 5 graduates this, a founder step.'
+    required: false
+    default: 'false'
+  sarif-path:
+    description: 'Where to write the SARIF the caller uploads.'
+    required: false
+    default: 'trivy.sarif'
+
+runs:
+  using: composite
+  steps:
+    - name: Verify precondition — a checked-out tree
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ ! -e .git ]; then
+          echo "::error::trivy-scan action: no checkout detected. The CALLER must check out before invoking this action (PLAN-025 §3.2)."
+          exit 1
+        fi
+
+    - name: Run trivy config (binary; IaC/misconfig, data-only)
+      shell: bash
+      env:
+        TRIVY_VERSION: "0.72.0"
+        TRIVY_LINUX_64_SHA256: "bbb64b9695866ce4a7a8f5c9592002c5961cab378577fa3f8a040df362b9b2ea"
+        FAIL: ${{ inputs.fail-on-findings }}
+        SCAN_PATH: ${{ inputs.scan-path }}
+        SARIF: ${{ inputs.sarif-path }}
+        TRIVY_CACHE_DIR: "${{ runner.temp }}/trivy-cache"
+      run: |
+        set -euo pipefail
+        command -v jq >/dev/null 2>&1 || { echo "::error::jq not found on the runner — infrastructure error, not a finding."; exit 1; }
+        curl -sSfL --retry 3 --retry-delay 2 "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" -o /tmp/trivy.tgz
+        printf '%s  %s\n' "$TRIVY_LINUX_64_SHA256" /tmp/trivy.tgz | sha256sum --check --strict
+        BIN_DIR="$RUNNER_TEMP/bin"; mkdir -p "$BIN_DIR"
+        tar -xzf /tmp/trivy.tgz -C "$BIN_DIR" trivy; chmod 0755 "$BIN_DIR/trivy"
+
+        summary() { echo "trivy-scan: $1" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"; }
+
+        # ── D23 (extended from sast-scan by #425) ────────────────────────────
+        # THE GATE, NOT THE SCANNED PR, DECIDES COVERAGE. trivy honours files
+        # COMMITTED TO THE REPO BEING SCANNED, independently of every flag below.
+        # MEASURED at the pinned version: a `.trivyignore` listing the AVD IDs took misconfigurations
+        # 3 -> 0, and a root `trivy.yaml` narrowing `severity` did the same.
+        #
+        # The second harm OUTLIVES THE PR. A zeroed scan still writes a LEGITIMATE
+        # empty SARIF, so the caller's report purge cannot see it (that purge catches a
+        # PR SUPPLYING a report, not a PR CAUSING an empty one), `hashFiles` is
+        # non-empty, the upload proceeds — and on `push: main` Code Scanning keys an
+        # analysis by CATEGORY, so the empty analysis REPLACES the previous one and
+        # every open alert it held is erased.
+        #
+        # A repo needing a real exclusion expresses it GATE-SIDE, never in a PR-mutable
+        # file. §4.3e is the rule.
+        #
+        # `-type f` MISSES A SYMLINK — git stores symlinks natively (mode 120000) and
+        # the scanner follows the link. REPRODUCED against sast-scan 2026-08-08.
+        #
+        # scan-path is an INPUT, and on `pull_request` the caller's workflow file comes
+        # from the PR HEAD — the same access level D23 already assumes. `find` reads its
+        # first operand as an OPTION when it begins with `-`: `scan-path: -delete` makes
+        # this `find -delete . …`, which has NO path operand, so `-delete` evaluates
+        # against the whole tree. MEASURED: it EMPTIES THE WORKSPACE, after which the
+        # post-condition finds nothing and certifies the empty tree clean — the strip
+        # becomes the bypass. Validate before the value reaches find.
+        sp_safe="$(printf '%s' "$SCAN_PATH" | tr '\n\r' '??' | cut -c1-200)"
+        case "$SCAN_PATH" in
+          -*) echo "::error::trivy-scan: scan-path may not begin with '-' (got '${sp_safe}') — refusing rather than handing it to find as an option (D23)."; exit 1 ;;
+        esac
+        if [ ! -d "$SCAN_PATH" ]; then
+          echo "::error::trivy-scan: scan-path '${sp_safe}' is not an existing directory — refusing rather than reporting a clean scan of nothing (D23)."
+          exit 1
+        fi
+        # COVERAGE, NOT JUST SAFETY. The two checks above validate that SCAN_PATH is
+        # safe to hand to `find`; neither constrains what gets SCANNED. `scan-path` is
+        # caller-supplied, and on `on: pull_request` the caller's workflow file comes
+        # from the PR HEAD — the same access level D23 assumes throughout. So
+        # `scan-path: docs` is an existing directory with no leading `-` that passes
+        # both checks, scans a code-free tree, exits 0, writes a valid SARIF with no
+        # results, and the gate goes GREEN. That is bit-for-bit the outcome D26 closes
+        # for `config` — the same bypass through a second door, and only one was shut.
+        #
+        # Costs nothing: `.` is the input's default and what every shipped caller
+        # passes. A repo that genuinely needs a narrower scan asks canon for a
+        # gate-side input, which is the rule restated — THE GATE decides coverage.
+        case "$SCAN_PATH" in
+          .) ;;
+          *) echo "::error::trivy-scan: scan-path must be the repo root '.'; got '${sp_safe}'. A PR-chosen subtree is a COVERAGE choice — an existing directory containing no code exits 0 with a valid empty SARIF and the gate goes green having scanned nothing (D26/§4.3i)."; exit 1 ;;
+        esac
+        strip_roots=("$SCAN_PATH")
+        if [ "$SCAN_PATH" != "." ]; then strip_roots+=("."); fi
+        d23_scan() {
+          # $@ = the trailing find action, applied IDENTICALLY to every class, so the
+          # strip and the post-condition can never cover different sets (#423's shape).
+          d23_rc=0
+          # Ignore file: MEASURED CWD-only at trivy 0.72.0 (in a subdirectory it changed
+          # nothing; at the root it took findings 3 -> 0). Swept recursively anyway — no
+          # repo legitimately SCANS a file by these names, so recursion costs nothing and
+          # covers a future per-directory change. `.trivyignore.yaml` / `.trivyignore.yml`
+          # are NOT auto-discovered at this pin (measured: no effect); they are stripped
+          # defensively, not because they are live vectors today.
+          find "${strip_roots[@]}" \( -type f -o -type l \) \
+               \( -name '.trivyignore' -o -name '.trivyignore.yaml' -o -name '.trivyignore.yml' \) "$@" || d23_rc=$?
+          # Config file: DEPTH 1 ONLY, deliberately. `trivy.yaml` is the default value of
+          # `--config`, resolved from the working directory — MEASURED: in a subdirectory
+          # it has NO effect; at the root it took findings 3 -> 0. A recursive strip would
+          # delete files trivy is meant to SCAN (`deploy/trivy.yaml` is a plausible
+          # Kubernetes manifest, and kubernetes is in --misconfig-scanners), i.e. the
+          # coverage defense would itself remove coverage.
+          find "${strip_roots[@]}" -maxdepth 1 \( -type f -o -type l \) \
+               \( -name 'trivy.yaml' -o -name 'trivy.yml' \) "$@" || { d23_rc2=$?; if [ "$d23_rc" -eq 0 ]; then d23_rc=$d23_rc2; fi; }
+          return "$d23_rc"
+        }
+
+        # `mktemp` under `set -e` as a BARE assignment aborts the step before any
+        # ::error:: — the very shape `|| fst=$?` exists to prevent, twenty lines down.
+        # Plausible on a ephemeral runner (disk/inode pressure, TMPDIR misconfig).
+        ferr="$(mktemp)" || { echo "::error::trivy-scan: D23 could not allocate a temp file — refusing to scan rather than skip the check."; exit 1; }
+
+        # D23 IS A GATE, NOT A BEST EFFORT: `|| true` keeps a partial failure from
+        # aborting the step, so the POST-CONDITION below is what enforces it. The
+        # strip's stderr is APPENDED to $ferr rather than discarded — with `2>/dev/null`
+        # the delete-failure reason ("Permission denied") was destroyed and the refusal
+        # below then reported an EMPTY find_stderr exactly when it mattered.
+        #
+        # The strip's `-print` carries PR-CONTROLLED PATHS: newlines are legal in git
+        # paths and the runner parses EVERY output line for `::command::`, so an
+        # unfolded path could forge `::stop-commands::` and suppress the ::error::
+        # below. Capture, fold, then report.
+        stripped="$(d23_scan -print -delete 2>>"$ferr" || true)"
+        if [ -n "$stripped" ]; then
+          stripped_safe="$(printf '%s' "$stripped" | tr '\n\r' '??' | cut -c1-500)"
+          # A repo that committed one of these ON PURPOSE gets it deleted from the
+          # workspace. Say so, and say where the exclusion belongs instead — silence
+          # here is how a maintainer concludes the scanner is broken.
+          echo "::warning::trivy-scan: D23 removed PR-supplied scanner config before scanning — it was NOT honoured. Express a real exclusion gate-side (ruleset or action input), never in a repo file (REPO_STANDARDS §4.3e). Removed: ${stripped_safe}"
+          summary "⚠️ D23 removed PR-supplied scanner config — NOT honoured: ${stripped_safe}"
+        fi
+
+        # CI-0033 / §27.1: decide on captured OUTPUT, never a pipeline's exit status —
+        # `find … -print -quit | grep -q .` is a REPRODUCED fail-open, because `-quit`
+        # returns non-zero when a traversal error is recorded before it quits WHILE
+        # STILL PRINTING THE MATCH, and `pipefail` takes that over grep's 0.
+        # `|| fst=$?` is load-bearing: a bare assignment takes the substitution's status
+        # and `set -e` would abort HERE, before the ::error:: — a red step with no cause.
+        fst=0
+        survivor="$(d23_scan -print -quit 2>>"$ferr")" || fst=$?
+        if [ -n "$survivor" ] || [ "$fst" -ne 0 ]; then
+          survivor_safe="$(printf '%s' "$survivor" | tr '\n\r' '??')"
+          find_err="$(tr '\n\r' '  ' < "$ferr" | cut -c1-300)"
+          rm -f "$ferr"
+          echo "::error::trivy-scan: could not certify the tree clean of PR-supplied trivy ignore/config files — refusing to scan rather than accept attacker-controlled coverage (D23). survivor='${survivor_safe}' find_rc=${fst} find_stderr='${find_err}'"
+          exit 1
+        fi
+        rm -f "$ferr"
+        # A DIRECTORY at the config path is a separate weapon, and `-type f -o -type l`
+        # deliberately excludes it from the strip (a directory cannot be READ as config).
+        # MEASURED: `trivy.yaml/` makes trivy exit FATAL — `config file "trivy.yaml"
+        # loading error: read trivy.yaml: is a directory` — which the tool-error arm
+        # below reports as "infrastructure/tool error … Re-run.", a permanent red whose
+        # stated remedy can never work. Name the real cause instead.
+        dircfg="$(find "${strip_roots[@]}" -maxdepth 1 -type d \( -name 'trivy.yaml' -o -name 'trivy.yml' \) -print -quit 2>/dev/null || true)"
+        if [ -n "$dircfg" ]; then
+          dircfg_safe="$(printf '%s' "$dircfg" | tr '\n\r' '??')"
+          echo "::error::trivy-scan: a DIRECTORY occupies trivy's config path ('${dircfg_safe}'), which makes trivy exit FATAL before scanning. This is NOT an infrastructure error and re-running will not clear it — remove the directory (D23)."
+          exit 1
+        fi
+
+
+        # STATIC scanners ONLY (LOAD-BEARING): terraform/helm/ansible fetch remote
+        # sources from PR-controlled fields → SSRF/egress from the self-hosted runner.
+        # Never add them here without network isolation. NO --exit-code: trivy exits 0 on
+        # a successful scan (findings or not), non-zero only on a TOOL error — findings
+        # come from the SARIF, errors from rc.
+        rc=0
+        timeout 900 "$BIN_DIR/trivy" config --misconfig-scanners dockerfile,kubernetes,cloudformation,azure-arm \
+          --format sarif --output "$SARIF" "$SCAN_PATH" || rc=$?
+        if [ "$rc" -ne 0 ]; then
+          echo "::error::trivy-scan: trivy exited $rc — infrastructure/tool error (e.g. checks-bundle download failed), NOT a finding. Re-run."; exit 1
+        fi
+
+        # rc==0 must mean a REAL scan happened. An absent or unparseable SARIF
+        # is an INFRASTRUCTURE failure (partial write, OOM, disk pressure on the
+        # --rm container), never "no findings". dep-scan and sast-scan both fail
+        # loud here; trivy was the only one of the three that swallowed it —
+        # `|| echo 0` turned a destroyed report into a green gate.
+        if [ ! -s "$SARIF" ]; then
+          echo "::error::trivy-scan: trivy exited 0 but produced no SARIF — infrastructure error, not a clean scan. Re-run."; exit 1
+        fi
+        if ! n=$(jq '[.runs[].results[]] | length' "$SARIF" 2>/dev/null); then
+          echo "::error::trivy-scan: SARIF is present but unparseable — a write/parse failure that may be MASKING findings. Treated as a failure, not clean."; exit 1
+        fi
+        case "$n" in ''|*[!0-9]*) n=0 ;; esac
+        if [ "$n" -gt 0 ]; then
+          echo "::warning::trivy-scan: $n IaC/config misconfiguration finding(s) — see $SARIF / the Security tab."
+          summary "❌ $n IaC/config misconfiguration finding(s)."
+          if [ "$FAIL" = "true" ]; then
+            echo "::error::trivy-scan: failing the gate (fail-on-findings: true)."; exit 1
+          fi
+          echo "::notice::trivy-scan: report-only (fail-on-findings: false) — not blocking. Flip fail-on-findings to gate."
+        else
+          # Honest caveat: trivy exit 0 + empty SARIF cannot distinguish "config files
+          # scanned, all clean" from "no config files present / wrong scan-path" — so a
+          # green here is NOT a coverage guarantee (unlike dep-scan, trivy gives no
+          # zero-coverage signal). Report it plainly rather than asserting "clean".
+          echo "::notice::trivy-scan: no IaC/config misconfigurations reported. NOTE: this also fires when there were no config files to scan — trivy config cannot distinguish the two, so this is NOT a coverage guarantee. If this repo has Dockerfiles/IaC, verify scan-path."
+          summary "no misconfigurations reported (also fires when nothing was scanned — not a coverage guarantee)."
+        fi

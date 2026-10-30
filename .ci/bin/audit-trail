@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# aidoc-local-flow-ci audit-trail gate — local port of aidoc-flow-ci's OPS-0069 check.
+#
+# When AUDIT_TRAIL=required (.ci-config), the commits being pushed must include at least
+# one non-exempt commit whose message contains one of AUDIT_TRAIL_PHRASES ("|"-separated):
+#   default: "Multi-agent self-review per OPS-0065" | "Self-review skipped per founder OK"
+#
+# Range (advances between pushes, like the canon pre-push hook):
+#   @{upstream}..HEAD when the branch has an upstream, else <base>..HEAD.
+# Exempt: ranges made only of bot commits (dependabot/renovate/github-actions).
+# Revert commits are NOT exempt (server-parity with the canon CI gate).
+# With REVIEW=required, a verified self-review verdict replaces the phrase
+# (see canon: https://github.com/vladm3105/aidoc-hybrid-ci/blob/main/docs/SELF_REVIEW.md).
+set -uo pipefail
+# shellcheck source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+cd "$(ci_root)" || exit 2
+
+mode=$(ci_config AUDIT_TRAIL off)
+[[ $mode == required ]] || { echo "audit-trail: n/a — AUDIT_TRAIL=$mode (.ci-config)"; exit 0; }
+
+# With REVIEW=required the machine-verifiable review verdict IS the audit trail: `task ship`
+# refuses without a PASS bound to the exact diff, so the phrase in commit messages is optional.
+if [[ $(ci_config REVIEW off) == required ]]; then
+  if bash "$(dirname "${BASH_SOURCE[0]}")/review" --verify --quiet; then
+    echo "audit-trail: OK — satisfied by a verified self-review PASS for this exact change"
+  else
+    echo "audit-trail: deferred — REVIEW=required; 'task ship' enforces a verified PASS (run: task review -- --issue <N>)"
+  fi
+  exit 0
+fi
+IFS='|' read -r -a phrases <<<"$(ci_config AUDIT_TRAIL_PHRASES 'Multi-agent self-review per OPS-0065|Self-review skipped per founder OK')"
+
+if up=$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null) && git rev-parse -q --verify "$up" >/dev/null; then
+  range="$up..HEAD"
+elif ref=$(ci_base_ref) && [[ -n $ref ]]; then
+  range="$ref..HEAD"
+else
+  range="HEAD"
+fi
+mapfile -t shas < <(git rev-list "$range" 2>/dev/null)
+[[ ${#shas[@]} -gt 0 ]] || { echo "audit-trail: no unpushed commits in $range — nothing to verify"; exit 0; }
+
+human=0
+for sha in "${shas[@]}"; do
+  author=$(git log -1 --format=%an "$sha")
+  case $author in dependabot\[bot\]|renovate\[bot\]|github-actions\[bot\]) continue ;; esac
+  human=$((human + 1))
+  msg=$(git log -1 --format=%B "$sha")
+  for p in "${phrases[@]}"; do
+    p=${p#"${p%%[![:space:]]*}"}; p=${p%"${p##*[![:space:]]}"}
+    if [[ -n $p ]] && grep -qF -- "$p" <<<"$msg"; then
+      echo "audit-trail: OK — $(git log -1 --format='%h %s' "$sha") carries \"$p\" (range $range, ${#shas[@]} commit(s))"
+      exit 0
+    fi
+  done
+done
+[[ $human -gt 0 ]] || { echo "audit-trail: exempt — bot-only range ($range)"; exit 0; }
+
+echo "audit-trail: FAIL — none of the ${#shas[@]} commit(s) in $range carries an audit-trail phrase."
+echo "Add one to a commit body (amend or a new commit), e.g.:"
+for p in "${phrases[@]}"; do echo "  - $p ..."; done
+echo "Agents: run the multi-agent self-review first and name the agents + verdict. Never use a"
+echo "founder-override phrase unless the human explicitly authorized it in this session."
+exit 1

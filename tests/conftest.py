@@ -11,6 +11,7 @@ The compose stack's 5432 is deliberately NOT used: the host port may be owned
 by an unrelated service (observed on the dev host), and tests must never touch
 a shared database.
 """
+
 from __future__ import annotations
 
 import os
@@ -77,10 +78,19 @@ def pg_dsn() -> Iterator[str]:
     try:
         subprocess.run(
             [
-                "docker", "run", "-d", "--name", name,
-                "-e", "POSTGRES_PASSWORD=it", "-e", "POSTGRES_USER=it",
-                "-e", "POSTGRES_DB=it",
-                "-p", f"127.0.0.1:{port}:5432",
+                "docker",
+                "run",
+                "-d",
+                "--name",
+                name,
+                "-e",
+                "POSTGRES_PASSWORD=it",
+                "-e",
+                "POSTGRES_USER=it",
+                "-e",
+                "POSTGRES_DB=it",
+                "-p",
+                f"127.0.0.1:{port}:5432",
                 "pgvector/pgvector:pg16",
             ],
             check=True,

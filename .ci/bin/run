@@ -1,0 +1,225 @@
+#!/usr/bin/env bash
+# aidoc-local-flow-ci runner — executes Task targets in parallel and writes machine-readable results.
+#
+# Usage: run [--force] [--route] [--label NAME] <item>...
+#   <item>   a Task name (e.g. secrets), @name (expanded to <svc>:name for every service in
+#            $CI_SERVICES; "none" = no services), or +universal / +universal-fast (expanded
+#            from UNIVERSAL_CHECKS / FAST_CHECKS in .ci-config).
+#   Checks listed in REPORT_ONLY (.ci-config) report "warn" instead of failing the run.
+#   --force  ignore Task's source checksums (no "cached" results).
+#   --label  name recorded in summary.json (e.g. check, ci, ci-full).
+#   --route  change-impact routing: service checks of services the change does not touch report
+#            "skipped" (canon: https://github.com/vladm3105/aidoc-hybrid-ci/blob/main/docs/STANDARD.md#4a-change-impact-routing-gov-ci-001-local-form §4a).
+#            Fail-closed: full run on the base branch, on an empty
+#            change set, when the diff cannot be computed, or when a global-impact path changed.
+#            Disabled by ROUTING=off (.ci-config) or CI_ROUTING=off (server verify).
+#
+# Output (repo root):
+#   .ci-out/summary.json   overall + per-check status
+#   (schema: canon: https://github.com/vladm3105/aidoc-hybrid-ci/blob/main/docs/STANDARD.md#4-result-contract §4)
+#   .ci-out/summary.md     same, as a Markdown table (used for PR comments)
+#   .ci-out/logs/<svc>__<task>.log   full output per check
+#
+# Env:
+#   CI_SERVICES        services for @-expansion (set by the root Taskfile)
+#   CI_TAIL            lines of failing output printed to console (default 40)
+#   CI_JOBS            max parallel checks (default: unlimited; needs bash >= 4.3)
+#   CI_CHECK_TIMEOUT   per-check timeout in seconds (default 1800; uses `timeout` if present)
+#   CI_ROUTING         "off" forces a full run (can only disable routing, never enable it)
+#
+# Exit: 0 when every check passed or was cached, 1 on any failure, 2 on usage error.
+set -uo pipefail
+# shellcheck source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+root=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "run: not inside a git repository" >&2; exit 2; }
+cd "$root" || exit 2
+out="$root/.ci-out"
+force=""
+label="run"
+route=0
+
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --force) force="--force"; shift ;;
+    --label) [[ -n ${2:-} ]] || { echo "run: --label needs a value" >&2; exit 2; }; label=$2; shift 2 ;;
+    --route) route=1; shift ;;
+    --) shift; break ;;
+    -*) echo "run: unknown option $1" >&2; exit 2 ;;
+    *) break ;;
+  esac
+done
+[[ $# -gt 0 ]] || { echo "run: no checks given" >&2; exit 2; }
+if [[ -n ${CI_JOBS:-} && ! ${CI_JOBS:-} =~ ^[1-9][0-9]*$ ]]; then
+  echo "run: ignoring invalid CI_JOBS='${CI_JOBS:-}' (want a positive integer)" >&2
+  unset CI_JOBS
+fi
+
+command -v task >/dev/null || { echo "run: 'task' not found — run 'mise install' (see .ci/bin/doctor)" >&2; exit 2; }
+command -v jq   >/dev/null || { echo "run: 'jq' not found — run 'mise install' (see .ci/bin/doctor)" >&2; exit 2; }
+
+export NO_COLOR=1 FORCE_COLOR=0 CLICOLOR=0 TERM=dumb CI="${CI:-true}"
+
+DEFAULT_UNIVERSAL="secrets sast policy audit-trail closure hygiene markdown links yaml workflows shell sca iac paths"
+DEFAULT_FAST="hygiene markdown yaml workflows shell"
+tasks=()
+for item in "$@"; do
+  case $item in
+    @*)
+      [[ ${CI_SERVICES:-none} == none ]] && continue
+      for svc in $CI_SERVICES; do tasks+=("$svc:${item#@}"); done ;;
+    +universal)      for u in $(ci_list UNIVERSAL_CHECKS "$DEFAULT_UNIVERSAL"); do tasks+=("$u"); done ;;
+    +universal-fast) for u in $(ci_list FAST_CHECKS "$DEFAULT_FAST"); do tasks+=("$u"); done ;;
+    *) tasks+=("$item") ;;
+  esac
+done
+[[ ${#tasks[@]} -gt 0 ]] || { echo "run: nothing to run (no services and no universal checks)"; exit 0; }
+
+rm -rf "$out"
+mkdir -p "$out/logs"
+
+# --- change-impact routing (fail-closed) ------------------------------------------------------
+routing_mode=full; routing_reason="routing not requested"; affected=" "; skipped_svcs=""
+DEFAULT_GLOBAL="Taskfile Taskfile*.yml Taskfile*.yaml */Taskfile */Taskfile*.yml */Taskfile*.yaml mise.toml .mise.toml .ci-config .ci/* .ci-local/* lefthook.yml .tool-versions"
+if [[ $route == 1 ]]; then
+  cfg_routing=$(ci_config ROUTING on)
+  branch_now=$(git branch --show-current 2>/dev/null)
+  if [[ ${CI_ROUTING:-on} == off || $cfg_routing == off ]]; then routing_reason="routing disabled"
+  elif [[ ${CI_SERVICES:-none} == none ]]; then routing_reason="no services"
+  elif [[ -z $branch_now || $branch_now == "$(ci_base_branch)" ]]; then routing_reason="on the base branch or detached HEAD"
+  elif ! impact=$(ci_impact_files); then routing_reason="cannot compute the change (fail-closed)"
+  elif [[ -z $impact ]]; then routing_reason="empty change set"
+  else
+    read -r -a ignore <<<"$(ci_list IMPACT_IGNORE "")"
+    read -r -a global <<<"$DEFAULT_GLOBAL $(ci_list IMPACT_GLOBAL "")"
+    files=()
+    while IFS= read -r f; do
+      if [[ ${#ignore[@]} -gt 0 ]] && ci_glob_match "$f" "${ignore[@]}"; then continue; fi
+      files+=("$f")
+    done <<<"$impact"
+    trigger=""
+    for f in "${files[@]+"${files[@]}"}"; do ci_glob_match "$f" "${global[@]}" && { trigger=$f; break; }; done
+    if [[ -n $trigger ]]; then routing_reason="global-impact path changed: $trigger"
+    else
+      routing_mode=routed; routing_reason="${#files[@]} impacting file(s) after IMPACT_IGNORE"
+      for svc in $CI_SERVICES; do
+        if ! dir=$(task --silent "$svc:where" 2>/dev/null) || [[ -z $dir ]]; then
+          affected+="$svc "; continue            # unknown directory: fail closed
+        fi
+        rel=${dir#"$root"}; rel=${rel#/}
+        pats=()
+        if [[ -z $rel ]]; then pats+=("*"); else pats+=("$rel/*"); fi
+        var="IMPACT_$(tr 'a-z-' 'A-Z_' <<<"$svc")"
+        read -r -a extra <<<"$(ci_list "$var" "")"
+        pats+=("${extra[@]+"${extra[@]}"}")
+        hit=0
+        for f in "${files[@]+"${files[@]}"}"; do ci_glob_match "$f" "${pats[@]}" && { hit=1; break; }; done
+        if [[ $hit == 1 ]]; then affected+="$svc "; else skipped_svcs+="$svc "; fi
+      done
+    fi
+  fi
+fi
+[[ $routing_mode == full ]] && affected=" ${CI_SERVICES:-} "
+
+timeout_cmd=()
+if command -v timeout >/dev/null; then timeout_cmd=(timeout "${CI_CHECK_TIMEOUT:-1800}"); fi
+
+run_one() {
+  local t=$1 key=${1//:/__} start rc status svc name
+  local log="$out/logs/$key.log" res="$out/logs/$key.json"
+  svc=${t%%:*}; name=${t#*:}; [[ $t == *:* ]] || { svc=""; name=$t; }
+  if [[ -n $svc && $routing_mode == routed && $affected != *" $svc "* ]]; then
+    jq -nc --arg c "$t" --arg s "$svc" --arg n "$name" \
+      '{check:$c, service:$s, task:$n, status:"skipped", reason:"service not affected by the change", exit_code:0, duration_s:0, log:null}' >"$res"
+    return
+  fi
+  if [[ -z $force ]] && task --status "$t" >/dev/null 2>&1; then
+    jq -nc --arg c "$t" --arg s "$svc" --arg n "$name" \
+      '{check:$c, service:$s, task:$n, status:"cached", exit_code:0, duration_s:0, log:null}' >"$res"
+    return
+  fi
+  start=$(date +%s)
+  "${timeout_cmd[@]}" task $force "$t" >"$log" 2>&1 </dev/null
+  rc=$?
+  status=pass
+  if [[ $rc -eq 124 && ${#timeout_cmd[@]} -gt 0 ]]; then status=timeout
+  elif [[ $rc -ne 0 ]] && ci_report_only "$t"; then status=warn
+  elif [[ $rc -ne 0 ]]; then status=fail; fi
+  jq -nc --arg c "$t" --arg s "$svc" --arg n "$name" --arg st "$status" --argjson rc "$rc" \
+    --argjson d "$(( $(date +%s) - start ))" --arg l ".ci-out/logs/$key.log" \
+    '{check:$c, service:$s, task:$n, status:$st, exit_code:$rc, duration_s:$d, log:$l}' >"$res"
+}
+
+started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+t0=$(date +%s)
+for t in "${tasks[@]}"; do
+  if [[ -n ${CI_JOBS:-} ]] && (( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 3) )); then
+    while (( $(jobs -rp | wc -l) >= CI_JOBS )); do wait -n; done
+  fi
+  run_one "$t" &
+done
+wait
+
+warnings_json='[]'
+if [[ -f $out/policy-warnings.txt ]]; then
+  warnings_json=$(jq -Rsc 'split("\n") | map(select(length > 0))' "$out/policy-warnings.txt")
+fi
+ci_version=$(cat "$root/.ci/VERSION" 2>/dev/null || echo unknown)
+git_sha=$(git rev-parse HEAD 2>/dev/null || echo none)
+git_branch=$(git branch --show-current 2>/dev/null || echo "")
+dirty=false; [[ -n $(git status --porcelain 2>/dev/null) ]] && dirty=true
+
+jq -s \
+  --arg label "$label" --arg started "$started_at" --argjson dur "$(( $(date +%s) - t0 ))" \
+  --arg ver "$ci_version" --arg sha "$git_sha" --arg br "$git_branch" --argjson dirty "$dirty" \
+  --argjson forced "$([[ -n $force ]] && echo true || echo false)" --argjson warn "$warnings_json" \
+  --arg rmode "$routing_mode" --arg rreason "$routing_reason" --arg rskip "$skipped_svcs" '
+  (sort_by(.check)) as $c |
+  { schema: 1,
+    label: $label,
+    status: (if any($c[]; .status == "fail" or .status == "timeout") then "fail" else "pass" end),
+    failed: [ $c[] | select(.status == "fail" or .status == "timeout") | .check ],
+    counts: { pass: ([ $c[] | select(.status=="pass") ] | length),
+              fail: ([ $c[] | select(.status=="fail" or .status=="timeout") ] | length),
+              cached: ([ $c[] | select(.status=="cached") ] | length),
+              warn: ([ $c[] | select(.status=="warn") ] | length),
+              skipped: ([ $c[] | select(.status=="skipped") ] | length) },
+    routing: { mode: $rmode, reason: $rreason, skipped_services: ($rskip | split(" ") | map(select(length > 0))) },
+    warnings: ($warn + [ $c[] | select(.status=="warn") | "report-only check failed: \(.check) (see \(.log))" ]),
+    forced: $forced,
+    started_at: $started, duration_s: $dur,
+    framework_version: $ver,
+    git: { sha: $sha, branch: $br, dirty: $dirty },
+    checks: $c }' "$out"/logs/*.json >"$out/summary.json"
+
+{
+  echo "### CI \`$label\`: $(jq -r '.status | ascii_upcase' "$out/summary.json")"
+  echo
+  echo "Commit \`${git_sha:0:12}\` · aidoc-local-flow-ci $ci_version · $(jq -r '.counts | "\(.pass) passed, \(.fail) failed, \(.warn) warn, \(.cached) cached, \(.skipped) skipped"' "$out/summary.json")"
+  echo
+  echo "Routing: **$routing_mode** — $routing_reason${skipped_svcs:+ · not affected: \`${skipped_svcs% }\`}"
+  echo
+  echo "| Status | Check | Duration |"
+  echo "| --- | --- | --- |"
+  jq -r '.checks[] | "| \(.status) | `\(.check)` | \(.duration_s)s |"' "$out/summary.json"
+  if [[ $(jq '.warnings | length' "$out/summary.json") -gt 0 ]]; then
+    echo; echo "**Warnings (human review required):**"; echo
+    jq -r '.warnings[] | "- \(.)"' "$out/summary.json"
+  fi
+} >"$out/summary.md"
+
+jq -r '.checks[] | "\(.status | ascii_upcase)\t\(.duration_s)s\t\(.check)"' "$out/summary.json" | column -t -s $'\t' 2>/dev/null \
+  || jq -r '.checks[] | "\(.status | ascii_upcase)  \(.duration_s)s  \(.check)"' "$out/summary.json"
+if [[ $(jq '.warnings | length' "$out/summary.json") -gt 0 ]]; then
+  echo "WARNINGS (human review):"; jq -r '.warnings[] | "  - \(.)"' "$out/summary.json"
+fi
+tail_lines=${CI_TAIL:-40}; [[ $tail_lines =~ ^[0-9]+$ ]] || tail_lines=40
+for t in $(jq -r '.failed[]' "$out/summary.json"); do
+  key=${t//:/__}
+  echo "--- $t (last $tail_lines lines; full log: .ci-out/logs/$key.log)"
+  tail -n "$tail_lines" "$out/logs/$key.log"
+done
+status=$(jq -r .status "$out/summary.json")
+echo "ROUTING: $routing_mode — $routing_reason${skipped_svcs:+ (skipped services: ${skipped_svcs% })}"
+echo "RESULT: $status  (details: .ci-out/summary.json)"
+[[ $status == pass ]]

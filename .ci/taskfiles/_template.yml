@@ -1,0 +1,58 @@
+# aidoc-local-flow-ci language module TEMPLATE — copy to .ci-local/taskfiles/<lang>.yml in a consumer
+# repo (or to ci/taskfiles/<lang>.yml in aidoc-local-flow-ci to make it canonical).
+#
+# Contract (canon: https://github.com/vladm3105/aidoc-hybrid-ci/blob/main/docs/STANDARD.md#32-language-module-contract-citaskfileslangyml-ci-localtaskfileslangyml §3.2)
+# — every module implements ALL eight tasks:
+#   deps        install locked dependencies (lockfile-strict, non-interactive)
+#   fmt         auto-fix formatting (idempotent)
+#   fmt-check   verify formatting (read-only)
+#   lint        linter with warnings as errors (read-only)
+#   typecheck   type/compile check (read-only)
+#   test        tests + coverage threshold; accepts {{.CLI_ARGS}} as a filter and skips the
+#               threshold when filtered
+#   security    language-specific SAST beyond Semgrep, or `echo "n/a — <reason>"`
+#   deps-audit  known-vulnerability scan of dependencies
+# Rules: no prompts, no colors required, deterministic; add `sources:` to read-only checks
+# (never to fmt/deps); expose tool choices as vars with `| default` so services can adapt.
+version: '3'
+
+# Module vars are task-scoped (anchor &v) on purpose: Task merges *global* vars of all
+# included Taskfiles into one namespace, which would leak settings between services.
+
+tasks:
+  deps:
+    vars: &v
+      COV_MIN: '{{.COV_MIN | default "80"}}'
+      COVERAGE: '{{.COVERAGE | default "true"}}'
+    cmds: ['echo "TODO: install locked deps"; exit 1']
+  fmt:
+    vars: *v
+    cmds: ['echo "TODO: auto-format"; exit 1']
+  fmt-check:
+    vars: *v
+    sources: ['src/**/*']
+    cmds: ['echo "TODO: verify formatting"; exit 1']
+  lint:
+    vars: *v
+    sources: ['src/**/*']
+    cmds: ['echo "TODO: lint (warnings as errors)"; exit 1']
+  typecheck:
+    vars: *v
+    sources: ['src/**/*']
+    cmds: ['echo "TODO: type/compile check"; exit 1']
+  test:
+    vars: *v
+    sources: ['src/**/*', 'tests/**/*']
+    status: ['test -z "{{.CLI_ARGS}}"'] # REQUIRED with sources: a filtered run must never report cached
+    cmds: ['echo "TODO: tests with coverage >= {{.COV_MIN}} (filter: {{.CLI_ARGS}})"; exit 1']
+  security:
+    vars: *v
+    cmds: ['echo "n/a — TODO: language SAST or reason"']
+  deps-audit:
+    vars: *v
+    cmds: ['echo "TODO: dependency vulnerability audit"; exit 1']
+
+  where:
+    desc: "(framework) print this service's directory — used by change-impact routing"
+    silent: true
+    cmds: [pwd]

@@ -1,0 +1,78 @@
+# aidoc-local-flow-ci language module: Python (uv · ruff · mypy · bandit · pytest-cov · pip-audit)
+# Include per service:  payments: { taskfile: .ci/taskfiles/python.yml, dir: services/payments, vars: {...} }
+#
+# Vars (all optional):
+#   SRC=src  TESTS=tests  COV_MIN=80  COVERAGE=true
+#   PY="uv run"                                 command prefix ("poetry run", "" for global tools)
+#   INSTALL="test -f uv.lock || { echo 'python: uv.lock missing — run uv lock locally' >&2; exit 1; }; uv sync --all-extras --locked"
+#   AUDIT="uv run pip-audit --skip-editable"    dependency audit command
+version: '3'
+
+# Module vars are task-scoped (anchor &v) on purpose: Task merges *global* vars of all
+# included Taskfiles into one namespace, which would leak settings between services.
+
+tasks:
+  deps:
+    vars: &v
+      SRC: '{{.SRC | default "src"}}'
+      TESTS: '{{.TESTS | default "tests"}}'
+      COV_MIN: '{{.COV_MIN | default "80"}}'
+      COVERAGE: '{{.COVERAGE | default "true"}}'
+      PY: '{{.PY | default "uv run"}}'
+      INSTALL: '{{.INSTALL | default "test -f uv.lock || { echo \"python: uv.lock missing — run uv lock locally\" >&2; exit 1; }; uv sync --all-extras --locked"}}'
+      AUDIT: '{{.AUDIT | default "uv run pip-audit --skip-editable"}}'
+    desc: Install locked dependencies
+    cmds: ['{{.INSTALL}}']
+
+  fmt:
+    vars: *v
+    desc: Auto-format and apply safe lint fixes
+    cmds:
+      - '{{.PY}} ruff format .'
+      - '{{.PY}} ruff check --fix .'
+
+  fmt-check:
+    vars: *v
+    desc: Verify formatting (read-only)
+    sources: ['{{.SRC}}/**/*.py', '{{.TESTS}}/**/*.py', '*.py', '*.toml']
+    cmds: ['{{.PY}} ruff format --check .']
+
+  lint:
+    vars: *v
+    desc: Ruff lint
+    sources: ['{{.SRC}}/**/*.py', '{{.TESTS}}/**/*.py', '*.py', '*.toml']
+    cmds: ['{{.PY}} ruff check .']
+
+  typecheck:
+    vars: *v
+    desc: mypy
+    sources: ['{{.SRC}}/**/*.py', '*.toml', '*.ini', '*.cfg']
+    cmds: ['{{.PY}} mypy {{.SRC}}']
+
+  test:
+    vars: *v
+    desc: "pytest with coverage threshold. Filter: -- -k name (threshold skipped when filtered)"
+    sources: ['{{.SRC}}/**/*.py', '{{.TESTS}}/**/*.py', '*.toml', 'uv.lock']
+    status: ['test -z "{{.CLI_ARGS}}"'] # a filtered run must never report cached
+    cmds:
+      - >-
+        {{.PY}} pytest -q
+        {{if eq .COVERAGE "true"}}--cov={{.SRC}} --cov-report=term-missing:skip-covered --cov-report=xml{{if not .CLI_ARGS}} --cov-fail-under={{.COV_MIN}}{{end}}{{end}}
+        {{.CLI_ARGS}}
+
+  security:
+    vars: *v
+    desc: Bandit (Python-specific SAST)
+    sources: ['{{.SRC}}/**/*.py', 'pyproject.toml']
+    cmds: ['{{.PY}} bandit -r {{.SRC}} -q -c pyproject.toml']
+
+  deps-audit:
+    vars: *v
+    desc: Known-vulnerability scan (pip-audit)
+    sources: ['uv.lock', 'pyproject.toml']
+    cmds: ['{{.AUDIT}}']
+
+  where:
+    desc: "(framework) print this service's directory — used by change-impact routing"
+    silent: true
+    cmds: [pwd]

@@ -11,7 +11,7 @@ authors = [{ name = "Engramory contributors" }]
 dependencies = ["psycopg[binary]>=3.2"]
 
 [project.optional-dependencies]
-dev = ["ruff", "pytest", "pytest-asyncio", "mypy"]
+dev = ["ruff", "pytest", "pytest-asyncio", "pytest-cov", "mypy"]
 
 [project.scripts]
 engramory = "engramory.cli:main"
@@ -29,6 +29,7 @@ packages = ["src/engramory"]
 [tool.ruff]
 line-length = 100
 src = ["src"]
+extend-exclude = [".agents", ".ci", ".aidoc", ".venv", "tmp", ".unified-test-suite", "scripts", "plans", "docs", "sdd"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

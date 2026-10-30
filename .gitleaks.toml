@@ -1,0 +1,27 @@
+# Starter .gitleaks.toml for aidoc-local-flow-ci consumers (inherited from aidoc-flow-ci v4).
+#
+# Only needed if you have known false-positives (test fixtures,
+# docs examples, intentional sample values). Otherwise omit — the
+# default gitleaks ruleset works for ~90% of repos.
+
+title = "aidoc-local-flow-ci default (from aidoc-flow-ci v4)"
+
+[extend]
+# Inherit gitleaks default ruleset (recommended starting point).
+useDefault = true
+
+[allowlist]
+description = "Test fixtures + docs examples (intentional sample values)"
+paths = [
+  '''(.*?)/testdata/''',
+  '''(.*?)/fixtures/''',
+  '''(.*?)/examples/.*''',
+]
+
+# Tag specific known-safe regexes to silence false-positives without
+# turning off rules globally.
+regexes = [
+  '''0{32,64}''',                      # Repetitive zero-padded mock hashes/tokens
+  '''dummy-[a-z0-9-]+-test-fixture''', # Explicitly labeled test fixture credentials
+  '''AKIA[0-9A-Z]{16}EXAMPLE''',        # AWS docs example
+]

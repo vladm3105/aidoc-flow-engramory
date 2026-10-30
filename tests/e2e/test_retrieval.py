@@ -1,4 +1,5 @@
 """E2E scoped retrieval (BDD.01.03.a100): own + shared memories, nothing else."""
+
 from __future__ import annotations
 
 import pytest
@@ -47,9 +48,7 @@ async def test_ungranted_scope_levels_never_leak(pg_dsn: str) -> None:
     repo = Repository(pg_dsn)
     surface = AccessSurface(repo)
     await repo.upsert_memory(_mem("own private", tenant_id="t-cont"))
-    await repo.upsert_memory(
-        _mem("tenant-wide", tenant_id="t-cont", agent_id=None, scope="space")
-    )
+    await repo.upsert_memory(_mem("tenant-wide", tenant_id="t-cont", agent_id=None, scope="space"))
     ctx = ActorContext(
         agent_id="agent-a", project_id="p1", tenant_id="t-cont", scopes=frozenset({"agent"})
     )

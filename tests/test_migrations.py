@@ -1,4 +1,5 @@
 """Static checks on the SQL migrations (no database required)."""
+
 from __future__ import annotations
 
 import re
@@ -34,13 +35,13 @@ def test_migration_0003_reconciles_contracts() -> None:
     """0003 closes the SPEC-vs-schema gaps found in the 2026-07-09 review."""
     sql = (MIGRATIONS / "0003_reconcile_contracts.sql").read_text()
     for token in (
-        "content_hash",        # SPEC-02 Episode idempotency key
-        "status",              # SPEC-04 quarantine (EARS.01.03.b800)
-        "source_trust",        # ranking trust signal
-        "ts_lex",              # SPEC-03 lexical leg
-        "memory_retrievals",   # feedback loop
-        "audit_records",       # SPEC-01 AuditRecord
-        "kb_sections",         # SPEC-02 KBSection / ADR-08 boundary rule 1
+        "content_hash",  # SPEC-02 Episode idempotency key
+        "status",  # SPEC-04 quarantine (EARS.01.03.b800)
+        "source_trust",  # ranking trust signal
+        "ts_lex",  # SPEC-03 lexical leg
+        "memory_retrievals",  # feedback loop
+        "audit_records",  # SPEC-01 AuditRecord
+        "kb_sections",  # SPEC-02 KBSection / ADR-08 boundary rule 1
     ):
         assert token in sql, f"0003 missing '{token}'"
 

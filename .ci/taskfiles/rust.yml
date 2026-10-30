@@ -1,0 +1,87 @@
+# aidoc-local-flow-ci language module: Rust (rustfmt · clippy · cargo check · nextest · llvm-cov · cargo-deny)
+# Include per service:  engine: { taskfile: .ci/taskfiles/rust.yml, dir: services/engine, vars: {...} }
+#
+# Vars (all optional):
+#   COV_MIN=80  COVERAGE=true           (coverage needs cargo-llvm-cov + llvm-tools-preview)
+#   CARGO_FLAGS="--workspace --all-features --locked"
+#   NEXTEST=auto                        auto | true | false  (auto = use cargo-nextest if installed)
+version: '3'
+
+# Module vars are task-scoped (anchor &v) on purpose: Task merges *global* vars of all
+# included Taskfiles into one namespace, which would leak settings between services.
+
+tasks:
+  deps:
+    vars: &v
+      COV_MIN: '{{.COV_MIN | default "80"}}'
+      COVERAGE: '{{.COVERAGE | default "true"}}'
+      CARGO_FLAGS: '{{.CARGO_FLAGS | default "--workspace --all-features --locked"}}'
+      NEXTEST: '{{.NEXTEST | default "auto"}}'
+    desc: Fetch locked dependencies
+    cmds: [cargo fetch --locked]
+
+  fmt:
+    vars: *v
+    desc: Auto-format
+    cmds: [cargo fmt --all]
+
+  fmt-check:
+    vars: *v
+    desc: Verify formatting (read-only)
+    sources: ['src/**/*.rs', 'crates/**/*.rs', 'tests/**/*.rs', 'benches/**/*.rs', 'examples/**/*.rs', '**/rustfmt.toml']
+    cmds: [cargo fmt --all -- --check]
+
+  lint:
+    vars: *v
+    desc: Clippy, warnings are errors
+    sources: &rs ['src/**/*.rs', 'crates/**/*.rs', 'tests/**/*.rs', 'benches/**/*.rs', 'examples/**/*.rs', '**/Cargo.toml', 'Cargo.lock', 'clippy.toml']
+    cmds: ['cargo clippy --all-targets {{.CARGO_FLAGS}} -- -D warnings']
+
+  typecheck:
+    vars: *v
+    desc: cargo check
+    sources: *rs
+    cmds: ['cargo check --all-targets {{.CARGO_FLAGS}}']
+
+  test:
+    vars: *v
+    desc: "Tests (+ coverage threshold, + doctests). Filter: -- <nextest/cargo test filter>"
+    sources: *rs
+    status: ['test -z "{{.CLI_ARGS}}"'] # a filtered run must never report cached
+    cmds:
+      - |
+        set -e
+        runner="{{.NEXTEST}}"
+        if [ "$runner" = auto ]; then
+          if command -v cargo-nextest >/dev/null 2>&1; then runner=true; else runner=false; fi
+        fi
+        if [ -n "{{.CLI_ARGS}}" ] || [ "{{.COVERAGE}}" != true ]; then
+          if [ "$runner" = true ]; then cargo nextest run {{.CARGO_FLAGS}} --no-tests=pass {{.CLI_ARGS}}
+          else cargo test {{.CARGO_FLAGS}} {{.CLI_ARGS}}; fi
+        else
+          if [ "$runner" = true ]; then
+            cargo llvm-cov nextest {{.CARGO_FLAGS}} --no-tests=pass --lcov --output-path lcov.info --fail-under-lines {{.COV_MIN}}
+          else
+            cargo llvm-cov {{.CARGO_FLAGS}} --lcov --output-path lcov.info --fail-under-lines {{.COV_MIN}}
+          fi
+        fi
+        if [ -z "{{.CLI_ARGS}}" ] && [ "$runner" = true ] && \
+           cargo metadata --no-deps --format-version 1 | jq -e '[.packages[].targets[].kind[]] | index("lib")' >/dev/null; then
+          cargo test {{.CARGO_FLAGS}} --doc
+        fi
+
+  security:
+    vars: *v
+    desc: "n/a for Rust — covered by clippy -D warnings and universal Semgrep (sast)"
+    cmds: ['echo "n/a — covered by clippy -D warnings and sast (Semgrep)"']
+
+  deps-audit:
+    vars: *v
+    desc: cargo-deny (advisories, bans, licenses, sources) — needs deny.toml
+    sources: ['Cargo.lock', 'deny.toml', '**/Cargo.toml']
+    cmds: [cargo deny check advisories bans licenses sources]
+
+  where:
+    desc: "(framework) print this service's directory — used by change-impact routing"
+    silent: true
+    cmds: [pwd]

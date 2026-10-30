@@ -3,6 +3,7 @@
 Real Postgres via the shared fixture; asserts persistence AND the audit trail
 (EARS.01.03.b050 — every decision audited).
 """
+
 from __future__ import annotations
 
 import pytest

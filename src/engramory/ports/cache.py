@@ -2,6 +2,7 @@
 
 Dev: Redis. Cloud: Memorystore / Azure Cache for Redis. Losing it is never data loss.
 """
+
 from __future__ import annotations
 
 from typing import Protocol

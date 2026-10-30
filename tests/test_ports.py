@@ -3,6 +3,7 @@
 These assert the vendor-neutral port contract exists and is coherent — they do not
 touch infrastructure. Real adapter/integration tests arrive with the first adapter.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -34,8 +35,15 @@ def test_ports_are_protocols() -> None:
 
 def test_memory_port_learning_loop_surface() -> None:
     """The learning loop (SPEC-01/03/04) is part of the port contract."""
-    for method in ("add_episode", "search", "reflect", "consolidate",
-                   "feedback", "forget", "get_profile"):
+    for method in (
+        "add_episode",
+        "search",
+        "reflect",
+        "consolidate",
+        "feedback",
+        "forget",
+        "get_profile",
+    ):
         assert hasattr(ports.MemoryPort, method), f"MemoryPort missing '{method}'"
     sig = inspect.signature(ports.MemoryPort.search)
     for param in ("include_advisory", "token_budget"):

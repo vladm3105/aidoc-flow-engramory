@@ -1,0 +1,195 @@
+# =============================================================================
+#  Canonical SDD Tasks Template (.aidoc/Taskfile.yml)
+# =============================================================================
+#  Authority: docs/AIDOC_WORKSTATION_STANDARD.md (framework 0.96.4)
+#  Governs: SDD lifecycle execution, linting, review crews, context slicing,
+#           SDD-GRAPH v2.0 validation, and Kùzu acceleration
+#
+#  Graceful-degradation variant: every Python-backed task below degrades to
+#  a skip notice when its engine is not installed, so `task sdd:check`
+#  passes on a bare scaffold. This intentionally diverges from the canonical
+#  TASKFILE-TEMPLATE.yml preconditions (which fail closed) to preserve
+#  greenfield UX. Sync .aidoc/framework (or install the engines) to enable
+#  the real gates.
+# =============================================================================
+version: '3'
+
+vars:
+  SDD_DIR: '{{.SDD_DIR | default "docs/sdd"}}'
+  ENGINE_CONFIG: '{{.ENGINE_CONFIG | default ".aidoc/engine/engine.yaml"}}'
+  PYTHONPATH: '{{.PYTHONPATH | default ".aidoc/framework"}}'
+
+env:
+  PYTHONPATH: '{{.PYTHONPATH}}'
+
+tasks:
+  lint:
+    desc: "Run structural SDD linter over docs/sdd with project overrides"
+    cmds:
+      - >-
+        if python3 -c "import sdd_doc_lint" 2>/dev/null; then
+          python3 -m sdd_doc_lint "{{.SDD_DIR}}" {{.CLI_ARGS}};
+        else
+          echo "sdd:lint: sdd_doc_lint not available; skipping (sync .aidoc/framework to enable).";
+        fi
+
+  review:
+    desc: "Execute multi-persona review crew (live or verify-only mode)"
+    cmds:
+      - >-
+        if python3 -c "import aidoc_flow_langgraph" 2>/dev/null; then
+          python3 -m aidoc_flow_langgraph.cli.main review --config "{{.ENGINE_CONFIG}}" {{.CLI_ARGS}};
+        else
+          echo "sdd:review: engine (aidoc-flow-langgraph) not installed; skipping.";
+        fi
+
+  slice:
+    desc: "Slice and pack SDD context DAG for LLM prompts (with Kùzu acceleration and native fallback)"
+    cmds:
+      - >-
+        if python3 -c "import aidoc_context" 2>/dev/null; then
+          python3 -m aidoc_context.cli.main slice {{.CLI_ARGS}};
+        elif python3 -c "import sdd_doc_lint" 2>/dev/null; then
+          python3 -m sdd_doc_lint --slice {{.CLI_ARGS}};
+        else
+          echo "sdd:slice: context tools not available; skipping.";
+        fi
+
+  setup-kuzu:
+    desc: "Install Kùzu OLAP graph database for sub-millisecond edge slicing"
+    cmds:
+      - >-
+        if ! command -v uv >/dev/null 2>&1; then
+          echo "sdd:setup-kuzu: 'uv' is required by the platform stack (09 §3.13) but was not found. Install it (e.g. 'mise use -g uv') or ask your operator for instructions; refusing insecure pip fallback." >&2;
+          exit 1;
+        fi;
+        if [ -z "${VIRTUAL_ENV:-}" ]; then
+          echo "sdd:setup-kuzu: no active virtualenv (VIRTUAL_ENV is empty). Create one with 'uv venv', activate it, then re-run; refusing system-wide install." >&2;
+          exit 1;
+        fi;
+        uv pip install "kuzu>=0.8.0"
+
+  kuzu-status:
+    desc: "Check Kùzu graph engine index status and node/edge metrics"
+    cmds:
+      - >-
+        if python3 -c "import aidoc_context" 2>/dev/null; then
+          python3 -m aidoc_context.cli.main kuzu-status --root "{{.SDD_DIR}}" {{.CLI_ARGS}};
+        else
+          echo "sdd:kuzu-status: aidoc-context-tools not installed; skipping (run task sdd:setup-kuzu).";
+        fi
+
+  check:
+    desc: "Full SDD Gate: adaptation profile + structural linting + cryptographic review verification"
+    cmds:
+      - task: profile-lint
+      - task: lint
+      - task: review
+        vars: { CLI_ARGS: "--verify-only" }
+
+  graph-check:
+    desc: "Run Binary Topological Validation (BTV) over docs/sdd/graph/"
+    cmds:
+      - >-
+        mkdir -p "{{.SDD_DIR}}/graph";
+        if python3 -c "import sdd_doc_lint" 2>/dev/null; then
+          python3 -m sdd_doc_lint --graph-check "{{.SDD_DIR}}/graph/" {{.CLI_ARGS}};
+        else
+          echo "sdd:graph-check: sdd_doc_lint not available; skipping.";
+        fi
+
+  render:
+    desc: "Project native SDD graphs into human-readable Markdown and Mermaid specs"
+    cmds:
+      - >-
+        if python3 -c "import sdd_doc_lint" 2>/dev/null; then
+          python3 -m sdd_doc_lint --render-spec {{.CLI_ARGS}};
+        else
+          echo "sdd:render: sdd_doc_lint not available; skipping.";
+        fi
+
+  delta:
+    desc: "Calculate PR blast radius and extract mutated subgraph for AI review"
+    cmds:
+      - >-
+        if python3 -c "import sdd_doc_lint" 2>/dev/null; then
+          python3 -m sdd_doc_lint --render-pr-impact --base origin/main --head HEAD {{.CLI_ARGS}};
+        else
+          echo "sdd:delta: sdd_doc_lint not available; skipping.";
+        fi
+
+  graph-cypher:
+    desc: "Execute openCypher query on SDD graph via embedded Kùzu adapter"
+    # QUERY reaches the shell only as an environment variable: interpolating it into the
+    # command let a quote in the query end the string and run arbitrary commands.
+    env:
+      SDD_CYPHER_Q: '{{.QUERY | default ""}}'
+    cmds:
+      - >-
+        mkdir -p "{{.SDD_DIR}}/graph";
+        if python3 -c "import aidoc_context" 2>/dev/null; then
+          python3 -m aidoc_context.cli.main cypher --query "$SDD_CYPHER_Q" --root "{{.SDD_DIR}}" {{.CLI_ARGS}};
+        elif python3 -c "import sdd_doc_lint" 2>/dev/null; then
+          python3 -m sdd_doc_lint --cypher "$SDD_CYPHER_Q" --graph-path "{{.SDD_DIR}}/graph/" {{.CLI_ARGS}};
+        else
+          echo "sdd:graph-cypher: graph engines not available; skipping.";
+        fi
+
+  lake-export:
+    desc: "Export local SDD graph to openCypher / Apache AGE for Central Federated Read Lake"
+    cmds:
+      - >-
+        mkdir -p "{{.SDD_DIR}}/graph";
+        if python3 -c "import sdd_doc_lint" 2>/dev/null; then
+          python3 -m sdd_doc_lint --export-lake --graph-path "{{.SDD_DIR}}/graph/" {{.CLI_ARGS}};
+        else
+          echo "sdd:lake-export: sdd_doc_lint not available; skipping.";
+        fi
+
+  chg-lint:
+    desc: "Run CHG structural linter on Change Requests in docs/sdd/09_CHG/"
+    cmds:
+      - |
+        {{if .CLI_ARGS}}
+        if python3 -c "import sdd_doc_lint" 2>/dev/null; then
+          python3 -m sdd_doc_lint.chg_lint {{.CLI_ARGS}}
+        else
+          echo "sdd:chg-lint: sdd_doc_lint not available; skipping."
+        fi
+        {{else}}
+        TARGET="$(ls {{.SDD_DIR}}/09_CHG/CHG-*.yaml 2>/dev/null | sort -V | tail -n 1)"
+        if [ -z "$TARGET" ]; then
+          LATEST_DIR="$(ls -d {{.SDD_DIR}}/09_CHG/archive/CHG-* 2>/dev/null | sort -V | tail -n 1)"
+          [ -n "$LATEST_DIR" ] && TARGET="$(ls "$LATEST_DIR"/CHG-*.yaml 2>/dev/null | head -n 1)"
+        fi
+        if [ -n "$TARGET" ]; then
+          if python3 -c "import sdd_doc_lint" 2>/dev/null; then
+            python3 -m sdd_doc_lint.chg_lint --sdd-root "{{.SDD_DIR}}" "$TARGET"
+          else
+            echo "sdd:chg-lint: sdd_doc_lint not available; skipping."
+          fi
+        else
+          echo "No CHG target specified or found in {{.SDD_DIR}}/09_CHG/." >&2
+          exit 1
+        fi
+        {{end}}
+
+  swf-lint:
+    desc: "Run Serverless Workflow linter on declarative state machines"
+    cmds:
+      - >-
+        if python3 -c "import sdd_doc_lint" 2>/dev/null; then
+          python3 -m sdd_doc_lint.swf_lint {{.CLI_ARGS | default .SDD_DIR}};
+        else
+          echo "sdd:swf-lint: sdd_doc_lint not available; skipping.";
+        fi
+
+  profile-lint:
+    desc: "Validate adaptation profile against schema 1.1.0"
+    cmds:
+      - >-
+        if python3 -c "import sdd_doc_lint" 2>/dev/null; then
+          python3 -m sdd_doc_lint.profile_lint {{.CLI_ARGS | default ".aidoc/profile.yaml"}};
+        else
+          echo "sdd:profile-lint: sdd_doc_lint not available; skipping.";
+        fi

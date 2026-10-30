@@ -5,6 +5,7 @@ Reconciled rule (SPEC-06 / ADR-01, post PLAN-001): the Postgres driver
 every other vendor SDK belongs behind a port, in ``engramory.adapters``.
 The ports package itself must stay stdlib-only.
 """
+
 from __future__ import annotations
 
 import ast
@@ -14,8 +15,19 @@ SRC = Path(__file__).resolve().parents[2] / "src" / "engramory"
 
 # SDKs that must never appear outside engramory.adapters.
 VENDOR_ROOTS = {
-    "redis", "neo4j", "boto3", "botocore", "google", "azure", "openai",
-    "anthropic", "litellm", "qdrant_client", "pinecone", "minio", "keycloak",
+    "redis",
+    "neo4j",
+    "boto3",
+    "botocore",
+    "google",
+    "azure",
+    "openai",
+    "anthropic",
+    "litellm",
+    "qdrant_client",
+    "pinecone",
+    "minio",
+    "keycloak",
 }
 SPINE = {"psycopg"}  # allowed in core only (ADR-01/SPEC-06 carve-out)
 

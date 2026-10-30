@@ -13,6 +13,7 @@ programming error), NOT wrapped into StoreUnavailable — the fail-closed contra
 (EARS.01.03.c900) covers connectivity only. Embedding producers (LLMPort) must
 not emit non-finite values.
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -85,7 +86,6 @@ class PgVectorAdapter:
         """Remove the projection (idempotent). The canonical row is untouched."""
         async with self._repo._conn() as conn:
             await conn.execute(
-                "UPDATE memories SET embedding = NULL, embedding_dims = NULL "
-                "WHERE id = %(id)s",
+                "UPDATE memories SET embedding = NULL, embedding_dims = NULL WHERE id = %(id)s",
                 {"id": id},
             )

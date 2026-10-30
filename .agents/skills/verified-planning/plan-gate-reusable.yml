@@ -1,0 +1,65 @@
+name: plan-gate-reusable
+
+# Consumer-owned callers invoke this workflow; tuning (runner, Python)
+# lives in the caller, never here — so canon updates can neither skip nor
+# clobber it. See verified-planning/SKILL.md for the caller snippet.
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: "Python version the gate runs on"
+        type: string
+        default: "3.12"
+      runner:
+        description: "Runner label for the gate job"
+        type: string
+        default: "ubuntu-latest"
+      setup-python:
+        description: "Install the Python toolchain (disable for air-gapped runners with system python3)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  check-plan:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with: { fetch-depth: 0, persist-credentials: false }
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        if: inputs.setup-python
+        with: { python-version: "${{ inputs.python-version }}" }
+      - name: Gate changed PLAN files
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.sha }}"
+          # Push/schedule callers have no PR base: say so specifically instead
+          # of failing as a generic diff fault. PR callers only.
+          if [ -z "$base" ]; then
+            echo "::error::plan-gate: no pull-request base — PR callers only"
+            exit 1
+          fi
+          # Fail closed: a diff fault must never read as "no gated files changed".
+          # --diff-filter=d: a deleted plan is not gated — removing an
+          # obsolete plan reads as no-change, never a gate crash.
+          if ! names=$(git diff --name-only --diff-filter=d "$base"...HEAD); then
+            echo "::error::plan-gate: git diff failed — failing closed"
+            exit 1
+          fi
+          # no pathspec on the diff (a '**/' pathspec would miss top-level files);
+          # filter with the same regex as the pre-commit hook, minus the template.
+          # `|| true` guards only the greps' no-match exit now, never the diff.
+          # A `while read` loop, not `mapfile`: the block must run on any
+          # bash, not just 4+.
+          plans=()
+          while IFS= read -r p; do
+            if [ -n "$p" ]; then plans+=("$p"); fi
+          done < <(printf '%s\n' "$names" \
+            | grep -E '(^|/)PLAN-[^/]*\.md$' | grep -vE '(^|/)PLAN-TEMPLATE(\.snippet)?\.md$' || true)
+          if [ "${#plans[@]}" -eq 0 ]; then echo "no gated PLAN files changed"; exit 0; fi
+          printf '%s\n' "${plans[@]}"
+          python3 .agents/skills/verified-planning/check_plan.py "${plans[@]}"

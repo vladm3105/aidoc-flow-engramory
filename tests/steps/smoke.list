@@ -1,0 +1,3 @@
+# tests/steps/smoke.list — post-deploy health against $BACKEND_URL (never starts or resets a stack).
+# Format: <name> :: <command>
+health :: curl -fsS "${BACKEND_URL%/}${BACKEND_HEALTH_PATH:-/health}"

@@ -1,4 +1,5 @@
 """E2E scope isolation (BDD.01.03.e500; TDD.01.04.c300): cross-tenant deny + audit."""
+
 from __future__ import annotations
 
 import pytest

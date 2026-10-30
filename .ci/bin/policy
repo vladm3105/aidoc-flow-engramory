@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# aidoc-local-flow-ci anti-gaming policy.
+#
+# Compares the working tree (tracked changes + untracked, non-ignored files) with the
+# merge-base of the base branch and enforces:
+#   FAIL  new lint/type/security suppressions without an inline "reason:"
+#   FAIL  new skipped/ignored tests without an inline "reason:"
+#   FAIL  deleted test files (unless a human sets ALLOW_TEST_DELETION=1)
+#   FAIL  leftover debug statements (breakpoint(), pdb, debugger;, console.log, dbg!, ...)
+#   WARN  new TODO/FIXME without an issue reference; mock/fake/stub files outside test dirs
+#   WARN  changes to CI / tooling / quality configuration (human review)
+#
+# Config (.ci-config, consumer-owned):
+#   BASE_BRANCH=main
+#   POLICY_EXCLUDE=docs/** vendor/**         extra pathspecs to ignore (space-separated)
+#   POLICY_PROTECTED_EXTRA=^infra/           extra regex of protected paths (warn on change)
+#
+# Warnings are also written to .ci-out/policy-warnings.txt for the runner summary.
+set -uo pipefail
+# shellcheck source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+root=$(ci_root) || { echo "policy: not in a git repo" >&2; exit 2; }
+cd "$root" || exit 2
+
+base=$(ci_merge_base)
+if [[ -z $base ]]; then
+  echo "policy: no base ($(ci_base_branch)) found — nothing to compare, skipping"
+  exit 0
+fi
+
+pathspec=(. ':(exclude).ci/**' ':(exclude)*.md' ':(exclude)**/*.md')
+for p in $(ci_list POLICY_EXCLUDE ""); do pathspec+=(":(exclude)$p"); done
+for p in $(ci_list LINT_EXCLUDE ""); do pathspec+=(":(exclude)$p"); done
+
+# Added lines, prefixed "path: line"
+added_lines() {
+  git diff "$base" -U0 --no-color --no-ext-diff -- "${pathspec[@]}" | awk '
+    /^\+\+\+ b\// { file = substr($0, 7); next }
+    /^\+\+\+ /    { file = ""; next }
+    /^\+/ && file != "" { print file ": " substr($0, 2) }'
+  git ls-files --others --exclude-standard -z -- "${pathspec[@]}" | while IFS= read -r -d '' f; do
+    [[ -f $f ]] && grep -I -n -H '' "$f" 2>/dev/null | sed -E 's/^([^:]+):[0-9]+:/\1: /'
+  done
+}
+
+changed_files() {
+  { git diff --name-only "$base" -- .; git ls-files --others --exclude-standard; } | sort -u
+}
+
+fail=0
+added=$(added_lines)
+
+# --- 1. Suppressions -------------------------------------------------------------------
+supp='noqa|type:[[:space:]]*ignore|pyright:[[:space:]]*ignore|pylint:[[:space:]]*disable|nosec|nosemgrep|gitleaks:allow|//[[:space:]]*nolint|#\[allow\(|#!\[allow\(|eslint-disable|biome-ignore|@ts-ignore|@ts-expect-error|@ts-nocheck|istanbul[[:space:]]+ignore|c8[[:space:]]+ignore|pragma:[[:space:]]*no[[:space:]]*cover|NOLINT|@SuppressWarnings'
+hits=$(grep -E "$supp" <<<"$added" | grep -v 'reason:' || true)
+if [[ -n $hits ]]; then
+  echo "POLICY FAIL: new suppressions without an inline 'reason:' — fix the code, or add 'reason: <why>' on the same line:"
+  sed 's/^/  /' <<<"$hits"
+  fail=1
+fi
+
+# --- 2. Skipped tests ------------------------------------------------------------------
+skip='pytest\.mark\.(skip|xfail)|unittest\.skip|@skip\(|#\[ignore\]|t\.Skip(Now|f)?\(|\.(skip|todo)\(|\bx(it|test|describe)\(|\.only\('
+hits=$(grep -E "$skip" <<<"$added" | grep -v 'reason:' || true)
+if [[ -n $hits ]]; then
+  echo "POLICY FAIL: skipped/focused tests without an inline 'reason:' (.only is never allowed to merge):"
+  sed 's/^/  /' <<<"$hits"
+  fail=1
+fi
+
+# --- 2b. Leftover debug statements ------------------------------------------------------
+debug='(^|[^[:alnum:]_.])(breakpoint\(\)|pdb\.set_trace\(|ipdb\.set_trace\(|debugger;|console\.(log|debug)\(|dbg!\(|binding\.pry|var_dump\(|print_r\()|fmt\.Print(ln|f)?\("DEBUG'
+# Debug exclusions are anchored to path segments (a substring match would exempt e.g.
+# "combined/" via "bin"). Added-lines are "path: content", so the path part is confined
+# with [^:]* (never crossing into the content) and filename patterns terminate on ":".
+debug_excl='^([^:]*\/)?(test|tests|__tests__|spec|specs|script|scripts|bin|cli|example|examples)(\/|: )|^([^:]*\/)?(test_[^/:]*\.py|[^/:]*_test\.(go|py)|[^/:]*\.(test|spec)\.[cm]?[jt]sx?): '
+hits=$(grep -E "$debug" <<<"$added" | grep -vE "$debug_excl" | grep -v 'reason:' || true)
+if [[ -n $hits ]]; then
+  echo "POLICY FAIL: leftover debug statements (remove, or add 'reason:' for intentional output):"
+  sed 's/^/  /' <<<"$hits"
+  fail=1
+fi
+todo=$(grep -E '(TODO|FIXME|XXX|HACK)' <<<"$added" | grep -vE '(TODO|FIXME|XXX|HACK)[(:[:space:]]*[^#]*(#[0-9]+|https?://)' || true)
+if [[ -n $todo ]]; then
+  echo "POLICY WARNING: new TODO/FIXME without an issue reference (#N or URL):"
+  sed 's/^/  /' <<<"$todo"
+  if [[ -d $root/.ci-out ]]; then sed 's/^/TODO without ref: /' <<<"$todo" >>"$root/.ci-out/policy-warnings.txt"; fi
+fi
+mocks=$(changed_files | grep -iE '(^|/)[^/]*(mock|fake|stub)[^/]*\.[a-z]+$' | grep -vE '(^|/)(tests?|__tests__|spec|testdata|mocks?|fixtures?)/|_test\.|\.test\.|\.spec\.|(^|/)test_' || true)
+if [[ -n $mocks ]]; then
+  echo "POLICY WARNING: mock/fake/stub files outside test directories — confirm they are not temporary:"
+  sed 's/^/  /' <<<"$mocks"
+  if [[ -d $root/.ci-out ]]; then sed 's/^/mock outside tests: /' <<<"$mocks" >>"$root/.ci-out/policy-warnings.txt"; fi
+fi
+
+# --- 3. Deleted tests ------------------------------------------------------------------
+tests_re='(^|/)(tests?|__tests__|spec|specs|testdata)/|(^|/)test_[^/]*\.py$|_test\.(go|py)$|\.(test|spec)\.[cm]?[jt]sx?$|(^|/)tests/[^/]*\.rs$'
+deleted=$(git diff --diff-filter=D --name-only "$base" -- . | grep -E "$tests_re" || true)
+if [[ -n $deleted ]]; then
+  if [[ ${ALLOW_TEST_DELETION:-0} == 1 ]]; then
+    echo "POLICY NOTE: test deletion allowed by ALLOW_TEST_DELETION=1:"; sed 's/^/  /' <<<"$deleted"
+  else
+    echo "POLICY FAIL: test files deleted — a human must approve with ALLOW_TEST_DELETION=1:"
+    sed 's/^/  /' <<<"$deleted"
+    fail=1
+  fi
+fi
+
+# --- 4. Protected configuration (warn) -------------------------------------------------
+protected='^(\.ci/|\.ci-local/|\.ci-config$|lefthook\.ya?ml|\.pre-commit-config\.yaml|mise\.toml|\.mise\.toml|\.tool-versions$|rust-toolchain(\.toml)?|\.github/|\.claude/|AGENTS\.md|\.semgrep/|\.semgrepignore|\.ci-review/|\.gitleaks\.toml|\.gitleaksignore|sonar-project\.properties|\.markdownlint[^/]*|\.markdownlint-cli2[^/]*|\.yamllint[^/]*|\.lychee\.toml|\.lycheeignore|osv-scanner\.toml|\.trivyignore[^/]*|trivy\.yaml)|(^|/)(Taskfile|Taskfile[^/]*\.ya?ml|pyproject\.toml|setup\.cfg|\.coveragerc|pytest\.ini|mypy\.ini|ruff\.toml|\.ruff\.toml|Cargo\.toml|deny\.toml|clippy\.toml|rustfmt\.toml|\.rustfmt\.toml|go\.mod|\.golangci\.ya?ml|biome\.jsonc?|tsconfig[^/]*\.json|package\.json|vitest\.config\.[cm]?[jt]s|jest\.config\.[cm]?[jt]s|eslint\.config\.[cm]?[jt]s|\.eslintrc[^/]*|\.prettierrc[^/]*)$'
+extra=$(ci_config POLICY_PROTECTED_EXTRA "")
+[[ -n $extra ]] && protected="$protected|$extra"
+changed=$(changed_files | grep -E "$protected" || true)
+if [[ -n $changed ]]; then
+  echo "POLICY WARNING: CI / tooling / quality configuration changed — requires human review:"
+  sed 's/^/  /' <<<"$changed"
+  if [[ -d $root/.ci-out ]]; then
+    sed 's/^/config changed: /' <<<"$changed" >>"$root/.ci-out/policy-warnings.txt"
+  fi
+fi
+
+[[ $fail -eq 0 ]] && echo "policy: OK (base $(git rev-parse --short "$base"))"
+exit $fail

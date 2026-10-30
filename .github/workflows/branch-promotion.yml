@@ -1,0 +1,62 @@
+name: Branch promotion policy
+
+'on':
+  pull_request:
+    branches: [dev, staging, main]
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+env:
+  # Space-separated promotion branches, baked by install.sh ("none" when
+  # empty). Jurisdiction guards key off this; the chain arms below assume
+  # the standard dev/staging/main names (installer warns otherwise).
+  PROMOTION_TARGETS: none
+
+jobs:
+  verify-source:
+    runs-on: [self-hosted, ci, ephemeral]
+    steps:
+      - name: Require the preceding promotion branch
+        env:
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          TARGET_REPOSITORY: ${{ github.repository }}
+        run: |
+          case " $PROMOTION_TARGETS " in
+            *" $BASE_BRANCH "*) ;;
+            *) exit 0 ;;  # not a promotion target; verify-integration-source judges
+          esac
+          if [ "$HEAD_REPOSITORY" != "$TARGET_REPOSITORY" ]; then
+            echo "Promotion pull requests must originate from this repository."
+            exit 1
+          fi
+
+          case "$BASE_BRANCH:$HEAD_BRANCH" in
+            staging:dev|main:staging) exit 0 ;;
+            *)
+              echo "Only dev -> staging and staging -> main pull requests are permitted."
+              exit 1
+              ;;
+          esac
+
+  verify-integration-source:
+    runs-on: [self-hosted, ci, ephemeral]
+    steps:
+      - name: Require a feature, fix, bot, or back-merge head
+        env:
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          case " $PROMOTION_TARGETS " in
+            *" $BASE_BRANCH "*) exit 0 ;;  # promotion target; verify-source judges
+          esac
+          case "$HEAD_BRANCH" in
+            feature/*|fix/*|dependabot/*|renovate/*|staging) exit 0 ;;
+            *)
+              echo "Integration PRs must come from feature/*, fix/*, dependabot/*, renovate/*, or the staging back-merge."
+              exit 1
+              ;;
+          esac

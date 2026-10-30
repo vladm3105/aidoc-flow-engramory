@@ -6,6 +6,7 @@ global --json, config discovery at .engramory/config.toml, and the ADR-10
 dev-tier fence. Tests drive the real entry point in-process against the
 shared Postgres fixture.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -37,20 +38,34 @@ def _run(*argv: str) -> tuple[int, str]:
 
 def _init(pg_dsn: str, agent: str = "agent-cli", tenant: str = "t-cli") -> None:
     code, _ = _run(
-        "init", "--agent-id", agent, "--project-id", "p-cli",
-        "--tenant-id", tenant, "--dsn", pg_dsn,
+        "init",
+        "--agent-id",
+        agent,
+        "--project-id",
+        "p-cli",
+        "--tenant-id",
+        tenant,
+        "--dsn",
+        pg_dsn,
     )
     assert code == 0
 
 
 # ── init ─────────────────────────────────────────────────────────────────────
 
-def test_init_scaffolds_config_and_profile(
-    project_dir: Path, pg_dsn: str
-) -> None:
+
+def test_init_scaffolds_config_and_profile(project_dir: Path, pg_dsn: str) -> None:
     code, out = _run(
-        "--json", "init", "--agent-id", "agent-cli", "--project-id", "p-cli",
-        "--tenant-id", "t-cli-init", "--dsn", pg_dsn,
+        "--json",
+        "init",
+        "--agent-id",
+        "agent-cli",
+        "--project-id",
+        "p-cli",
+        "--tenant-id",
+        "t-cli-init",
+        "--dsn",
+        pg_dsn,
     )
     assert code == 0
     assert json.loads(out)["created"] is True
@@ -65,8 +80,16 @@ def test_init_scaffolds_config_and_profile(
 def test_init_is_idempotent(project_dir: Path, pg_dsn: str) -> None:
     _init(pg_dsn)
     code, out = _run(
-        "--json", "init", "--agent-id", "agent-cli", "--project-id", "p-cli",
-        "--tenant-id", "t-cli", "--dsn", pg_dsn,
+        "--json",
+        "init",
+        "--agent-id",
+        "agent-cli",
+        "--project-id",
+        "p-cli",
+        "--tenant-id",
+        "t-cli",
+        "--dsn",
+        pg_dsn,
     )
     assert code == 0
     payload = json.loads(out)
@@ -76,6 +99,7 @@ def test_init_is_idempotent(project_dir: Path, pg_dsn: str) -> None:
 
 
 # ── dev-tier fence (ADR-10) ─────────────────────────────────────────────────
+
 
 def test_fence_refuses_non_dev_profile(
     project_dir: Path, pg_dsn: str, monkeypatch: pytest.MonkeyPatch
@@ -87,6 +111,7 @@ def test_fence_refuses_non_dev_profile(
 
 
 # ── memory round-trip: add → distill → search → feedback → forget ──────────
+
 
 def test_memory_roundtrip(project_dir: Path, pg_dsn: str) -> None:
     _init(pg_dsn, tenant="t-cli-rt")
@@ -106,14 +131,22 @@ def test_memory_roundtrip(project_dir: Path, pg_dsn: str) -> None:
     assert hits[0]["retrieval_id"] and hits[0]["memory_id"]
 
     code, _ = _run(
-        "memory", "feedback", "--retrieval-id", hits[0]["retrieval_id"],
-        "--outcome", "useful",
+        "memory",
+        "feedback",
+        "--retrieval-id",
+        hits[0]["retrieval_id"],
+        "--outcome",
+        "useful",
     )
     assert code == 0
 
     code, _ = _run(
-        "memory", "forget", "--memory-id", hits[0]["memory_id"],
-        "--reason", "test cleanup",
+        "memory",
+        "forget",
+        "--memory-id",
+        hits[0]["memory_id"],
+        "--reason",
+        "test cleanup",
     )
     assert code == 0
 
@@ -122,6 +155,7 @@ def test_memory_roundtrip(project_dir: Path, pg_dsn: str) -> None:
 
 
 # ── exit-code contract ──────────────────────────────────────────────────────
+
 
 def test_authz_deny_is_exit_1(project_dir: Path, pg_dsn: str) -> None:
     """A real surface deny is a fail-closed reject (1), never usage (2) —
@@ -134,9 +168,12 @@ def test_authz_deny_is_exit_1(project_dir: Path, pg_dsn: str) -> None:
 def test_unknown_retrieval_id_is_exit_1(project_dir: Path, pg_dsn: str) -> None:
     _init(pg_dsn, tenant="t-cli-u1")
     code, _ = _run(
-        "memory", "feedback",
-        "--retrieval-id", "00000000-0000-0000-0000-000000000000",
-        "--outcome", "useful",
+        "memory",
+        "feedback",
+        "--retrieval-id",
+        "00000000-0000-0000-0000-000000000000",
+        "--outcome",
+        "useful",
     )
     assert code == 1
 
@@ -144,9 +181,12 @@ def test_unknown_retrieval_id_is_exit_1(project_dir: Path, pg_dsn: str) -> None:
 def test_unknown_memory_id_forget_is_exit_1(project_dir: Path, pg_dsn: str) -> None:
     _init(pg_dsn, tenant="t-cli-u2")
     code, _ = _run(
-        "memory", "forget",
-        "--memory-id", "00000000-0000-0000-0000-000000000000",
-        "--reason", "gone",
+        "memory",
+        "forget",
+        "--memory-id",
+        "00000000-0000-0000-0000-000000000000",
+        "--reason",
+        "gone",
     )
     assert code == 1
 
@@ -163,7 +203,9 @@ def test_config_discovered_upward_from_subdir(
 
 
 def test_explicit_config_path(
-    project_dir: Path, pg_dsn: str, tmp_path_factory: pytest.TempPathFactory,
+    project_dir: Path,
+    pg_dsn: str,
+    tmp_path_factory: pytest.TempPathFactory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _init(pg_dsn, tenant="t-cli-cfg")
@@ -180,9 +222,7 @@ def test_malformed_config_is_usage_error(project_dir: Path, pg_dsn: str) -> None
     assert _run("memory", "add", "--content", "x")[0] == 2
 
 
-def test_config_missing_store_section_is_usage_error(
-    project_dir: Path, pg_dsn: str
-) -> None:
+def test_config_missing_store_section_is_usage_error(project_dir: Path, pg_dsn: str) -> None:
     _init(pg_dsn)
     (project_dir / ".engramory" / "config.toml").write_text(
         '[actor]\nagent_id = "a"\nproject_id = "p"\ntenant_id = "t"\n'
@@ -195,14 +235,15 @@ def test_help_is_exit_0_and_bogus_command_is_exit_2(project_dir: Path) -> None:
     assert _run("bogus")[0] == 2
 
 
-def test_bad_outcome_is_fail_closed_reject(
-    project_dir: Path, pg_dsn: str
-) -> None:
+def test_bad_outcome_is_fail_closed_reject(project_dir: Path, pg_dsn: str) -> None:
     _init(pg_dsn, tenant="t-cli-x1")
     code, _ = _run(
-        "memory", "feedback",
-        "--retrieval-id", "00000000-0000-0000-0000-000000000000",
-        "--outcome", "amazing",
+        "memory",
+        "feedback",
+        "--retrieval-id",
+        "00000000-0000-0000-0000-000000000000",
+        "--outcome",
+        "amazing",
     )
     assert code == 1
 
@@ -219,6 +260,7 @@ def test_store_down_is_retryable(project_dir: Path) -> None:
 
 
 # ── profile + status ────────────────────────────────────────────────────────
+
 
 def test_profile_get(project_dir: Path, pg_dsn: str) -> None:
     _init(pg_dsn, agent="agent-cli-p", tenant="t-cli-p")

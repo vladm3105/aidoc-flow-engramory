@@ -40,3 +40,16 @@ scratch/
 !.env.example
 *.pyc
 Thumbs.db
+
+# >>> aidoc-local-flow-ci >>>
+.ci-out/
+.task/
+.env
+test-results/
+coverage.xml
+.coverage
+coverage.out
+lcov.info
+coverage/
+.lycheecache
+# <<< aidoc-local-flow-ci <<<

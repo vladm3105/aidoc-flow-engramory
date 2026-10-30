@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# aidoc-local-flow-ci closure-evidence gate — commits that close issues must carry evidence.
+#
+# When CLOSURE_EVIDENCE_PATHS (.ci-config, space-separated, relative to the repo root;
+# an environment variable of the same name overrides; "none" clears) is non-empty, every
+# commit in the pushed range whose message closes an issue requires ALL listed paths to
+# exist as non-empty regular files in the worktree. Unset/empty = n/a (opt-in).
+#
+# A commit closes an issue when one message line holds a closing keyword — close, closes,
+# closed, fix, fixes, fixed, resolve, resolves, resolved (case-insensitive) — followed by
+# #N or /issues/N (the `owner/repo#N` form matches on its `#N`).
+#
+# Range (advances between pushes, like the canon pre-push hook):
+#   @{upstream}..HEAD when the branch has an upstream, else <base>..HEAD, else HEAD tip.
+# Strictly local: git only, no network calls.
+set -uo pipefail
+# shellcheck source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+cd "$(ci_root)" || exit 2
+
+paths=${CLOSURE_EVIDENCE_PATHS:-$(ci_list CLOSURE_EVIDENCE_PATHS "")}
+[[ $paths == none ]] && paths=""
+[[ -n $paths ]] || { echo "closure: n/a — CLOSURE_EVIDENCE_PATHS is unset (.ci-config)"; exit 0; }
+read -r -a evidence <<<"$paths"
+
+if up=$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null) && git rev-parse -q --verify "$up" >/dev/null; then
+  range="$up..HEAD"
+elif ref=$(ci_base_ref) && [[ -n $ref ]]; then
+  range="$ref..HEAD"
+else
+  range="HEAD"   # no upstream/base ref: STANDARD says the HEAD tip, not all history
+fi
+if [[ $range == HEAD ]]; then mapfile -t shas < <(git rev-list -n 1 HEAD 2>/dev/null)
+else mapfile -t shas < <(git rev-list "$range" 2>/dev/null); fi
+[[ ${#shas[@]} -gt 0 ]] || { echo "closure: no unpushed commits in $range — nothing to verify"; exit 0; }
+
+closing_re='(^|[^[:alnum:]_])(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)([^[:alnum:]]|$).*(#[0-9]+|/issues/[0-9]+)'
+closers=()
+for sha in "${shas[@]}"; do
+  msg=$(git log -1 --format=%B "$sha")
+  if grep -Eqi "$closing_re" <<<"$msg"; then
+    closers+=("$(git log -1 --format='%h %s' "$sha")")
+  fi
+done
+[[ ${#closers[@]} -gt 0 ]] || { echo "closure: OK — no closing keywords in ${#shas[@]} commit(s) ($range)"; exit 0; }
+
+missing=()
+for p in "${evidence[@]}"; do
+  [[ -f $p && -s $p ]] && continue
+  [[ -e $p ]] && missing+=("$p (empty)") || missing+=("$p (missing)")
+done
+[[ ${#missing[@]} -gt 0 ]] || { echo "closure: OK — ${#closers[@]} closing commit(s) with ${#evidence[@]} evidence file(s) present (range $range)"; exit 0; }
+
+echo "closure: FAIL — ${#closers[@]} commit(s) close issues but evidence is missing."
+echo "Closing commits:"
+for c in "${closers[@]}"; do echo "  - $c"; done
+echo "Missing evidence (CLOSURE_EVIDENCE_PATHS):"
+for m in "${missing[@]}"; do echo "  - $m"; done
+echo "Add the evidence files (non-empty, relative to the repo root) or drop the closing keyword."
+exit 1

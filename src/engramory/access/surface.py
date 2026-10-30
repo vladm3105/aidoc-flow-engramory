@@ -20,6 +20,7 @@ is already final. Reads are bound to the caller's own project (ctx.project_id);
 domain-level targeting arrives with BRD-04 when ActorContext gains domain
 membership.
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -137,9 +138,7 @@ class AccessSurface:
                     break
                 budget -= tokens
             assert memory.id is not None  # hydrated rows always carry id
-            kept.append(
-                (memory.id, memory.summary, memory.confidence, memory.provenance, tokens)
-            )
+            kept.append((memory.id, memory.summary, memory.confidence, memory.provenance, tokens))
         retrieval_ids = await self._repo.log_retrievals(
             memory_ids=[m[0] for m in kept],
             tenant_id=target.tenant_id,
@@ -172,9 +171,7 @@ class AccessSurface:
         """Append an episode in the caller's scope (idempotent by content hash)."""
         if len(content.encode("utf-8")) > MAX_CONTENT_BYTES:
             raise ValueError(f"content exceeds {MAX_CONTENT_BYTES} bytes")
-        await self._decide(
-            ctx, "memory_add", TargetScope(tenant_id=ctx.tenant_id, scope="agent")
-        )
+        await self._decide(ctx, "memory_add", TargetScope(tenant_id=ctx.tenant_id, scope="agent"))
         episode = Episode(
             agent_id=ctx.agent_id,
             content_raw=content,
@@ -186,9 +183,7 @@ class AccessSurface:
         )
         return await self._repo.add_episode(episode)
 
-    async def memory_feedback(
-        self, ctx: ActorContext, retrieval_id: str, outcome: str
-    ) -> None:
+    async def memory_feedback(self, ctx: ActorContext, retrieval_id: str, outcome: str) -> None:
         """Record a retrieval outcome (useful | not_useful | harmful) — the
         signal for the SPEC-04 confidence-update rule. Bound to the caller's
         tenant; a foreign retrieval_id raises KeyError like a missing one."""
@@ -197,9 +192,7 @@ class AccessSurface:
         )
         await self._repo.record_feedback(retrieval_id, outcome, tenant_id=ctx.tenant_id)
 
-    async def memory_forget(
-        self, ctx: ActorContext, memory_id: str, *, reason: str
-    ) -> None:
+    async def memory_forget(self, ctx: ActorContext, memory_id: str, *, reason: str) -> None:
         """Retire a memory (soft: end-date + supersede status; audited with the
         caller's reason). A foreign memory_id raises KeyError like a missing
         one — existence never crosses the tenant wall."""

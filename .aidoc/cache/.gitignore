@@ -1,0 +1,3 @@
+# Workstation cache directory (Kuzu embedded database, AST caches)
+*
+!.gitignore

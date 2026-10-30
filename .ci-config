@@ -1,0 +1,162 @@
+# aidoc-local-flow-ci configuration — consumer-owned, KEY=VALUE, never executed.
+# Environment variables of the same name override: CI_BASE_BRANCH, SEMGREP_CONFIGS,
+# CLOSURE_EVIDENCE_PATHS, CI_GUARD_BLOCK_SHIP. Changing this file is a protected
+# change (policy warning + review).
+#
+# Space-separated list keys (UNIVERSAL_CHECKS, FAST_CHECKS, REPORT_ONLY, ...) accept the
+# whole value "none" to clear the list (empty/unset = default). Two carve-outs:
+# SEMGREP_CONFIGS=none means "only local .semgrep/ rules" (not "no rules"), and
+# PROMOTION_REQUIRED_CHECKS is never clearable (empty would gut promotion safety).
+
+# Branch that changes are compared against and PRs target (integration branch).
+BASE_BRANCH=main
+# dev-staging-main model: branches reachable by `task promote -- <branch>` (space-separated,
+# in promotion order — one hop at a time, so `staging main` means dev->staging->main).
+# Promotion branches never use local CI: the gate is the server check(s) below on the exact commit.
+PROMOTION_BRANCHES=
+# ff = fast-forward push of the verified commit (same SHA) · pr = open a promotion PR
+PROMOTION_MODE=ff
+# Server checks (GitHub Actions job names / status contexts) required green before promotion.
+PROMOTION_REQUIRED_CHECKS=verify
+# PROMOTION_MODE=pr: approvals required on promotion PRs.
+PROMOTION_APPROVALS=0
+# Require the branch-promotion workflow job on promotion branches (task rulesets).
+# 0 opts out (only when the workflow is legitimately absent — promotions unchain).
+PROMOTION_SOURCE_CHECK=1
+# Extra required status checks on the integration branch (task rulesets),
+# e.g. blocked-founder-gate; --strict joins verify-integration-source.
+RULESET_EXTRA_CHECKS=
+# Admin bypass on every ruleset (task rulesets). 0 = nobody bypasses anything (strict).
+RULESET_ADMIN_BYPASS=1
+
+# --- Mirror (Gitea → GitHub replica, D2 freshness gate on promote) ---
+# 1 = replicate to MIRROR_REMOTE and gate promotions on replica freshness.
+# 0 = drop path (no mirror, no gate, no lag items; backup is the sole safety net).
+MIRROR_ENABLED=1
+# Remote holding the GitHub replica (machine-user push credentials via git auth).
+MIRROR_REMOTE=github
+# Branches to replicate (space-separated). Empty = BASE_BRANCH + PROMOTION_BRANCHES.
+# v* tags always replicate alongside. The mirror never force-pushes: a diverged
+# replica refuses loudly until fixed by hand.
+MIRROR_REFS=
+# Inbox `mirror-lag` threshold: minutes since the last successful sync.
+MIRROR_LAG_MIN=60
+
+# Universal (language-agnostic) checks run by `task ci`, and the fast subset run by `task check`.
+UNIVERSAL_CHECKS=secrets sast policy audit-trail closure hygiene markdown links yaml workflows shell sca iac paths
+FAST_CHECKS=hygiene markdown yaml workflows shell
+# Checks that report "warn" instead of failing (report-only rollout), e.g. "sca iac deps-audit".
+REPORT_ONLY=
+
+# OPS-0069 audit-trail gate: required | off. Phrases are "|"-separated.
+AUDIT_TRAIL=off
+AUDIT_TRAIL_PHRASES=Multi-agent self-review per OPS-0065|Self-review skipped per founder OK
+
+# Issue-closing evidence gate (`closure` check, opt-in): when non-empty, pushed commits
+# whose message closes an issue (Closes/Fixes/Resolves #N) require ALL these paths to
+# exist as non-empty files (space-separated, relative to the repo root). Empty = n/a.
+# Example: CLOSURE_EVIDENCE_PATHS=docs/closure-report.md
+CLOSURE_EVIDENCE_PATHS=
+
+# Secrets config canary: proves the gitleaks ruleset detects known-bad values
+# before every scan. `off` skips it (a clean scan is then unvalidated).
+SECRETS_CANARY=on
+
+# Semgrep registry rulesets (space-separated); "none" = only local rules in .semgrep/.
+SEMGREP_CONFIGS=p/default
+# trivy config severities that fail the iac check.
+IAC_SEVERITY=HIGH,CRITICAL
+# Hardcoded local workspace paths: `paths` scans the whole repo, `hygiene`
+# scans changed files. `.ci-config` itself is excluded from the pattern test
+# (it holds the patterns). The whole value "none" disables the test (n/a).
+PATHS_DENY=(/home/[a-zA-Z0-9_-]+/devd|/Users/[a-zA-Z0-9_-]+/devd|/opt/data/aidoc-flow)
+
+# --- Change-impact routing (task check / ci / ci-full / test) -------------------------------------
+# on: service checks of services the change does not touch report "skipped". Fail-closed: full run
+# on the base branch, empty change set, diff failure, or when a global-impact path changes.
+ROUTING=on
+# Extra global-impact globs (always included: Taskfile, mise, .ci-config, .ci/, .ci-local/, lefthook).
+# Globs are shell-style; "*" also matches "/" (e.g. "deploy/*" = the whole deploy tree).
+IMPACT_GLOBAL=
+# Changed files that never affect any service (e.g. "docs/* .aidoc/* *.md"). Universal checks still
+# lint them. Needed when a service lives at the repo root (dir ".").
+IMPACT_IGNORE=
+# Per-service extra impact globs: IMPACT_<SERVICE> (upper-case, "-" -> "_"), e.g.
+# IMPACT_BACKEND=go.mod go.sum deploy/* docker-compose*.yml atlas.hcl .github/workflows/backend-ci.yml
+
+# Workflows that provide REQUIRED status checks: trigger-level path filters are rejected
+# (anti-deadlock invariant, `workflows` check).
+REQUIRED_WORKFLOWS=.github/workflows/verify.yml
+
+# Pathspecs excluded from universal lint checks and from policy (space-separated).
+LINT_EXCLUDE=.agents/** .unified-test-suite/**
+POLICY_EXCLUDE=.agents/** .unified-test-suite/**
+# Extra shell files without a .sh extension, e.g. "bin/deploy scripts/hooks/*".
+SHELL_FILES=
+# Extra regex of protected paths — changes produce a human-review warning.
+POLICY_PROTECTED_EXTRA=
+
+# 1 = the agent guard also blocks `task ship`/`task promote` (fully autonomous agent modes).
+GUARD_BLOCK_SHIP=0
+
+# --- Self-review (canon: https://github.com/vladm3105/aidoc-hybrid-ci/blob/main/docs/SELF_REVIEW.md) ---
+# off | required. required: `task ship`/`task autoship` need a verified PASS bound to the diff.
+REVIEW=required
+# Reviewer command: prompt on stdin, verdict JSON on stdout. Runs with a clean environment in an
+# empty directory. Default = OpenAI-compatible endpoint (LiteLLM etc.) via LLM_URL/LLM_API_KEY.
+# Pinned to the merge-base-committed value (worktree/branch overrides ignored); merge to the
+# base for reviewer changes to take effect.
+REVIEW_CMD=bash "$CI_ROOT/.ci/bin/review-llm"
+# Reviewer model — prefer a different model family from the authoring agent.
+REVIEW_MODEL=tier-frontier
+REVIEW_RUBRIC=.ci-review/rubric.md
+REVIEW_MAX_ROUNDS=3
+REVIEW_MAX_DIFF_BYTES=150000
+REVIEW_TIMEOUT=900
+# Environment variables passed to the reviewer (everything else is dropped).
+REVIEW_ENV=LLM_URL LLM_API_KEY ANTHROPIC_API_KEY OPENAI_API_KEY
+# isolated (empty temp dir, diff-only review) | repo (reviewer CLI may read the repository)
+REVIEW_CWD=isolated
+# Inbox `stale-review` threshold: hours a REVISE/BLOCK verdict may sit before flagging.
+REVIEW_STALE_H=24
+
+# Base branches `task autoship` may merge into without a human (e.g. "dev"). Empty = never.
+SHIP_AUTONOMOUS_BRANCHES=
+AUTO_MERGE_METHOD=squash
+
+# --- Merge-conflict resolution (canon: https://github.com/vladm3105/aidoc-hybrid-ci/blob/main/docs/CONFLICT_RESOLUTION.md) ---
+# Class C (semantic) files per `task sync` an agent may resolve; more escalates to a human.
+CONFLICT_MAX_FILES=10
+# Syncs needing agent resolution per branch before a successful ship; then escalate.
+CONFLICT_MAX_ATTEMPTS=2
+# Globs whose conflicts always need a human (class D), besides CI/governance config.
+CONFLICT_HUMAN_PATHS=*/migrations/* migrations/*
+# Append-only files resolved by line-union of both sides (class B).
+CONFLICT_UNION_FILES=CHANGELOG.md
+
+# --- Supervisor (task inbox) ---
+# Changelog scanned for Unreleased bullets by the inbox `release-due` check.
+CHANGELOG_PATH=CHANGELOG.md
+# Inbox `stuck-pending` threshold: hours the oldest pending Actions run may sit
+# before flagging (hung runners never fail, so nothing else escalates).
+CHECK_STALE_H=2
+
+# --- Environment-only knobs (NOT read from this file — export them; setting them here ----
+# --- has no effect because the runners never read them from ci_config) -------------------
+# CI_CHECK_TIMEOUT (default 1800): per-check timeout in seconds.
+# CI_TAIL (default 40): failing-log tail lines shown on the console.
+# CI_JOBS (default unlimited): max parallel checks.
+# GITEA_TOKEN (no default): API token for the Gitea forge backend (ambient auth
+#   for ship/sync/inbox/rulesets/promote on gitea remotes). Never commit it.
+# GITEA_URL (default: derived from the push remote): Gitea API base override
+#   (scheme://host[:port]) for ssh remotes, non-https schemes, custom ports.
+# LINKS_MODE (default internal/offline; `task audit` uses external): lychee mode for `links`.
+# GITLEAKS_LOG_OPTS (default: commits ahead of base): git log range for `secrets`;
+#   servers set --all for a full-history scan. A single value (passed as one
+#   --log-opts argument), not a flag list.
+# REVIEW_HTTP_TIMEOUT (default 300): HTTP timeout in seconds for the default reviewer
+#   (.ci/bin/review-llm); the framework forwards it into the reviewer environment
+#   explicitly, so no REVIEW_ENV entry is needed even when REVIEW_ENV is customised.
+# REVIEW_ALLOW_UNREDACTED (default 0): 1 = `task review` may prompt the reviewer
+#   with the raw diff when secret redaction is unavailable; the bypass is recorded
+#   in review state (`unredacted: true`) and surfaced by `review --verify`.

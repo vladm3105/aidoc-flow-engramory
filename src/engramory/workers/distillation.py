@@ -7,6 +7,7 @@ MemoryPort engine (SPEC-04) lands. That engine replaces this body — the
 signature and the CLI command that invokes it survive. Worker-plane code:
 uses Repository directly by design; it is NOT a SPEC-01 agent tool.
 """
+
 from __future__ import annotations
 
 from engramory.core.models import Memory

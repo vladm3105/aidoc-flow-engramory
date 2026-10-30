@@ -2,6 +2,7 @@
 
 Dev: Redis Streams / NATS. Cloud: Pub/Sub / Azure Service Bus.
 """
+
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping

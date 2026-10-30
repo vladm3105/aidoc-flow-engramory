@@ -1,0 +1,166 @@
+# ADR-00_index.template.yaml — Architecture Decision Records & Technology Stack Registry
+# SDD Layer 5 — Architectural decision catalog and active project technology registry
+#
+# Index template for new projects. Copy to docs/sdd/05_ADR/ADR-00_index.yaml.
+# Updated every time an ADR is created, approved, deprecated, or superseded.
+
+metadata:
+  schema_version: "1.0"
+  framework_version: "0.96.4"
+  document_type: "adr-registry"
+  artifact_type: "ADR-INDEX"
+  layer: 5
+  total_adrs: 1
+  total_technologies: 8
+  last_updated: "2026-10-18"
+
+# =============================================================================
+# Architecture Decision Records Registry
+# =============================================================================
+adrs:
+  - id: "ADR-01"
+    title: "Foundational Architecture and Ecosystem Canon Alignment"
+    status: "Accepted"
+    status_date: "2026-10-18"
+    category: "Technology Selection"
+    upstream_bdd: []
+    downstream_specs: ["SPEC-01"]
+    impact: "High"
+    file_path: "ADR-01_foundation.yaml"
+    supersedes: null
+    superseded_by: null
+
+# =============================================================================
+# Planned Decisions Backlog
+# =============================================================================
+backlog: []
+
+# =============================================================================
+# Project Technology Stack & Security Monitoring Registry
+# =============================================================================
+technologies:
+  - id: "aidoc-hybrid-ci"
+    technology: "aidoc-hybrid-ci"
+    category: "CI/CD"
+    stack_tier: "Tier-0-Core"
+    version_constraint: ">=1.1.0-rc.2"
+    authorizing_decision: "ADR-01"
+    security_monitoring:
+      enabled: false
+      ecosystem: "repo"
+    update_policy:
+      tool: "manual"
+      cadence: "monthly"
+      auto_merge_patches: false
+    lifecycle_status: "Active"
+
+  - id: "aidoc-flow-agents-config"
+    technology: "aidoc-flow-agents-config"
+    category: "AI/Agent"
+    stack_tier: "Tier-0-Core"
+    version_constraint: ">=1.0.0"
+    authorizing_decision: "ADR-01"
+    security_monitoring:
+      enabled: false
+      ecosystem: "repo"
+    update_policy:
+      tool: "manual"
+      cadence: "monthly"
+      auto_merge_patches: false
+    lifecycle_status: "Active"
+
+  - id: "aidoc-flow-framework"
+    technology: "aidoc-flow-framework"
+    category: "Architecture/SDD"
+    stack_tier: "Tier-0-Core"
+    version_constraint: ">=0.96.4"
+    authorizing_decision: "ADR-01"
+    security_monitoring:
+      enabled: false
+      ecosystem: "repo"
+    update_policy:
+      tool: "manual"
+      cadence: "monthly"
+      auto_merge_patches: false
+    lifecycle_status: "Active"
+
+  - id: "aidoc-testing-framework"
+    technology: "aidoc-testing-framework"
+    category: "Testing"
+    stack_tier: "Tier-0-Core"
+    version_constraint: ">=1.0.2"
+    authorizing_decision: "ADR-01"
+    security_monitoring:
+      enabled: false
+      ecosystem: "repo"
+    update_policy:
+      tool: "manual"
+      cadence: "monthly"
+      auto_merge_patches: false
+    lifecycle_status: "Active"
+
+  - id: "technology-stack"
+    technology: "technology-stack"
+    category: "Platform/Standards"
+    stack_tier: "Tier-0-Core"
+    version_constraint: ">=1.0.0"
+    authorizing_decision: "ADR-01"
+    security_monitoring:
+      enabled: false
+      ecosystem: "repo"
+    update_policy:
+      tool: "manual"
+      cadence: "monthly"
+      auto_merge_patches: false
+    lifecycle_status: "Active"
+
+  - id: "aidoc-data-contracts"
+    technology: "aidoc-data-contracts"
+    category: "DataContracts/Proto"
+    stack_tier: "Tier-0-Core"
+    version_constraint: ">=1.0.0"
+    authorizing_decision: "ADR-01"
+    security_monitoring:
+      enabled: false
+      ecosystem: "repo"
+    update_policy:
+      tool: "manual"
+      cadence: "monthly"
+      auto_merge_patches: false
+    lifecycle_status: "Active"
+
+  - id: "aidoc-context-tools"
+    technology: "aidoc-context-tools"
+    category: "Context/FastMCP"
+    stack_tier: "Tier-0-Core"
+    version_constraint: ">=1.0.0"
+    authorizing_decision: "ADR-01"
+    security_monitoring:
+      enabled: false
+      ecosystem: "repo"
+    update_policy:
+      tool: "manual"
+      cadence: "monthly"
+      auto_merge_patches: false
+    lifecycle_status: "Active"
+
+# =============================================================================
+# Registry Update Triggers
+# =============================================================================
+update_triggers:
+  _guidance: "When to update this registry. Enforced at GATE-03 and GATE-SPEC."
+  on_adr_created:
+    - "Add entry to adrs with status: Proposed"
+    - "Increment metadata.total_adrs"
+  on_adr_accepted:
+    - "Update status to Accepted with status_date"
+    - "If ADR involves technology selection, add/update entry in technologies"
+    - "Increment metadata.total_technologies"
+  on_adr_superseded:
+    - "Update status to Superseded, record superseded_by"
+    - "Update affected technologies lifecycle_status to Deprecated or Sunset"
+  on_technology_added:
+    - "Add entry to technologies with authorizing_decision, PURL/CPE, and update_policy"
+    - "Verify technology complies with Tier-0 Enterprise Baseline or has approved ADR exception"
+  on_technology_updated:
+    - "Update version_constraint, purl, and audit date"

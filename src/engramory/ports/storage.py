@@ -2,6 +2,7 @@
 
 Vendor-neutral: MinIO (dev) / GCS (gcp) / Azure Blob (azure) all satisfy this.
 """
+
 from __future__ import annotations
 
 from typing import Protocol

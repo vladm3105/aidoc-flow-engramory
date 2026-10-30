@@ -1,4 +1,5 @@
 """Unit tests for authorize() — default deny (SPEC-01; TDD-01.04.a100)."""
+
 from __future__ import annotations
 
 from engramory.access.authz import ActorContext, TargetScope, authorize

@@ -1,0 +1,78 @@
+# aidoc-local-flow-ci language module: JavaScript / TypeScript (Biome · tsc · Vitest · pnpm audit)
+# Include per service:  web: { taskfile: .ci/taskfiles/js.yml, dir: apps/web, vars: {...} }
+#
+# Vars (all optional):
+#   SRC=src  COV_MIN=80  COVERAGE=true  TYPECHECK=true (false for plain JS)
+#   PMX="pnpm exec"                               tool runner ("npx", "bunx", "yarn")
+#   INSTALL="pnpm install --frozen-lockfile"      ("npm ci", "bun install --frozen-lockfile")
+#   AUDIT="pnpm audit --prod --audit-level=high"  ("npm audit --omit=dev --audit-level=high")
+# Coverage needs @vitest/coverage-v8 in devDependencies.
+# NOTE: bun.lockb is binary → sync class D, never auto-resolved (unlike the class-B text lockfiles).
+version: '3'
+
+# Module vars are task-scoped (anchor &v) on purpose: Task merges *global* vars of all
+# included Taskfiles into one namespace, which would leak settings between services.
+
+tasks:
+  deps:
+    vars: &v
+      SRC: '{{.SRC | default "src"}}'
+      COV_MIN: '{{.COV_MIN | default "80"}}'
+      COVERAGE: '{{.COVERAGE | default "true"}}'
+      TYPECHECK: '{{.TYPECHECK | default "true"}}'
+      PMX: '{{.PMX | default "pnpm exec"}}'
+      INSTALL: '{{.INSTALL | default "pnpm install --frozen-lockfile"}}'
+      AUDIT: '{{.AUDIT | default "pnpm audit --prod --audit-level=high"}}'
+    desc: Install locked dependencies
+    cmds: ['{{.INSTALL}}']
+
+  fmt:
+    vars: *v
+    desc: Auto-format and apply safe fixes
+    cmds: ['{{.PMX}} biome check --write .']
+
+  fmt-check:
+    vars: *v
+    desc: Verify formatting (read-only)
+    sources: &js ['{{.SRC}}/**/*', 'test/**/*', 'tests/**/*', '*.json', '*.jsonc', '*.config.*']
+    cmds: ['{{.PMX}} biome format .']
+
+  lint:
+    vars: *v
+    desc: Biome lint
+    sources: *js
+    cmds: ['{{.PMX}} biome lint .']
+
+  typecheck:
+    vars: *v
+    desc: tsc --noEmit
+    sources: *js
+    cmds:
+      - '{{if eq .TYPECHECK "true"}}{{.PMX}} tsc --noEmit{{else}}echo "n/a — TYPECHECK=false"{{end}}'
+
+  test:
+    vars: *v
+    desc: "Vitest (+ coverage threshold). Filter: -- <file or -t name> (threshold skipped when filtered)"
+    sources: ['{{.SRC}}/**/*', 'test/**/*', 'tests/**/*', '*.json', '*.config.*', 'pnpm-lock.yaml', 'package-lock.json']
+    status: ['test -z "{{.CLI_ARGS}}"'] # a filtered run must never report cached
+    cmds:
+      - >-
+        {{.PMX}} vitest run
+        {{if and (eq .COVERAGE "true") (not .CLI_ARGS)}}--coverage.enabled --coverage.thresholds.lines={{.COV_MIN}}{{end}}
+        {{.CLI_ARGS}}
+
+  security:
+    vars: *v
+    desc: "n/a for JS/TS — covered by universal Semgrep (sast)"
+    cmds: ['echo "n/a — covered by sast (Semgrep)"']
+
+  deps-audit:
+    vars: *v
+    desc: Known-vulnerability scan of production dependencies
+    sources: ['pnpm-lock.yaml', 'package-lock.json', 'package.json']
+    cmds: ['{{.AUDIT}}']
+
+  where:
+    desc: "(framework) print this service's directory — used by change-impact routing"
+    silent: true
+    cmds: [pwd]

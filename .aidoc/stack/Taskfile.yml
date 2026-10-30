@@ -1,0 +1,39 @@
+# =============================================================================
+#  Stack conformance tasks template (.aidoc/stack/Taskfile.yml)
+# =============================================================================
+#  Authority: technology-stack
+#  17-technology-stack-surveillance-and-update-governance.md §7
+#  (Project Conformance Gate: every ecosystem project implements it).
+#
+#  Wired by the onboarding installer as the `stack:` include, so this
+#  file's `audit` task is invoked as `task stack:audit`.
+#
+#  Graceful-degradation variant: skips with an operator notice when Docker
+#  or the technology_stack checkout is unavailable, so the gate battery
+#  stays green on machines without the full platform. Point
+#  TECHNOLOGY_STACK_ROOT at the local technology_stack checkout to enable
+#  the real scan. The checkout path is never hardcoded: workstation paths
+#  are forbidden in tracked files.
+#
+#  NOTE: the scan command below tracks doc 17 §7 verbatim. Its compose
+#  mount resolves to the stack checkout (not the project) and it lacks a
+#  failing exit code — both tracked upstream; this template follows the
+#  corrected command once the stack doc is fixed.
+# =============================================================================
+version: '3'
+
+tasks:
+  audit:
+    desc: "Verify dependencies/containers via Syft SBOM + Trivy scan (stack 17 §7)"
+    cmds:
+      - >-
+        if ! command -v docker >/dev/null 2>&1; then
+          echo "stack:audit: docker not available; skipping (install Docker CE per stack 09 §3.2 to enable).";
+        elif [ -z "${TECHNOLOGY_STACK_ROOT:-}" ]; then
+          echo "stack:audit: TECHNOLOGY_STACK_ROOT is not set; skipping. Set it to your technology_stack checkout to enable.";
+        elif [ ! -f "${TECHNOLOGY_STACK_ROOT}/compose.dev-tooling.yaml" ]; then
+          echo "stack:audit: compose.dev-tooling.yaml not found under TECHNOLOGY_STACK_ROOT; skipping.";
+        else
+          mkdir -p security;
+          docker compose --project-directory "$PWD" -f "${TECHNOLOGY_STACK_ROOT}/compose.dev-tooling.yaml" run --rm -T dev-cli "syft dir:. -o cyclonedx-json=security/sbom.cyclonedx.json && trivy fs --scanners vuln,misconfig,secret .";
+        fi

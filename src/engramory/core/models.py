@@ -14,6 +14,7 @@ Notes for consumers:
   construction, so post-construction mutation of the caller's dict cannot
   revoke a validated invariant.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -168,6 +169,4 @@ class AgentProfile:
 
     def __post_init__(self) -> None:
         _require(bool(self.agent_id), "AgentProfile.agent_id is required")
-        object.__setattr__(
-            self, "standing_preferences", _frozen_mapping(self.standing_preferences)
-        )
+        object.__setattr__(self, "standing_preferences", _frozen_mapping(self.standing_preferences))

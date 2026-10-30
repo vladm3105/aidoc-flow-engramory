@@ -3,6 +3,7 @@
 Pure and deterministic: no I/O, no clock. The surface layer writes the
 AuditRecord for every decision (allow AND deny, EARS.01.03.b050).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass

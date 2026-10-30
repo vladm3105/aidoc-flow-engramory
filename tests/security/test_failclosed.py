@@ -2,6 +2,7 @@
 
 Needs no container — the DSN points at a closed port.
 """
+
 from __future__ import annotations
 
 import pytest

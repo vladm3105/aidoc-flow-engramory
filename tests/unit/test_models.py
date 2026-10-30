@@ -3,6 +3,7 @@
 Model-level invariants only — no database. The repository integration tests
 (tests/integration/test_repository.py) arrive with IPLAN-02 file order 6.
 """
+
 from __future__ import annotations
 
 import dataclasses

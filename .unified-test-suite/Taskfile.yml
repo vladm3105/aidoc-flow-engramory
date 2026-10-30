@@ -1,0 +1,172 @@
+# .unified-test-suite/Taskfile.yml — canon orchestrator (vendored; do not edit — `task uts:check` verifies).
+# Consumers include it from their root Taskfile.yml:
+#
+#   includes:
+#     uts: { taskfile: .unified-test-suite/Taskfile.yml, flatten: true }
+#
+# Per-project tasks (test:<layer>, test:<group>, test:<gate>) are GENERATED from
+# unified-test-suite.config.json into ./generated/Taskfile.yml (`task uts:gen`).
+#
+# Execution model (CANON.md §2.3, each point verified against go-task 3.53.1):
+#  1. Layers are run by `uts layer` (lib/exec.mjs), which ALWAYS exits 0 and records the real exit code
+#     in <results>/meta/<layer>.json. Nothing can stop later layers or the report. Every run first marks
+#     summary.json "run incomplete", so an aborted run is never mistaken for the previous verdict.
+#  2. Stateless layers run concurrently (`deps` + `for`); stateful layers (shared DB/backend) run
+#     sequentially (`cmds` + `for`), in the order the gate lists them.
+#  3. The gate is the LAST cmd (`uts report`), never a `defer:` (Task ignores failing deferred tasks).
+#  4. Tasks run from the consumer repo root (Task's default for included Taskfiles).
+#  5. No dotenv. Exported env beats config defaults. Never enable TASK_X_ENV_PRECEDENCE.
+#  6. Task exits 201 when a task fails; `task -x <name>` passes through the gate's code (1).
+#  7. Every canon task lives under test:* or uts:* so project task names (default, setup, …) stay free.
+
+version: '3'
+
+set: [pipefail]
+
+includes:
+  generated:
+    taskfile: ./generated/Taskfile.yml
+    flatten: true
+    optional: true
+
+vars:
+  PINNED_TASK_VERSION: 3.53.1   # not TASK_VERSION (reserved builtin)
+  UTS: node .unified-test-suite/bin/uts.mjs
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'     # keeps the working-tree fingerprint stable during a run
+  TEST_RUN_ID:                     # namespaces test data on unmanaged (shared/staging) stacks
+    sh: echo "run-$(date -u +%Y%m%dT%H%M%S)-$$"
+
+tasks:
+  # ───────────────────────────── environment ─────────────────────────────
+  test:setup:
+    desc: Install toolchain deps derived from configured runners (npm ci, Playwright chromium, …) or config "setup"
+    cmds: ['{{.UTS}} setup']
+
+  test:doctor:
+    desc: Preflight — which layers can run HERE (tools, CGO for -race, browsers, docker, backend) → <results>/doctor.json
+    cmds: ['{{.UTS}} doctor']
+
+  test:stack:up:
+    desc: Ensure the stack is healthy; starts compose only when managed (loopback URL + compose configured) — staging is health-checked only
+    cmds: ['{{.UTS}} backend up']
+
+  test:stack:down:
+    desc: Stop the managed compose stack (no-op for unmanaged backends)
+    cmds: ['{{.UTS}} backend down']
+
+  test:db:reset:
+    desc: Run the project's DB reset hook (stack.dbReset) on a managed stack; refuses on unmanaged stacks
+    cmds: ['{{.UTS}} backend reset']
+
+  # ───────────────────────────── running ─────────────────────────────────
+  test:layers:
+    desc: List configured layers, groups and gates (what `task test:<name>` runs)
+    silent: true
+    cmds: ['{{.UTS}} layers']
+
+  test:layer:
+    desc: 'Run ONE layer by name → summary (task test:layer LAYER=<name>)'
+    requires: { vars: [LAYER] }
+    cmds:
+      - task: uts:single
+        vars: { LAYER: '{{.LAYER}}' }
+
+  test:changed:
+    desc: Smallest scope for the current diff (config "selection"; unmapped changes fall back) → summary
+    vars:
+      LAYERS: { sh: '{{.UTS}} select --explain' }
+    cmds:
+      - echo "test:changed → {{.LAYERS | default "(nothing)"}}"
+      - task: uts:set
+        vars: { LAYERS: '{{.LAYERS}}', TARGET: changed, ALLOW_EMPTY: '1' }
+
+  test:clean:
+    desc: Delete current results (keeps <results>/history/ and <results>/agent-evidence/)
+    cmds:
+      - node -e "const c=require('./unified-test-suite.config.json');const r=process.env.RESULTS_DIR||c.resultsDir||'test-results';for(const d of ['meta','logs','reports','summary.json','summary.md'])require('fs').rmSync(r+'/'+d,{recursive:true,force:true})"
+
+  test:report:
+    desc: 'THE gate — aggregate fresh results into summary.json/.md without re-running tests (vars: TARGET, REQUIRE, SINCE, STRICT=1)'
+    vars:
+      TARGET: '{{.TARGET | default "report"}}'
+    cmds:
+      - '{{.UTS}} report --target {{.TARGET}} {{if .REQUIRE}}--require "{{.REQUIRE}}"{{end}} {{if .SINCE}}--since {{.SINCE}}{{end}} {{if .STRICT}}--strict{{end}} {{if .ALLOW_EMPTY}}--allow-empty{{end}}'
+
+  # ───────────────────────────── canon maintenance ───────────────────────
+  uts:check:
+    desc: 'Verify vendored canon, config and wiring; list adoption TODOs (STRICT=1 fails on TODOs; UPSTREAM=<path|url> re-verifies the lock against upstream)'
+    cmds: ['{{.UTS}} check {{if .STRICT}}--strict{{end}} {{if .UPSTREAM}}--upstream "{{.UPSTREAM}}"{{end}}']
+
+  uts:gen:
+    desc: Regenerate test:<layer|group|gate> tasks from unified-test-suite.config.json
+    cmds: ['{{.UTS}} gen']
+
+  uts:sync:
+    desc: 'Update the vendored canon (FROM=<path|git-url> REF=<tag>) — refuses over local edits'
+    requires: { vars: [FROM] }
+    cmds: ['{{.UTS}} sync --from "{{.FROM}}" {{if .REF}}--ref "{{.REF}}"{{end}}']
+
+  uts:version:
+    desc: Print the vendored canon version
+    silent: true
+    cmds: ['{{.UTS}} version']
+
+  # ───────────────────────────── internals ───────────────────────────────
+  uts:invalidate:   # before any `sh:` plan vars are evaluated, so even a failing plan never leaves an old verdict
+    internal: true
+    cmds: ['{{.UTS}} invalidate --target {{.TARGET}}']
+
+  uts:run-layer:
+    internal: true
+    cmds: ['{{.UTS}} layer {{.LAYER}} --gate {{.GATE | default "local"}}']
+
+  uts:parallel:
+    internal: true
+    deps:
+      - for: { var: LAYERS }
+        task: uts:run-layer
+        vars: { LAYER: '{{.ITEM}}', GATE: '{{.GATE}}' }
+
+  uts:single:
+    internal: true
+    cmds:
+      - '{{.UTS}} invalidate --target {{.LAYER}}'
+      - task: uts:run-layer
+        vars: { LAYER: '{{.LAYER}}' }
+      - task: test:report
+        vars: { TARGET: '{{.LAYER}}', REQUIRE: '{{.LAYER}}' }
+
+  uts:set:   # a group or test:changed: no clean, parallel then serial, report on exactly these layers
+    internal: true
+    vars:
+      PAR: { sh: '{{.UTS}} plan --layers "{{.LAYERS}}" --parallel' }
+      SER: { sh: '{{.UTS}} plan --layers "{{.LAYERS}}" --serial' }
+    cmds:
+      - '{{.UTS}} invalidate --target {{.TARGET}}'
+      - task: uts:parallel
+        vars: { LAYERS: '{{.PAR}}' }
+      - for: { var: SER }
+        task: uts:run-layer
+        vars: { LAYER: '{{.ITEM}}' }
+      - task: test:report
+        vars: { TARGET: '{{.TARGET}}', REQUIRE: '{{.LAYERS}}', ALLOW_EMPTY: '{{.ALLOW_EMPTY}}' }
+
+  uts:gate:
+    internal: true
+    vars:
+      PAR: { sh: '{{.UTS}} plan --gate {{.GATE}} --parallel' }
+      SER: { sh: '{{.UTS}} plan --gate {{.GATE}} --serial' }
+      ALL: { sh: '{{.UTS}} plan --gate {{.GATE}}' }
+      START: { sh: date +%s }
+    cmds:
+      - task: test:clean
+      - '{{.UTS}} invalidate --target {{.GATE}}'
+      - task: uts:parallel
+        vars: { LAYERS: '{{.PAR}}', GATE: '{{.GATE}}' }
+      - for: { var: SER }
+        task: uts:run-layer
+        vars: { LAYER: '{{.ITEM}}', GATE: '{{.GATE}}' }
+      - task: test:report
+        vars: { TARGET: '{{.GATE}}', REQUIRE: '{{.ALL}}', SINCE: '{{.START}}' }

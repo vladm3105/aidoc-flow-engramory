@@ -9,6 +9,7 @@ via the VectorPort dev adapter) and by recency otherwise.
 Failure mode: ``StoreUnavailable`` wraps driver connectivity errors so callers
 can fail closed with a retryable error (EARS.01.03.c900).
 """
+
 from __future__ import annotations
 
 import json
@@ -207,9 +208,7 @@ class Repository:
             if cur.rowcount != 1:
                 raise KeyError(memory_id)
 
-    async def record_feedback(
-        self, retrieval_id: str, outcome: str, *, tenant_id: str
-    ) -> None:
+    async def record_feedback(self, retrieval_id: str, outcome: str, *, tenant_id: str) -> None:
         """Stamp a retrieval outcome (SPEC-01 memory_feedback -> SPEC-04
         confidence rule). Tenant-guarded; KeyError when the retrieval is
         missing or foreign."""
@@ -229,9 +228,7 @@ class Repository:
             if cur.rowcount != 1:
                 raise KeyError(retrieval_id)
 
-    async def get_retrieval_feedback(
-        self, *, tenant_id: str, memory_id: str
-    ) -> list[str | None]:
+    async def get_retrieval_feedback(self, *, tenant_id: str, memory_id: str) -> list[str | None]:
         """Feedback values for a memory's retrievals, oldest first (tests/eval)."""
         async with self._conn() as conn:
             rows = await (
@@ -435,9 +432,7 @@ class Repository:
                 },
             )
 
-    async def get_audit_records(
-        self, *, tenant_id: str, limit: int = 20
-    ) -> list[dict[str, Any]]:
+    async def get_audit_records(self, *, tenant_id: str, limit: int = 20) -> list[dict[str, Any]]:
         """Most-recent-first audit rows for a tenant (tests/operators)."""
         async with self._conn() as conn:
             return await (

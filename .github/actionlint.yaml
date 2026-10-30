@@ -1,0 +1,5 @@
+# Custom self-hosted runner labels, so actionlint (task workflows) accepts runs-on.
+self-hosted-runner:
+  labels:
+    - ci
+    - ephemeral

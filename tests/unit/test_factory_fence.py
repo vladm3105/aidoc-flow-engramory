@@ -1,4 +1,5 @@
 """ADR-10 dev-tier fence at the factory layer (PLAN-002 Phase 2.4)."""
+
 from __future__ import annotations
 
 import pytest

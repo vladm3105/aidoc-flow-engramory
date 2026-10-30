@@ -1,0 +1,219 @@
+# =============================================================================
+# ADR-01_foundation.template.yaml — Architecture Decision Record (SDD Layer 05)
+# Foundational Architecture and Ecosystem Canon Alignment
+# =============================================================================
+
+id: ADR-01
+doc_id: ADR-01
+title: "Foundational Architecture and Ecosystem Canon Alignment"
+
+metadata:
+  schema_version: "1.0"
+  framework_version: "0.96.4"
+  document_type: "adr-document"
+  layer: 5
+  lifecycle: mvp-prod-newmvp
+  total_sections: 10
+  last_updated: "2026-10-18"
+  validation:
+    gate: "BTV PASS / FAIL"
+    note: "BTV PASS/FAIL is the deterministic gate; heuristic percentage scores are retired."
+  c4_level:
+    value: none
+  deliverable_type:
+    value: code
+
+# =============================================================================
+# Section 1: Document Control
+# =============================================================================
+document_control:
+  status: Accepted
+  date: "2026-10-18"
+  decision_makers:
+    - "System Architect"
+    - "Engineering Lead"
+  author: "Onboarding Automation"
+  version: "1.1"
+  revision_history:
+    - version: "1.1"
+      date: "2026-10-18T00:00:00"
+      author: "Onboarding Automation"
+      changes: "Align with framework 0.96.4: BTV gates, SDD-GRAPH v2.0 topology, expanded SDD battery"
+    - version: "1.0"
+      date: "2026-10-14T00:00:00"
+      author: "Onboarding Automation"
+      changes: "Establish baseline 8-canon Quad-Pillar integration, quality gates, and governance placement"
+
+# =============================================================================
+# Section 2: Context
+# =============================================================================
+context:
+  problem_statement: |
+    Every repository in the ecosystem requires standardized developer tooling, AI agent
+    governance, adaptation layers, test automation, and CI gating without fragmenting
+    workflows or committing hardcoded local environment state.
+  business_driver: |
+    Maintain consistency, velocity, security, and autonomous agent safety across all repositories
+    in the platform.
+  key_constraints:
+    - "Context budget: AGENTS.md must strictly remain <= 200 lines."
+    - "Zero workspace paths: No workstation-specific absolute paths in tracked files."
+    - "Unified Quality Gates: Must pass task doctor, task uts:check, task check, and task ci."
+    - "SDD Gates: Must pass task sdd:check and task sdd:graph-check with BTV PASS."
+  technical_context: |
+    The repository integrates the 8 canonical platform roles (Quad-Pillar architecture), supplied by
+    7 repositories (aidoc-hybrid-ci covers both the local-gate and the server-CI role):
+    aidoc-framework, technology-stack, aidoc-data-contracts, aidoc-context-tools,
+    aidoc-hybrid-ci (local gates and self-hosted server CI), aidoc-flow-agents-config,
+    and aidoc-testing-framework.
+
+# =============================================================================
+# Section 3: Decision
+# =============================================================================
+decision:
+  chosen_solution:
+    id: "ADR.01.03.a101"
+    title: "Standardized 8-Canon Quad-Pillar Integration with Layer 05 ADR Governance"
+    description: |
+      Adopt the canonical 8-framework model. Governance surfaces are formally tracked
+      in the AGENTS.md governance table. Architectural decisions are maintained in
+      docs/sdd/05_ADR/. Deprecated single-file governance logs (DECISIONS.md, ROADMAP.md,
+      HANDOFF.md) are strictly retired.
+  key_components:
+    - name: "Local CI Engine"
+      role: "Provides Taskfile.yml, mise.toml, and .ci quality battery"
+    - name: "AI Agent Canon"
+      role: "Standard rules, skills, agents in .agents/ and root AGENTS.md"
+    - name: "Framework Adaptation"
+      role: ".aidoc/ profile, stack-policy, and SDD layers in docs/sdd/"
+    - name: "Unified Test Suite"
+      role: "Single interface for fast unit tests, reports, and coverage"
+    - name: "Data Contracts"
+      role: "Canonical Proto3 schemas and wire-format data contracts"
+    - name: "Context & Policy Tools"
+      role: "Semantic AST slicing, DAG validation, and stack policy linting"
+  implementation_approach:
+    mvp_scope: |
+      Install all 8 canons, configure .aidoc/profile.yaml and .aidoc/stack-policy.yaml, pass all local CI gates.
+    next_cycle_scope: |
+      Author domain-specific specifications and components in subsequent ADRs.
+
+# =============================================================================
+# Section 4: Alternatives Considered
+# =============================================================================
+alternatives:
+  considered:
+    - id: "ADR.01.04.b201"
+      name: "Ad-hoc Per-Repo Tooling and Scripts"
+      selected: false
+      source: "Legacy Pattern"
+      decision: "Rejected — causes drift, broken CI, and unmaintainable agent instructions."
+    - id: "ADR.01.04.b202"
+      name: "Monolithic Monorepo Structure"
+      selected: false
+      source: "Alternative Architecture"
+      decision: "Rejected — ecosystem employs federated, polyrepo architecture with shared canons."
+    - id: "ADR.01.04.b203"
+      name: "Standardized 8-Canon Modular Spoke"
+      selected: true
+      source: "Enterprise Baseline"
+      decision: "Selected — enforces uniform quality gates while preserving repository autonomy."
+
+# =============================================================================
+# Section 5: Consequences
+# =============================================================================
+consequences:
+  positive_outcomes:
+    - id: "ADR.01.05.c301"
+      outcome: "Deterministic quality gates passing identically locally and in remote CI."
+    - id: "ADR.01.05.c302"
+      outcome: "Autonomous AI agents operate with verified rules and scoped context budgets."
+  tradeoffs_and_risks:
+    - id: "ADR.01.05.c303"
+      tradeoff: "Initial onboarding overhead requires running multi-canon installation scripts."
+      impact: Low
+      mitigation: "Automated via bin/onboard CLI and CNCF Serverless Workflows."
+  cost_estimate:
+    mvp_cost: "0 additional infrastructure cost"
+    ongoing_monthly: "$0/month"
+    notes: "Uses local developer tools and standard GitHub Actions compute."
+
+# =============================================================================
+# Section 6: Architecture Flow
+# =============================================================================
+architecture_flow:
+  decision_sequence:
+    intent:
+      diagram_type: sequence
+      scope_boundary: "Repository Quality Gate Execution"
+      upstream_refs: "Enterprise Baseline Standard"
+      downstream_refs: "SPEC-01 Toolchain Specification"
+    tag: "@diagram: sequence-sync"
+    diagram:
+      type: sequenceDiagram
+      content: |
+        sequenceDiagram
+            participant Dev as Developer / AI Agent
+            participant Task as Task Runner (Taskfile.yml)
+            participant CI as Local CI Scripts (.ci/)
+            participant UTS as Unified Test Suite
+            participant Gate as Quality Gate Result
+            Dev->>Task: task check
+            Task->>CI: execute lint, format, secrets, hygiene
+            CI-->>Task: pass / fail
+            Dev->>Task: task test:fast
+            Task->>UTS: run test harness
+            UTS-->>Task: JUnit XML + Coverage reports
+            Task-->>Gate: Status 0 (All Gates Green)
+
+# =============================================================================
+# Section 7: Implementation Assessment
+# =============================================================================
+implementation_assessment:
+  mvp_phases:
+    - phase: "Phase 1: Inception"
+      scope: "Deploy canons, install CI, verify doctor"
+      risk: "Missing host binaries (managed by mise)"
+    - phase: "Phase 2: Gate Hardening"
+      scope: "Pass check, uts:check, ci, and sdd gate tasks"
+      risk: "Lint or formatting drift"
+  rollback_plan:
+    strategy: "SAGA reverse LIFO compensation via pre-onboarding git state reset"
+    trigger: "Quality battery failure during onboarding"
+    estimated_effort: "Instantaneous (< 1 minute)"
+  monitoring_baseline:
+    - metric: "CI Gate Pass Rate"
+      target: "100%"
+      alert_threshold: "< 100%"
+
+# =============================================================================
+# Section 8: Verification
+# =============================================================================
+verification:
+  acceptance_criteria:
+    - "task doctor passes with code 0"
+    - "task uts:check passes with code 0"
+    - "task check passes with code 0"
+    - "task ci passes with code 0"
+    - "task sdd:check passes with code 0 (BTV PASS, zero blocking findings)"
+    - "task sdd:graph-check passes with code 0"
+    - "task stack:audit passes with code 0 (Syft SBOM + Trivy scan per stack 17 §7)"
+
+# =============================================================================
+# Section 9: Downstream Impact
+# =============================================================================
+downstream_impact:
+  affected_layers:
+    - "06_SPEC"
+    - "07_TDD"
+    - "08_IPLAN"
+
+# =============================================================================
+# Section 10: Security and Compliance
+# =============================================================================
+security_and_compliance:
+  scans_required:
+    - "gitleaks secret detection"
+    - "semgrep static analysis"
+  compliance_frameworks:
+    - "Ecosystem Governance Standard"

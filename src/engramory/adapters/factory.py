@@ -4,6 +4,7 @@ Only the ports with a consumer have adapters so far; the AdapterSet grows a
 field per port as dev adapters land (cache, events, llm, ...). gcp/azure sets
 arrive with BRD-02 (cloud migration) and raise until then.
 """
+
 from __future__ import annotations
 
 import os

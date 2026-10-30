@@ -1,0 +1,423 @@
+#!/usr/bin/env bash
+# aidoc-local-flow-ci self-review — Pass 1 (deterministic gate) + Pass 2 (independent reviewer).
+#
+#   review --issue N | --requirements FILE | --requirements none    run a review round
+#   review --status                                                 show the current verdict (JSON)
+#   review --verify [--quiet]                                       exit 0 iff a valid PASS exists
+#                                                                   for exactly the current change
+#   review --reset                                                  HUMAN ONLY: clear the round
+#                                                                   counter after a BLOCK decision
+#   review --check                                                  ping REVIEW_CMD (needs REVIEW_CMD
+#                                                                   and REVIEW_MODEL only)
+# Exit codes (run): 0 PASS · 1 REVISE · 2 BLOCK · 3 error (no verdict recorded)
+#
+# Guarantees (canon: https://github.com/vladm3105/aidoc-hybrid-ci/blob/main/docs/SELF_REVIEW.md):
+#   - Pass 1 = `task ci` green on the committed HEAD before any reviewer is called.
+#   - The reviewer is a separate process (REVIEW_CMD) started with a clean environment in an
+#     empty directory; it receives ONLY requirements + rubric + diff + conflict context +
+#     repo-root inventory — never commit messages, chat history or author notes.
+#     Diffs are redacted for secret-shaped content before prompting (presentation only;
+#     the verdict still binds to the raw diff). When redaction is unavailable the review
+#     refuses to prompt unless REVIEW_ALLOW_UNREDACTED=1 (recorded in review state).
+#   - The verdict is bound to sha256(diff base..HEAD) and sha256(rubric at HEAD); any new commit
+#     or rubric edit invalidates it. Raw reviewer responses are kept and re-parsed by --verify,
+#     so an edited verdict is rejected.
+#   - REVISE loop is capped at REVIEW_MAX_ROUNDS; the cap turns into BLOCK (human escalation).
+#   - Diffs larger than REVIEW_MAX_DIFF_BYTES are reviewed in file-group chunks; a single file
+#     over the limit is a BLOCK ("split the change").
+set -uo pipefail
+# shellcheck source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+root=$(ci_root) || { echo "review: not in a git repo" >&2; exit 3; }
+cd "$root" || exit 3
+
+die() { echo "review: $*" >&2; exit 3; }
+
+mode=$(ci_config REVIEW off)
+# REVIEW_CMD/REVIEW_MODEL pin to the merge-base commit: the reviewer must not be
+# author-controlled per review. Change reviewers by merging .ci-config to the base first.
+cmd_cfg=$(ci_config_committed REVIEW_CMD 'bash "$CI_ROOT/.ci/bin/review-llm"')
+model=$(ci_config_committed REVIEW_MODEL "")
+rubric=$(ci_config REVIEW_RUBRIC ".ci-review/rubric.md")
+max_rounds=$(ci_config REVIEW_MAX_ROUNDS 3)
+max_bytes=$(ci_config REVIEW_MAX_DIFF_BYTES 150000)
+env_pass=$(ci_list REVIEW_ENV "LLM_URL LLM_API_KEY ANTHROPIC_API_KEY OPENAI_API_KEY")
+cwd_mode=$(ci_config REVIEW_CWD isolated)
+timeout_s=$(ci_config REVIEW_TIMEOUT 900)
+version=$(cat "$root/.ci/VERSION" 2>/dev/null || echo unknown)
+
+branch=$(git branch --show-current)
+remote=$(ci_push_remote)
+state_dir="$(git rev-parse --absolute-git-dir)/aidoc-ci/review"
+key=${branch//\//__}
+state="$state_dir/$key.json"
+history="$state_dir/$key.history.jsonl"
+raw_dir="$state_dir/$key.raw"
+lockfiles=(':(exclude).ci/**' ':(exclude)**/uv.lock' ':(exclude)uv.lock' ':(exclude)**/Cargo.lock' ':(exclude)Cargo.lock'
+           ':(exclude)**/go.sum' ':(exclude)go.sum' ':(exclude)**/pnpm-lock.yaml' ':(exclude)pnpm-lock.yaml'
+           ':(exclude)**/package-lock.json' ':(exclude)package-lock.json' ':(exclude)**/yarn.lock' ':(exclude)yarn.lock'
+           ':(exclude)**/poetry.lock' ':(exclude)poetry.lock' ':(exclude)**/bun.lockb' ':(exclude)bun.lockb')
+
+# --- fingerprint of "the change": diff base..HEAD + committed rubric -----------------------
+fingerprint() {
+  base=$(ci_merge_base) || true
+  [[ -n $base ]] || die "no merge-base with $(ci_base_branch) — fetch $remote or check BASE_BRANCH"
+  diff_sha=$(git diff --binary --full-index "$base" HEAD | ci_sha256)
+  if git cat-file -e "HEAD:$rubric" 2>/dev/null; then rubric_sha=$(git show "HEAD:$rubric" | ci_sha256)
+  else rubric_sha=""; fi
+}
+
+# --- parse + validate one raw reviewer response -> normalized JSON on stdout -----------------
+parse_response() {
+  local raw=$1 content json
+  content=$(cat "$raw")
+  [[ $content == *"{"* && $content == *"}"* ]] || return 1
+  json="{${content#*\{}"          # from the first "{"
+  json="${json%\}*}}"              # to the last "}"
+  jq -ce '
+    select(type == "object"
+      and (keys == ["findings","summary","verdict"])
+      and (.verdict | IN("PASS","REVISE","BLOCK"))
+      and (.summary | type == "string" and length > 0)
+      and (.findings | type == "array")
+      and all(.findings[]; (keys == ["body","fix","lens","line","path","severity"])
+              and (.lens|type=="string") and (.severity|IN("critical","medium","low","acknowledged"))
+              and (.path|type=="string") and (.line | type=="number" and . >= 0 and floor == .)
+              and (.body|type=="string") and (.fix|type=="string")))
+    | ([.findings[] | select(.severity == "critical" or .severity == "medium")] | length) as $blocking
+    | if .verdict == "PASS" and $blocking > 0 then .coerced_from = "PASS" | .verdict = "REVISE"
+      elif .verdict == "REVISE" and $blocking == 0 then error("REVISE without a critical/medium finding")
+      else . end' <<<"$json" 2>/dev/null
+}
+
+# merge chunk verdicts: BLOCK > REVISE > PASS
+merge_verdicts() { jq -sc '
+  { verdict: (if any(.[]; .verdict=="BLOCK") then "BLOCK" elif any(.[]; .verdict=="REVISE") then "REVISE" else "PASS" end),
+    summary: ([.[] | .summary] | join(" | ")),
+    findings: [ to_entries[] | .key as $c | .value.findings[] | . + {chunk: ($c + 1)} ],
+    coerced: any(.[]; has("coerced_from")) }'; }
+
+# --- verify: valid PASS for exactly the current change --------------------------------------
+verify() {
+  local quiet=${1:-0} why=""
+  if [[ ! -f $state ]]; then why="no review recorded for branch '$branch'"
+  else
+    fingerprint
+    local v; v=$(jq -r .verdict "$state")
+    if   [[ $v != PASS ]]; then why="latest verdict is $v (round $(jq -r .round "$state")/$(jq -r .max_rounds "$state"))"
+    elif [[ $(jq -r .diff_sha256 "$state") != "$diff_sha" ]]; then why="the change differs from the reviewed diff (new commits or rebase with changes) — re-run task review"
+    elif [[ $(jq -r .rubric_sha256 "$state") != "$rubric_sha" ]]; then why="the rubric changed since the review — re-run task review"
+    else
+      local derived="" f n=0 parsed=0 d
+      while IFS=$'\t' read -r f h; do
+        n=$((n + 1))
+        [[ -f $raw_dir/$f ]] || { why="raw reviewer response $f missing"; break; }
+        [[ $(ci_sha256 <"$raw_dir/$f") == "$h" ]] || { why="raw reviewer response $f was modified"; break; }
+        # A pinned response that no longer parses must fail verify, never
+        # vanish into an empty merge (which defaults to PASS).
+        if d=$(parse_response "$raw_dir/$f" 2>/dev/null); then derived+=$d$'\n'; parsed=$((parsed + 1));
+        else why="raw reviewer response $f does not parse as a valid verdict"; break; fi
+      done < <(jq -r '.responses[] | [.file, .sha256] | @tsv' "$state")
+      if [[ -z $why ]]; then
+        local want_chunks; want_chunks=$(jq -r '.chunks // 0' "$state")
+        [[ $n -gt 0 ]] || why="verdict has no reviewer responses"
+        [[ -z $why && $want_chunks -gt 0 && $parsed -ne $want_chunks ]] && why="verdict covers $want_chunks chunks but only $parsed reviewer responses verify"
+        [[ -z $why && $(printf '%s' "$derived" | merge_verdicts | jq -r .verdict) != PASS ]] && why="recorded verdict does not match the reviewer responses (edited state)"
+      fi
+    fi
+  fi
+  if [[ -n $why ]]; then [[ $quiet == 1 ]] || echo "review: NOT VERIFIED — $why" >&2; return 1; fi
+  local unred_note=""; [[ $(jq -r '.unredacted // false' "$state") == true ]] && unred_note=" (redaction bypassed)"
+  [[ $quiet == 1 ]] || echo "review: VERIFIED — PASS for diff ${diff_sha:0:12} (round $(jq -r .round "$state"), reviewer $(jq -r .reviewer.model "$state"))$unred_note"
+  return 0
+}
+
+# --- argument handling ----------------------------------------------------------------------
+req_kind="" req_ref=""
+case ${1:-} in
+  --status) [[ -f $state ]] && jq . "$state" || echo '{"verdict":null}'; exit 0 ;;
+  --verify) [[ ${2:-} == --quiet ]] && { verify 1; exit $?; }; verify 0; exit $? ;;
+  --reset)
+    [[ ${HUMAN_CONFIRM:-0} == 1 ]] || { echo "review: --reset is human-only (STANDARD §10): re-run with HUMAN_CONFIRM=1 to confirm you are the human" >&2; exit 3; }
+    ts=$(date +%s); [[ -f $history ]] && mv "$history" "$history.$ts.reset"
+    [[ -d $raw_dir ]] && mv "$raw_dir" "$raw_dir.$ts.reset"
+    rm -f "$state"; echo "review: round counter reset for '$branch' (human-confirmed; prior rounds archived)"; exit 0 ;;
+  --check)
+    [[ -n $cmd_cfg && -n $model ]] || { echo "review: --check needs REVIEW_CMD and REVIEW_MODEL in .ci-config" >&2; exit 3; }
+    tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+    if out=$(printf 'Reply with exactly: OK\n' | CI_ROOT="$root" REVIEW_MODEL="$model" REVIEW_HTTP_TIMEOUT="${REVIEW_HTTP_TIMEOUT:-}" bash -c "exec $cmd_cfg" 2>"$tmp/err"); then
+      [[ -n $out ]] || { echo "review: endpoint answered empty (model $model)" >&2; exit 3; }
+      echo "review: endpoint OK (model $model, $(printf '%s' "$out" | wc -c) bytes)"; exit 0
+    fi
+    echo "review: endpoint check FAILED (model $model): $(head -c 300 "$tmp/err")" >&2; exit 3 ;;
+  --issue) req_kind=issue; req_ref=${2:-} ;;
+  --requirements) req_kind="file"; req_ref=${2:-} ;;
+  *) echo "usage: review --issue N | --requirements FILE|none | --status | --verify | --check" >&2; exit 3 ;;
+esac
+[[ $mode == off ]] && { echo "review: REVIEW=off in .ci-config — nothing to do"; exit 0; }
+[[ -n $req_ref ]] || die "missing value for --$req_kind"
+
+# --- preconditions --------------------------------------------------------------------------
+case $cwd_mode in isolated|repo) ;; *) die "REVIEW_CWD must be isolated or repo (got: $cwd_mode)" ;; esac
+[[ -n $branch ]] || die "detached HEAD"
+[[ $branch != "$(ci_base_branch)" ]] || die "review runs on a feature branch, not $(ci_base_branch)"
+[[ -z $(git status --porcelain) ]] || die "commit your work first — the review is bound to committed HEAD"
+git fetch "$remote" "$(ci_base_branch)" --quiet 2>/dev/null || true
+fingerprint
+[[ -n $rubric_sha ]] || die "rubric $rubric is not committed (copy templates/review-rubric.md, adapt, commit)"
+
+# requirements (never author-written notes: an issue, a committed file, or explicitly none)
+case $req_kind in
+  issue)
+    [[ $req_ref =~ ^[0-9]+$ ]] || die "--issue expects a number"
+    if [[ $(ci_forge) == github ]]; then
+      command -v gh >/dev/null || die "gh CLI needed for --issue"
+    else
+      [[ -n ${GITEA_TOKEN:-} ]] || die "GITEA_TOKEN not set (gitea backend)"
+    fi
+    requirements=$(forge_issue_text "$req_ref" 2>/dev/null) \
+      || die "cannot read issue #$req_ref"
+    issue=$req_ref ;;
+  file)
+    issue=""
+    if [[ $req_ref == none ]]; then requirements="(No written requirements were provided. Review for correctness, safety and rubric compliance only.)"
+    else
+      git cat-file -e "HEAD:$req_ref" 2>/dev/null || die "--requirements file must be committed at HEAD (got: $req_ref)"
+      requirements=$(git show "HEAD:$req_ref")
+    fi ;;
+esac
+req_sha=$(printf '%s' "$requirements" | ci_sha256)
+
+# --- Pass 1: deterministic gate -------------------------------------------------------------
+echo "review: Pass 1 — task ci"
+p1_log=$(mktemp); trap 'rm -f "$p1_log"' EXIT
+task ci >"$p1_log" 2>&1; p1_rc=$?
+summary="$root/.ci-out/summary.json"
+[[ $p1_rc -eq 0 && -f $summary ]] || { echo "review: Pass 1 FAILED — fix task ci first (see .ci-out/summary.json)"; exit 3; }
+pass1=$(jq -c '{status, label, sha: .git.sha, checks: (.checks|length), cached: .counts.cached}' "$summary")
+
+# --- build review chunks ----------------------------------------------------------------------
+mapfile -t files < <(git diff --name-only "$base" HEAD -- . "${lockfiles[@]}")
+stat=$(git diff --stat=160 "$base" HEAD -- .)
+lock_only=0
+chunks=() cur="" cur_bytes=0 oversized=()
+if [[ ${#files[@]} -eq 0 ]]; then
+  # Lockfile contents never enter the prompt. A change touching ONLY lockfiles
+  # (e.g. `cargo update`) is still reviewer-judged — from the stat alone —
+  # instead of dying here and making the change unshippable under REVIEW=required.
+  mapfile -t all_changed < <(git diff --name-only "$base" HEAD -- .)
+  [[ ${#all_changed[@]} -gt 0 ]] || die "no reviewable changes between $(ci_base_branch) and HEAD"
+  lock_only=1
+  chunks=("@LOCKFILE_ONLY@")
+else
+  for f in "${files[@]}"; do
+    b=$(git diff "$base" HEAD -- "$f" | wc -c)
+    if (( b > max_bytes )); then oversized+=("$f ($b bytes)"); continue; fi
+    if (( cur_bytes + b > max_bytes )) && [[ -n $cur ]]; then chunks+=("$cur"); cur=""; cur_bytes=0; fi
+    cur+="$f"$'\n'; cur_bytes=$((cur_bytes + b))
+  done
+  [[ -n $cur ]] && chunks+=("$cur")
+fi
+
+# --- rounds -----------------------------------------------------------------------------------
+mkdir -p "$raw_dir"
+prev_nonpass=0
+if [[ -f $history ]]; then
+  prev_nonpass=$(jq -s 'map(.verdict) | reverse | (indices("PASS")[0] // length)' "$history")
+fi
+round=$((prev_nonpass + 1))
+seq=1; [[ -f $history ]] && seq=$(( $(wc -l <"$history") + 1 ))
+
+run_reviewer() {  # $1 prompt file, $2 output file
+  local wd="$root" envs=() v rc
+  [[ $cwd_mode == isolated ]] && wd=$(mktemp -d)
+  envs=(PATH="$PATH" HOME="$HOME" LANG="${LANG:-C.UTF-8}" TMPDIR="${TMPDIR:-/tmp}" CI_ROOT="$root" REVIEW_MODEL="$model")
+  # The default reviewer (review-llm) needs its HTTP timeout even when a project's
+  # REVIEW_ENV drifted; pass it explicitly rather than trusting the allow-list.
+  [[ " $env_pass " == *" REVIEW_HTTP_TIMEOUT "* ]] || env_pass+=" REVIEW_HTTP_TIMEOUT"
+  for v in $env_pass; do [[ -n ${!v:-} ]] && envs+=("$v=${!v}"); done
+  local to=(); command -v timeout >/dev/null && to=(timeout "$timeout_s")
+  (cd "$wd" && env -i "${envs[@]}" "${to[@]}" bash -c "$cmd_cfg" <"$1" >"$2" 2>"$2.stderr"); rc=$?
+  [[ $cwd_mode == isolated ]] && rm -rf "$wd"
+  return $rc
+}
+
+# --- secret redaction (presentation only; the verdict binds to the raw diff) -------------------
+redact_marker='[REDACTED_SECRET_SHAPED_CONTENT]'
+redact_dir=$(mktemp -d)
+trap 'rm -f "$p1_log"; rm -rf "$redact_dir"' EXIT   # extends the Pass-1 trap above
+redact_on=0
+unredacted=0
+if command -v gitleaks >/dev/null; then
+  # Capability probe: a planted canary must round-trip through detect. GITLEAKS_STUB_SECRET
+  # is the test seam (the stub reports only that value); real gitleaks detects the canary.
+  k1=AKIA; k2=J5N2QW3RTYUIOP4L
+  probe_secret=$k1$k2
+  printf 'probe_key = %s\n' "$probe_secret" >"$redact_dir/probe"
+  GITLEAKS_STUB_SECRET="$probe_secret" gitleaks detect --no-git --source "$redact_dir/probe" \
+       --no-banner --report-format json --report-path "$redact_dir/probe.json" >/dev/null 2>&1 || true
+  if [[ -s $redact_dir/probe.json ]] && [[ -n $(jq -r '.[0].Secret // empty' "$redact_dir/probe.json" 2>/dev/null) ]]; then
+    redact_on=1
+  else
+    redact_reason="gitleaks detect probe failed"
+  fi
+else
+  redact_reason="gitleaks not installed"
+fi
+# Fail closed: secrets must never leave the machine silently. An explicit
+# REVIEW_ALLOW_UNREDACTED=1 proceeds and is recorded in review state.
+if (( redact_on == 0 )); then
+  if [[ ${REVIEW_ALLOW_UNREDACTED:-0} == 1 ]]; then
+    unredacted=1
+    echo "review: WARNING — redaction unavailable ($redact_reason) — prompting with the RAW diff (REVIEW_ALLOW_UNREDACTED=1; bypass recorded)" >&2
+  else
+    echo "review: redaction unavailable ($redact_reason) — refusing to prompt with the raw diff." >&2
+    echo "review: install gitleaks, or set REVIEW_ALLOW_UNREDACTED=1 to proceed explicitly (the bypass is recorded in review state)." >&2
+    exit 3
+  fi
+fi
+redact_text() {  # stdin -> stdout; scanned at a random temp path, so repo allowlists never match
+  if (( redact_on == 0 )); then cat; return; fi
+  local f="$redact_dir/chunk" out="$redact_dir/findings.json" s text
+  cat >"$f"
+  gitleaks detect --no-git --source "$f" --no-banner --report-format json --report-path "$out" >/dev/null 2>&1 || true
+  text=$(cat "$f")
+  while IFS= read -r s; do
+    [[ -n $s ]] && text=$(jq -Rn --arg t "$text" --arg s "$s" --arg m "$redact_marker" '$t | split($s) | join($m)')
+  done < <(jq -r '.[] | .Secret // empty' "$out" 2>/dev/null)
+  printf '%s\n' "$text"
+}
+
+# framework-built conflict context (canon: https://github.com/vladm3105/aidoc-hybrid-ci/blob/main/docs/CONFLICT_RESOLUTION.md#5-verification-after-a-sync §5): the author cannot edit it
+conflict_ctx=""
+sync_state="$(git rev-parse --absolute-git-dir)/aidoc-ci/sync/${branch//\//__}.json"
+if [[ -f $sync_state ]] && [[ $(jq -r .status "$sync_state") == resolved && $(jq -r .class "$sync_state") =~ ^[BC]$ ]] \
+   && git merge-base --is-ancestor "$(jq -r .merge_commit "$sync_state")" HEAD 2>/dev/null; then
+  s_old=$(jq -r .old_merge_base "$sync_state"); s_tip=$(jq -r .base_tip "$sync_state")
+  mapfile -t s_files < <(jq -r '.files | keys[]' "$sync_state")
+  conflict_ctx=$(
+    echo "This change contains a merge of the base branch that had conflicts, resolved by the author."
+    echo "Files, strategies and one-sided resolutions (framework record):"
+    jq -r '.files | to_entries[] | "- \(.key): class \(.value.class), \(.value.strategy // "?")"' "$sync_state"
+    jq -r 'if (.one_sided | length) > 0 then "ONE-SIDED (one side taken wholesale): \(.one_sided | join(", ")); author justification: \(.justification // "none")" else empty end' "$sync_state"
+    echo; echo "Base-side changes to those files that the resolution had to preserve (old merge-base..base tip):"
+    git diff --no-color "$s_old" "$s_tip" -- "${s_files[@]}" | redact_text | head -c "$max_bytes"
+  )
+fi
+
+# framework-built repo-root inventory at BASE (decidability input for dead links)
+if inv_raw=$(git ls-tree "$base" 2>/dev/null) && [[ -n $inv_raw ]]; then
+  inventory=$(awk -F'\t' '{print ($1 ~ / tree / ? $2"/" : $2)}' <<<"$inv_raw")
+  (( $(printf '%s' "$inventory" | wc -c) > 8192 )) && inventory="UNAVAILABLE"
+else
+  inventory="UNAVAILABLE"
+fi
+
+results="" responses="[]"
+if [[ ${#oversized[@]} -gt 0 ]]; then
+  results=$(jq -nc --arg f "$(printf '%s; ' "${oversized[@]}")" --argjson m "$max_bytes" \
+    '{verdict:"BLOCK", summary:"Change too large to review reliably: single-file diff over REVIEW_MAX_DIFF_BYTES (\($m)). Split the change into smaller PRs, or a human raises the limit.",
+      findings:[{lens:"size", severity:"critical", path:$f, line:0, body:"file diff exceeds the review size limit", fix:"split the change"}]}')$'\n'
+fi
+n_chunks=${#chunks[@]}
+for i in "${!chunks[@]}"; do
+  c=$((i + 1))
+  mapfile -t cfiles <<<"${chunks[$i]%$'\n'}"
+  pf=$(mktemp)
+  {
+    cat "$root/.ci/review/prompt.md"
+    printf '\n<requirements>\n%s\n</requirements>\n' "$requirements"
+    printf '\n<rubric>\n%s\n</rubric>\n' "$(git show "HEAD:$rubric")"
+    printf '\n<changed_files>\n%s\n</changed_files>\n' "$stat"
+    printf '\n<inventory>\n%s\n</inventory>\n' "$inventory"
+    [[ -z $conflict_ctx ]] || printf '\n<conflict_context>\n%s\n</conflict_context>\n' "$conflict_ctx"
+    printf '\n<diff chunk="%s of %s">\n' "$c" "$n_chunks"
+    if [[ ${cfiles[0]:-} == "@LOCKFILE_ONLY@" ]]; then
+      echo "LOCKFILE-ONLY CHANGE: lockfile contents are omitted from prompts by contract."
+      echo "Judge ONLY from <changed_files>: PASS when it shows nothing beyond lockfiles;"
+      echo "any non-lockfile path there is a framework inconsistency — BLOCK it."
+      git diff --name-only "$base" HEAD -- .
+    else
+      git diff --no-color "$base" HEAD -- "${cfiles[@]}" | redact_text
+    fi
+    printf '</diff>\n'
+  } >"$pf"
+  ok=0
+  for attempt in 1 2; do
+    raw_name="s${seq}-r${round}-c${c}-a${attempt}.txt"
+    echo "review: Pass 2 — reviewer chunk $c/$n_chunks (attempt $attempt)"
+    if run_reviewer "$pf" "$raw_dir/$raw_name" && parsed=$(parse_response "$raw_dir/$raw_name"); then
+      results+="$parsed"$'\n'
+      responses=$(jq -c --arg f "$raw_name" --arg h "$(ci_sha256 <"$raw_dir/$raw_name")" '. + [{file:$f, sha256:$h}]' <<<"$responses")
+      ok=1; break
+    fi
+    echo "review: reviewer output invalid or command failed (see $raw_dir/$raw_name{,.stderr})" >&2
+  done
+  rm -f "$pf"
+  [[ $ok == 1 ]] || die "reviewer failed twice on chunk $c — no verdict recorded (check REVIEW_CMD / LLM_URL)"
+done
+
+merged=$(printf '%s' "$results" | merge_verdicts)
+verdict=$(jq -r .verdict <<<"$merged")
+capped=false
+if [[ $verdict == REVISE ]] && (( round >= max_rounds )); then verdict=BLOCK; capped=true; fi
+
+unred_json=false; (( unredacted == 1 )) && unred_json=true
+lock_json=false; (( lock_only == 1 )) && lock_json=true
+jq -n --argjson m "$merged" --arg verdict "$verdict" --argjson capped "$capped" --argjson lockonly "$lock_json" \
+  --argjson round "$round" --argjson max "$max_rounds" --arg branch "$branch" --arg head "$(git rev-parse HEAD)" \
+  --arg base "$base" --arg diff "$diff_sha" --arg rubric "$rubric" --arg rsha "$rubric_sha" \
+  --arg rkind "$req_kind" --arg rref "$req_ref" --arg rhash "$req_sha" --arg issue "$issue" \
+  --arg cmd "$cmd_cfg" --arg model "${model:-unspecified}" --arg cwd "$cwd_mode" --argjson pass1 "$pass1" \
+  --argjson chunks "$n_chunks" --argjson responses "$responses" --arg ver "$version" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --argjson unred "$unred_json" '
+  { schema: 1, verdict: $verdict, round_cap_reached: $capped, lockfile_only: $lockonly, round: $round, max_rounds: $max, unredacted: $unred,
+    branch: $branch, head: $head, base: $base, diff_sha256: $diff,
+    rubric: $rubric, rubric_sha256: $rsha,
+    requirements: { kind: $rkind, ref: $rref, sha256: $rhash }, issue: (if $issue == "" then null else ($issue|tonumber) end),
+    reviewer: { cmd: $cmd, model: $model, cwd: $cwd },
+    pass1: $pass1, chunks: $chunks, responses: $responses,
+    summary: $m.summary, coerced: $m.coerced, findings: $m.findings,
+    reviewed_at: $at, framework_version: $ver }' >"$state"
+jq -c '{verdict, round, diff_sha256, reviewed_at}' "$state" >>"$history"
+
+# --- human-readable record (PR comment / body) ------------------------------------------------
+md="$state_dir/$key.md"
+{
+  echo "### Self-review audit trail (aidoc-local-flow-ci $version)"
+  echo
+  echo "- **Pass 1 — deterministic gate:** \`task ci\` $(jq -r .status <<<"$pass1") at \`$(jq -r '.sha[0:12]' <<<"$pass1")\` ($(jq -r .checks <<<"$pass1") checks)"
+  echo "- **Pass 2 — independent review:** **$verdict** · reviewer \`${model:-unspecified}\` (separate process, clean env, $cwd_mode cwd) · round $round/$max_rounds · $n_chunks chunk(s)"
+  echo "- **Bound to:** diff sha256 \`${diff_sha:0:16}\` · rubric \`$rubric\` sha256 \`${rubric_sha:0:16}\` · requirements: $req_kind ${req_ref}"
+  echo "- **Findings:** $(jq -r '[.findings[]|.severity] | group_by(.) | map("\(length) \(.[0])") | join(", ") | if . == "" then "none" else . end' "$state")"
+  [[ $capped == true ]] && echo "- **Round cap reached** — escalated to a human (BLOCK)."
+  (( unredacted == 1 )) && echo "- **Redaction bypassed** — reviewer was prompted with the raw diff (REVIEW_ALLOW_UNREDACTED=1)."
+  (( lock_only == 1 )) && echo "- **Lockfile-only change** — judged from the change stat; lockfile contents never enter the prompt."
+  echo
+  echo "> $(jq -r .summary "$state")"
+  if [[ $(jq '.findings | length' "$state") -gt 0 ]]; then
+    echo; echo "| Severity | Lens | Location | Finding | Fix |"; echo "| --- | --- | --- | --- | --- |"
+    jq -r '.findings[] | "| \(.severity) | \(.lens) | `\(.path):\(.line)` | \(.body | gsub("\\|"; "/") | gsub("\n"; " ")) | \(.fix | gsub("\\|"; "/") | gsub("\n"; " ")) |"' "$state"
+  fi
+  if [[ $verdict == PASS ]]; then echo; echo "Multi-agent self-review per OPS-0065 (${model:-reviewer}): PASS"; fi
+} >"$md"
+mkdir -p "$root/.ci-out" && cp "$state" "$root/.ci-out/review.json" && cp "$md" "$root/.ci-out/review.md"
+
+# --- BLOCK escalation on an existing PR ---------------------------------------------------------
+if [[ $verdict == BLOCK ]]; then
+  block_pr=$(forge_pr_number 2>/dev/null) || block_pr=""
+  if [[ -n $block_pr ]]; then
+    forge_ensure_label review:blocked B60205 "Self-review BLOCK — human decision needed"
+    forge_label_add "$block_pr" review:blocked >/dev/null 2>&1 || true
+    forge_pr_comment "$block_pr" "$md" >/dev/null 2>&1 || true
+  fi
+fi
+
+echo "review: $verdict (round $round/$max_rounds) — details: .ci-out/review.md, state: task review -- --status"
+jq -r '.findings[] | "  [\(.severity)] \(.lens) \(.path):\(.line) — \(.body)\n      fix: \(.fix)"' "$state"
+case $verdict in
+  PASS) exit 0 ;;
+  REVISE) echo "Next: fix the findings, commit, run task review again (round $((round + 1))/$max_rounds)."; exit 1 ;;
+  BLOCK) echo "Next: STOP. Report the dissent above to the human; do not continue without a decision."; exit 2 ;;
+esac

@@ -1,0 +1,26 @@
+# Starter lychee config for aidoc-local-flow-ci consumers (inherited from aidoc-flow-ci v4).
+# See https://lychee.cli.rs/usage/config/ for the full reference.
+
+# Behavior
+cache = true
+max_cache_age = "1d"
+max_concurrency = 14
+max_retries = 2
+timeout = 20
+
+# 200 + 206 are normal; 429 (rate-limit) is treated as success to
+# avoid CI flake against rate-limited services.
+accept = ["200", "206", "429"]
+
+# Excludes
+exclude_loopback = true
+exclude_all_private = true
+exclude_path = ["node_modules", "vendor", ".git", "target", "dist", "build"]
+
+# Hosts that 403 / 999 to automated user-agents (lychee will
+# false-positive otherwise). Curated from lychee community configs.
+exclude = [
+  '^https?://(www\.)?(twitter|x)\.com',
+  '^https?://(www\.)?linkedin\.com',
+  '^https?://localhost',
+]
