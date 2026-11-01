@@ -324,6 +324,28 @@ class Repository:
                 for row in rows
             ]
 
+    async def get_active_agents_with_unreflected_episodes(
+        self, *, tenant_id: str | None = None
+    ) -> list[tuple[str, str]]:
+        """Distinct (tenant_id, agent_id) pairs carrying unreflected episodes."""
+        async with self._conn() as conn:
+            rows = await (
+                await conn.execute(
+                    """
+                    SELECT DISTINCT tenant_id, agent_id
+                    FROM episodes e
+                    WHERE (%(tenant_id)s::text IS NULL OR tenant_id = %(tenant_id)s::text)
+                      AND NOT EXISTS (
+                          SELECT 1 FROM memories m
+                          WHERE m.tenant_id = e.tenant_id
+                            AND m.provenance->>'episode_id' = e.id::text
+                      )
+                    """,
+                    {"tenant_id": tenant_id},
+                )
+            ).fetchall()
+            return [(str(row["tenant_id"]), str(row["agent_id"])) for row in rows]
+
     async def get_memories(
         self,
         *,
@@ -402,6 +424,31 @@ class Repository:
             ).fetchone()
             assert row is not None
             return str(row["id"])
+
+    async def set_kb_section_embedding(
+        self,
+        section_id: str,
+        *,
+        embedding: Sequence[float],
+        embedding_model: str = "bge-small-en-v1.5",
+    ) -> None:
+        """Store vector projection for a kb_section (rebuildable projection per ADR-05)."""
+        async with self._conn() as conn:
+            await conn.execute(
+                """
+                UPDATE kb_sections
+                SET embedding = %(vec)s::vector,
+                    embedding_model = %(model)s,
+                    embedding_dims = %(dims)s
+                WHERE id = %(id)s
+                """,
+                {
+                    "vec": vector_literal(embedding),
+                    "model": embedding_model,
+                    "dims": len(embedding),
+                    "id": section_id,
+                },
+            )
 
     async def record_audit(
         self,

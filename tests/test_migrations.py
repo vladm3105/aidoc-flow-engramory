@@ -15,6 +15,7 @@ def test_migrations_exist_and_ordered() -> None:
         "0002_add_domain_scope.sql",
         "0003_reconcile_contracts.sql",
         "0004_ambient_gateway_view.sql",
+        "0005_pin_embeddings_hnsw.sql",
     ]
 
 
@@ -60,3 +61,13 @@ def test_migration_0004_ambient_gateway_view() -> None:
     assert "v_ambient_memory_active" in sql
     assert "status = 'active'" in sql
     assert "valid_to IS NULL" in sql
+
+
+def test_migration_0005_pin_embeddings_hnsw() -> None:
+    """0005 pins vector(384) and creates HNSW indices safely with pre-alter sanitization."""
+    sql = (MIGRATIONS / "0005_pin_embeddings_hnsw.sql").read_text()
+    assert "vector(384)" in sql
+    assert "idx_memories_embedding_hnsw" in sql
+    assert "idx_kb_sections_embedding_hnsw" in sql
+    assert "vector_dims(embedding) != 384" in sql
+    assert "USING hnsw (embedding vector_cosine_ops)" in sql

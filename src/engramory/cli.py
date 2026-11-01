@@ -33,10 +33,11 @@ from typing import Any
 
 from engramory.access.authz import ActorContext
 from engramory.access.surface import AccessSurface, AuthzError, GovernedWriteRejected
-from engramory.adapters.factory import require_dev_profile
+from engramory.adapters.factory import dev_adapters, require_dev_profile
 from engramory.core.models import ValidationError
 from engramory.core.repository import Repository, StoreUnavailable
 from engramory.workers.distillation import reflect
+from engramory.workers.runner import start_daemon
 
 CONFIG_DIRNAME = ".engramory"
 CONFIG_FILENAME = "config.toml"
@@ -213,11 +214,49 @@ def _cmd_memory_distill(args: argparse.Namespace) -> int:
     """Dev-tier ops command (not a SPEC-01 tool): run the interim reflect pass."""
     config = _load_config(getattr(args, "config", None))
     repo = Repository(config.dsn)
+    adapters = dev_adapters(config.dsn)
     created = asyncio.run(
-        reflect(repo, tenant_id=config.ctx.tenant_id, agent_id=config.ctx.agent_id)
+        reflect(
+            repo,
+            tenant_id=config.ctx.tenant_id,
+            agent_id=config.ctx.agent_id,
+            llm=adapters.llm,
+            vector=adapters.vector,
+        )
     )
     _emit(args.json, {"created": created}, f"distilled {created} memorie(s)")
     return 0
+
+
+def _cmd_knowledge_ingest(args: argparse.Namespace) -> int:
+    async def op(surface: AccessSurface, ctx: ActorContext) -> dict[str, Any]:
+        section_id = await surface.knowledge_ingest(
+            ctx,
+            doc_id=args.doc_id,
+            citation=args.citation,
+            text=args.text,
+            evidence_ref=args.evidence_ref,
+            scope=args.scope,
+            version=args.version,
+        )
+        return {"id": section_id, "doc_id": args.doc_id, "citation": args.citation}
+
+    return _run_with_surface(
+        args, op, lambda p: f"ingested section {p['id']} ({p['doc_id']} {p['citation']})"
+    )
+
+
+def _cmd_worker_start(args: argparse.Namespace) -> int:
+    config = _load_config(getattr(args, "config", None))
+    adapters = dev_adapters(config.dsn)
+    repo = Repository(config.dsn)
+    return start_daemon(
+        repo,
+        llm=adapters.llm,
+        vector=adapters.vector,
+        interval_sec=args.interval,
+        tenant_id=config.ctx.tenant_id,
+    )
 
 
 def _cmd_profile_get(args: argparse.Namespace) -> int:
@@ -312,6 +351,23 @@ def _build_parser() -> argparse.ArgumentParser:
     prof_sub = p_profile.add_subparsers(dest="profile_command", required=True)
     p_pget = prof_sub.add_parser("get", help="load the caller's own profile")
     p_pget.set_defaults(func=_cmd_profile_get)
+
+    p_knowledge = sub.add_parser("knowledge", help="L0 knowledge tools")
+    kb_sub = p_knowledge.add_subparsers(dest="knowledge_command", required=True)
+    p_kb_ingest = kb_sub.add_parser("ingest", help="governed knowledge section ingest")
+    p_kb_ingest.add_argument("--doc-id", required=True)
+    p_kb_ingest.add_argument("--citation", required=True)
+    p_kb_ingest.add_argument("--text", required=True)
+    p_kb_ingest.add_argument("--evidence-ref", required=True)
+    p_kb_ingest.add_argument("--scope", default="project")
+    p_kb_ingest.add_argument("--version", type=int, default=1)
+    p_kb_ingest.set_defaults(func=_cmd_knowledge_ingest)
+
+    p_worker = sub.add_parser("worker", help="background worker daemon")
+    w_sub = p_worker.add_subparsers(dest="worker_command", required=True)
+    p_wstart = w_sub.add_parser("start", help="start the reflection background runner")
+    p_wstart.add_argument("--interval", type=int, default=None, help="reflection interval seconds")
+    p_wstart.set_defaults(func=_cmd_worker_start)
 
     p_status = sub.add_parser("status", help="ops: store reachability + counts")
     p_status.set_defaults(func=_cmd_status)
