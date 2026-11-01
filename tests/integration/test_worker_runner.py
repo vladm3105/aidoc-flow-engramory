@@ -17,8 +17,8 @@ from engramory.workers.runner import run_worker_loop
 pytestmark = pytest.mark.asyncio
 
 
-def _vec384(val: float = 0.5) -> list[float]:
-    v = [0.0] * 384
+def _vec1536(val: float = 0.5) -> list[float]:
+    v = [0.0] * 1536
     v[0] = val
     return v
 
@@ -38,7 +38,7 @@ async def test_worker_runner_reflects_and_touches_heartbeat(tmp_path: Path, pg_d
     await repo.add_episode(ep)
 
     mock_llm = AsyncMock(spec=LLMPort)
-    mock_llm.embed.return_value = [_vec384(0.77)]
+    mock_llm.embed.return_value = [_vec1536(0.77)]
 
     # Start runner task with 0.1s interval
     task = asyncio.create_task(

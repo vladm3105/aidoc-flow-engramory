@@ -37,6 +37,10 @@ async def test_embed_success() -> None:
         assert vectors[0] == [0.1, 0.2, 0.3]
         assert vectors[1] == [0.4, 0.5, 0.6]
         assert mock_urlopen.call_count == 1
+        req = mock_urlopen.call_args[0][0]
+        sent_body = json.loads(req.data.decode("utf-8"))
+        assert sent_body["dimensions"] == 1536
+        assert sent_body["model"] == "openrouter/qwen/qwen3-embedding-8b"
 
 
 @pytest.mark.asyncio

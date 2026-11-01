@@ -114,11 +114,11 @@ async def test_query_vec_similarity_respects_visibility(repo: Repository) -> Non
     other = await repo.upsert_memory(
         _memory(tenant_id="t-qv", agent_id="agent-b", summary="not visible")
     )
-    v384 = [0.0] * 384
-    v384[0] = 1.0
-    await vec.upsert(id=mine, embedding=v384)
-    await vec.upsert(id=other, embedding=v384)  # identical vector, invisible scope
-    hits = await repo.get_memories(tenant_id="t-qv", agent_id="agent-a", query_vec=v384)
+    v1536 = [0.0] * 1536
+    v1536[0] = 1.0
+    await vec.upsert(id=mine, embedding=v1536)
+    await vec.upsert(id=other, embedding=v1536)  # identical vector, invisible scope
+    hits = await repo.get_memories(tenant_id="t-qv", agent_id="agent-a", query_vec=v1536)
     assert [m.id for m in hits] == [mine]  # visibility beats similarity
 
 

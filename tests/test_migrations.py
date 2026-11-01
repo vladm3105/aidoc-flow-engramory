@@ -16,6 +16,7 @@ def test_migrations_exist_and_ordered() -> None:
         "0003_reconcile_contracts.sql",
         "0004_ambient_gateway_view.sql",
         "0005_pin_embeddings_hnsw.sql",
+        "0006_resize_embeddings_1536.sql",
     ]
 
 
@@ -71,3 +72,14 @@ def test_migration_0005_pin_embeddings_hnsw() -> None:
     assert "idx_kb_sections_embedding_hnsw" in sql
     assert "vector_dims(embedding) != 384" in sql
     assert "USING hnsw (embedding vector_cosine_ops)" in sql
+
+
+def test_migration_0006_resize_embeddings_1536() -> None:
+    """0006 resizes to vector(1536) for Qwen 8B / standard embeddings and rebuilds HNSW."""
+    sql = (MIGRATIONS / "0006_resize_embeddings_1536.sql").read_text()
+    assert "vector(1536)" in sql
+    assert "idx_memories_embedding_hnsw" in sql
+    assert "idx_kb_sections_embedding_hnsw" in sql
+    assert "vector_dims(embedding) != 1536" in sql
+    assert "USING hnsw (embedding vector_cosine_ops)" in sql
+    assert "v_ambient_memory_active" in sql

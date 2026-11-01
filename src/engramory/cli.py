@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 import tomllib
 from collections.abc import Callable, Coroutine
@@ -69,10 +70,9 @@ def _discover_config(start: Path | None = None) -> Path:
     )
 
 
-def _load_config(explicit: str | None = None) -> CliConfig:
-    path = Path(explicit) if explicit else _discover_config()
+def _parse_config_text(raw_text: str, path: Path) -> CliConfig:
     try:
-        raw = tomllib.loads(path.read_text())
+        raw = tomllib.loads(raw_text)
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise ConfigError(f"unreadable config {path}: {exc}") from exc
     try:
@@ -90,6 +90,35 @@ def _load_config(explicit: str | None = None) -> CliConfig:
     except (KeyError, TypeError) as exc:
         raise ConfigError(f"config {path} is missing required keys: {exc}") from exc
     return CliConfig(ctx=ctx, dsn=dsn, path=path)
+
+
+def _load_config(explicit: str | None = None) -> CliConfig:
+    if explicit:
+        path = Path(explicit)
+        try:
+            return _parse_config_text(path.read_text(), path)
+        except OSError as exc:
+            raise ConfigError(f"unreadable config {path}: {exc}") from exc
+
+    try:
+        path = _discover_config()
+        return _parse_config_text(path.read_text(), path)
+    except ConfigError:
+        dsn = os.getenv("ENGRAMORY_DATABASE_URL") or os.getenv("DATABASE_URL")
+        if dsn:
+            agent_id = os.getenv("ENGRAMORY_AGENT_ID", "default-agent")
+            project_id = os.getenv("ENGRAMORY_PROJECT_ID", "default-project")
+            tenant_id = os.getenv("ENGRAMORY_TENANT_ID", "default")
+            scopes_raw = os.getenv("ENGRAMORY_SCOPES")
+            scopes = scopes_raw.split(",") if scopes_raw else list(DEFAULT_SCOPES)
+            ctx = ActorContext(
+                agent_id=agent_id,
+                project_id=project_id,
+                tenant_id=tenant_id,
+                scopes=frozenset(scopes),
+            )
+            return CliConfig(ctx=ctx, dsn=dsn, path=Path(".env"))
+        raise
 
 
 def _emit(as_json: bool, payload: dict[str, Any], human: str) -> None:
@@ -250,12 +279,16 @@ def _cmd_worker_start(args: argparse.Namespace) -> int:
     config = _load_config(getattr(args, "config", None))
     adapters = dev_adapters(config.dsn)
     repo = Repository(config.dsn)
+    tenant_id = os.getenv("ENGRAMORY_TENANT_ID")
+    if not tenant_id and config.path != Path(".env"):
+        tenant_id = config.ctx.tenant_id
+    interval = args.interval or int(os.getenv("ENGRAMORY_REFLECT_INTERVAL_SEC", "300"))
     return start_daemon(
         repo,
         llm=adapters.llm,
         vector=adapters.vector,
-        interval_sec=args.interval,
-        tenant_id=config.ctx.tenant_id,
+        interval_sec=interval,
+        tenant_id=tenant_id,
     )
 
 

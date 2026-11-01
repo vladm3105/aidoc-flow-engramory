@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -317,3 +318,45 @@ def test_knowledge_ingest(project_dir: Path, pg_dsn: str) -> None:
         "",
     )
     assert code == 1
+
+
+# ── env fallback ─────────────────────────────────────────────────────────
+
+
+def test_env_database_url_fallback(
+    project_dir: Path, pg_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ENGRAMORY_DATABASE_URL", pg_dsn)
+    code, out = _run("--json", "status")
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["store"] == "ok"
+
+
+def test_worker_start_with_env(
+    project_dir: Path, pg_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    called: dict[str, Any] = {}
+
+    def fake_start_daemon(
+        repo: Any,
+        *,
+        llm: Any = None,
+        vector: Any = None,
+        interval_sec: Any = None,
+        tenant_id: Any = None,
+    ) -> int:
+        called["repo"] = repo
+        called["interval_sec"] = interval_sec
+        called["tenant_id"] = tenant_id
+        return 0
+
+    monkeypatch.setattr("engramory.cli.start_daemon", fake_start_daemon)
+    monkeypatch.setenv("ENGRAMORY_DATABASE_URL", pg_dsn)
+    monkeypatch.setenv("ENGRAMORY_TENANT_ID", "t-worker-env")
+    monkeypatch.setenv("ENGRAMORY_REFLECT_INTERVAL_SEC", "120")
+
+    code, _ = _run("worker", "start")
+    assert code == 0
+    assert called["tenant_id"] == "t-worker-env"
+    assert called["interval_sec"] == 120

@@ -67,7 +67,9 @@ async def reflect(
                 summary=episode.content_raw,
                 type="episodic",
                 embedding_model=emb_model,
-                embedding_dims=384 if has_vector else None,
+                embedding_dims=len(embeddings[idx])
+                if (has_vector and embeddings is not None)
+                else None,
                 provenance={"episode_id": episode.id, "distiller": "reflect-v1"},
                 agent_id=episode.agent_id,
                 project_id=episode.project_id,

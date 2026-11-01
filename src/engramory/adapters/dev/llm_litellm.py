@@ -14,7 +14,8 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 DEFAULT_BASE_URL = "http://localhost:4000/v1"
-DEFAULT_EMBED_MODEL = "bge-small-en-v1.5"
+DEFAULT_EMBED_MODEL = "openrouter/qwen/qwen3-embedding-8b"
+DEFAULT_EMBED_DIMS = 1536
 DEFAULT_CHAT_MODEL = "chat"
 
 
@@ -26,6 +27,7 @@ class LiteLLMAdapter:
         base_url: str | None = None,
         api_key: str | None = None,
         default_embed_model: str | None = None,
+        default_embed_dims: int | None = None,
         default_chat_model: str | None = None,
         timeout_sec: float = 10.0,
     ) -> None:
@@ -34,9 +36,20 @@ class LiteLLMAdapter:
         if not clean_url.endswith("/v1"):
             clean_url = f"{clean_url}/v1"
         self._base_url = clean_url
-        self._api_key = api_key or os.getenv("LITELLM_API_KEY", "sk-platform-token")
+        self._api_key = (
+            api_key
+            or os.getenv("LITELLM_API_KEY")
+            or os.getenv("LITELLM_MASTER_KEY")
+            or "sk-platform-token"
+        )
         self._default_embed_model = default_embed_model or os.getenv(
             "ENGRAMORY_EMBED_MODEL", DEFAULT_EMBED_MODEL
+        )
+        env_dims = os.getenv("ENGRAMORY_EMBED_DIMS")
+        self._default_embed_dims = (
+            default_embed_dims
+            if default_embed_dims is not None
+            else (int(env_dims) if env_dims else DEFAULT_EMBED_DIMS)
         )
         self._default_chat_model = default_chat_model or os.getenv(
             "ENGRAMORY_CHAT_MODEL", DEFAULT_CHAT_MODEL
@@ -88,10 +101,12 @@ class LiteLLMAdapter:
         chosen_model = (
             self._default_embed_model if (model == "embed" or model == "default") else model
         )
-        payload = {
+        payload: dict[str, Any] = {
             "model": chosen_model,
             "input": list(texts),
         }
+        if self._default_embed_dims:
+            payload["dimensions"] = self._default_embed_dims
         res = await asyncio.to_thread(self._sync_request, "embeddings", payload)
         data = res.get("data", [])
         if len(data) != len(texts):

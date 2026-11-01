@@ -16,8 +16,8 @@ from engramory.ports import LLMPort
 pytestmark = pytest.mark.asyncio
 
 
-def _vec384(val: float = 0.5) -> list[float]:
-    v = [0.0] * 384
+def _vec1536(val: float = 0.5) -> list[float]:
+    v = [0.0] * 1536
     v[0] = val
     return v
 
@@ -46,7 +46,7 @@ All inbound ingress must pass through the edge gateway.
     )
 
     mock_llm = AsyncMock(spec=LLMPort)
-    mock_llm.embed.return_value = [_vec384(0.95)]
+    mock_llm.embed.return_value = [_vec1536(0.95)]
 
     class MockAdapters:
         llm = mock_llm
@@ -78,4 +78,4 @@ All inbound ingress must pass through the edge gateway.
         dec_row = [r for r in rows if r["citation"] == "§decision"][0]
         assert "All inbound ingress" in dec_row["text"]
         assert dec_row["has_emb"] is True
-        assert dec_row["embedding_dims"] == 384
+        assert dec_row["embedding_dims"] == 1536
