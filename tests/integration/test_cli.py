@@ -278,6 +278,8 @@ def test_status_reports_counts(project_dir: Path, pg_dsn: str) -> None:
     payload = json.loads(out)
     assert payload["store"] == "ok"
     assert payload["episodes"] == 1
+    assert payload["graph_entities"] == 0
+    assert payload["graph_relations"] == 0
 
 
 # ── knowledge ─────────────────────────────────────────────────────────────
@@ -360,3 +362,25 @@ def test_worker_start_with_env(
     assert code == 0
     assert called["tenant_id"] == "t-worker-env"
     assert called["interval_sec"] == 120
+
+
+def test_graph_reproject_cli(
+    project_dir: Path, pg_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init(pg_dsn, tenant="t-cli-graph")
+    reprojected: dict[str, Any] = {}
+
+    async def fake_reproject(
+        repo: Any, graph: Any, *, tenant_id: str = "default"
+    ) -> tuple[int, int]:
+        reprojected["tenant_id"] = tenant_id
+        return 3, 2
+
+    monkeypatch.setattr("engramory.cli.reproject_all", fake_reproject)
+    code, out = _run("--json", "graph", "reproject")
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["status"] == "ok"
+    assert payload["nodes"] == 3
+    assert payload["edges"] == 2
+    assert reprojected["tenant_id"] == "t-cli-graph"

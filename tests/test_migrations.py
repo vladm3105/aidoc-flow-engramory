@@ -17,6 +17,7 @@ def test_migrations_exist_and_ordered() -> None:
         "0004_ambient_gateway_view.sql",
         "0005_pin_embeddings_hnsw.sql",
         "0006_resize_embeddings_1536.sql",
+        "0007_graph_entities_canonical.sql",
     ]
 
 
@@ -83,3 +84,13 @@ def test_migration_0006_resize_embeddings_1536() -> None:
     assert "vector_dims(embedding) != 1536" in sql
     assert "USING hnsw (embedding vector_cosine_ops)" in sql
     assert "v_ambient_memory_active" in sql
+
+
+def test_migration_0007_graph_entities_canonical() -> None:
+    """0007 creates canonical graph_entities and graph_relations schema (ADR-01/03/05)."""
+    sql = (MIGRATIONS / "0007_graph_entities_canonical.sql").read_text()
+    assert "CREATE TABLE IF NOT EXISTS graph_entities" in sql
+    assert "CREATE TABLE IF NOT EXISTS graph_relations" in sql
+    assert "PRIMARY KEY (tenant_id, id)" in sql
+    assert "uq_graph_relations UNIQUE (tenant_id, src_id, dst_id, rel_type)" in sql
+    assert "ON DELETE CASCADE" in sql
