@@ -329,22 +329,19 @@ class Repository:
     ) -> list[tuple[str, str]]:
         """Distinct (tenant_id, agent_id) pairs carrying unreflected episodes."""
         async with self._conn() as conn:
-            clause = "WHERE tenant_id = %(tenant_id)s" if tenant_id else ""
-            params = {"tenant_id": tenant_id} if tenant_id else {}
-            and_or_where = "AND" if clause else "WHERE"
             rows = await (
                 await conn.execute(
-                    f"""
+                    """
                     SELECT DISTINCT tenant_id, agent_id
                     FROM episodes e
-                    {clause}
-                    {and_or_where} NOT EXISTS (
-                        SELECT 1 FROM memories m
-                        WHERE m.tenant_id = e.tenant_id
-                          AND m.provenance->>'episode_id' = e.id::text
-                    )
+                    WHERE (%(tenant_id)s::text IS NULL OR tenant_id = %(tenant_id)s::text)
+                      AND NOT EXISTS (
+                          SELECT 1 FROM memories m
+                          WHERE m.tenant_id = e.tenant_id
+                            AND m.provenance->>'episode_id' = e.id::text
+                      )
                     """,
-                    params,
+                    {"tenant_id": tenant_id},
                 )
             ).fetchall()
             return [(str(row["tenant_id"]), str(row["agent_id"])) for row in rows]
