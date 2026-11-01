@@ -44,3 +44,8 @@ python_version = "3.12"
 mypy_path = "src"
 packages = ["engramory"]
 ignore_missing_imports = true
+
+[dependency-groups]
+dev = [
+    "bandit>=1.9.4",
+]

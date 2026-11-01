@@ -34,7 +34,12 @@ class LiteLLMAdapter:
         if not clean_url.endswith("/v1"):
             clean_url = f"{clean_url}/v1"
         self._base_url = clean_url
-        self._api_key = api_key or os.getenv("LITELLM_API_KEY", "sk-platform-token")
+        self._api_key = (
+            api_key
+            or os.getenv("LITELLM_API_KEY")
+            or os.getenv("LITELLM_MASTER_KEY")
+            or "sk-platform-token"
+        )
         self._default_embed_model = default_embed_model or os.getenv(
             "ENGRAMORY_EMBED_MODEL", DEFAULT_EMBED_MODEL
         )

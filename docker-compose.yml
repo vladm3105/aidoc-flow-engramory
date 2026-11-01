@@ -105,12 +105,14 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       ENGRAMORY_DATABASE_URL: postgresql://${POSTGRES_USER:-engramory}:${POSTGRES_PASSWORD:-change_me}@postgres:5432/${POSTGRES_DB:-engramory}
       ENGRAMORY_PROFILE: dev
       ENGRAMORY_REFLECT_INTERVAL_SEC: ${ENGRAMORY_REFLECT_INTERVAL_SEC:-300}
-      LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://localhost:4000/v1}
-      LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-platform-token}
+      LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://host.docker.internal:4000/v1}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-${LITELLM_MASTER_KEY:-sk-platform-token}}
     restart: unless-stopped
 
 volumes:
