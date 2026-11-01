@@ -29,7 +29,7 @@ class LiteLLMAdapter:
         default_embed_model: str | None = None,
         default_embed_dims: int | None = None,
         default_chat_model: str | None = None,
-        timeout_sec: float = 10.0,
+        timeout_sec: float | None = None,
     ) -> None:
         raw_url = base_url or os.getenv("LITELLM_BASE_URL") or DEFAULT_BASE_URL
         clean_url = raw_url.rstrip("/")
@@ -54,7 +54,12 @@ class LiteLLMAdapter:
         self._default_chat_model = default_chat_model or os.getenv(
             "ENGRAMORY_CHAT_MODEL", DEFAULT_CHAT_MODEL
         )
-        self._timeout_sec = timeout_sec
+        env_timeout = os.getenv("ENGRAMORY_TIMEOUT_SEC")
+        self._timeout_sec = (
+            timeout_sec
+            if timeout_sec is not None
+            else (float(env_timeout) if env_timeout else 30.0)
+        )
 
     def _sync_request(self, endpoint: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         url = f"{self._base_url}/{endpoint.lstrip('/')}"
