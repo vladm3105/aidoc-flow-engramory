@@ -20,7 +20,14 @@ from typing import Any
 import psycopg
 from psycopg.rows import dict_row
 
-from engramory.core.models import AgentProfile, Episode, KBSection, Memory
+from engramory.core.models import (
+    AgentProfile,
+    Episode,
+    GraphEntity,
+    GraphRelation,
+    KBSection,
+    Memory,
+)
 
 # memory_retrievals.feedback CHECK domain (migration 0003) — enforced here so a
 # bad outcome fails before it reaches Postgres.
@@ -541,16 +548,166 @@ class Repository:
             )
         return retrieval_ids
 
+    async def upsert_graph_entity(self, entity: GraphEntity) -> None:
+        """Insert or update a canonical graph entity (ADR-01/03/05)."""
+        async with self._conn() as conn:
+            await conn.execute(
+                """
+                INSERT INTO graph_entities
+                    (id, tenant_id, domain_id, entity_type, name, properties, updated_at)
+                VALUES
+                    (%(id)s, %(tenant_id)s, %(domain_id)s, %(entity_type)s,
+                     %(name)s, %(properties)s, NOW())
+                ON CONFLICT (tenant_id, id)
+                    DO UPDATE SET
+                        domain_id = EXCLUDED.domain_id,
+                        entity_type = EXCLUDED.entity_type,
+                        name = EXCLUDED.name,
+                        properties = EXCLUDED.properties,
+                        updated_at = NOW()
+                """,
+                {
+                    "id": entity.id,
+                    "tenant_id": entity.tenant_id,
+                    "domain_id": entity.domain_id,
+                    "entity_type": entity.entity_type,
+                    "name": entity.name,
+                    "properties": json.dumps(dict(entity.properties)),
+                },
+            )
+
+    async def upsert_graph_relation(self, relation: GraphRelation) -> str:
+        """Insert or update a canonical graph relationship (ADR-01/03/05)."""
+        async with self._conn() as conn:
+            row = await (
+                await conn.execute(
+                    """
+                    INSERT INTO graph_relations (tenant_id, src_id, dst_id, rel_type, properties)
+                    VALUES (%(tenant_id)s, %(src_id)s, %(dst_id)s, %(rel_type)s, %(properties)s)
+                    ON CONFLICT (tenant_id, src_id, dst_id, rel_type)
+                        DO UPDATE SET properties = EXCLUDED.properties
+                    RETURNING id
+                    """,
+                    {
+                        "tenant_id": relation.tenant_id,
+                        "src_id": relation.src_id,
+                        "dst_id": relation.dst_id,
+                        "rel_type": relation.rel_type,
+                        "properties": json.dumps(dict(relation.properties)),
+                    },
+                )
+            ).fetchone()
+            assert row is not None
+            return str(row["id"])
+
+    async def get_graph_entity(self, id: str, *, tenant_id: str = "default") -> GraphEntity | None:
+        """Retrieve a canonical graph entity by id and tenant_id."""
+        async with self._conn() as conn:
+            row = await (
+                await conn.execute(
+                    """
+                    SELECT id, tenant_id, domain_id, entity_type, name, properties
+                    FROM graph_entities
+                    WHERE tenant_id = %(tenant_id)s AND id = %(id)s
+                    """,
+                    {"tenant_id": tenant_id, "id": id},
+                )
+            ).fetchone()
+            if not row:
+                return None
+            return GraphEntity(
+                id=row["id"],
+                tenant_id=row["tenant_id"],
+                domain_id=row["domain_id"],
+                entity_type=row["entity_type"],
+                name=row["name"],
+                properties=row["properties"],
+            )
+
+    async def list_graph_entities(
+        self, *, tenant_id: str = "default", entity_type: str | None = None
+    ) -> list[GraphEntity]:
+        """List canonical graph entities with optional entity_type filter."""
+        clauses = ["tenant_id = %(tenant_id)s"]
+        params: dict[str, Any] = {"tenant_id": tenant_id}
+        if entity_type:
+            clauses.append("entity_type = %(entity_type)s")
+            params["entity_type"] = entity_type
+
+        async with self._conn() as conn:
+            rows = await (
+                await conn.execute(
+                    f"""
+                    SELECT id, tenant_id, domain_id, entity_type, name, properties
+                    FROM graph_entities
+                    WHERE {" AND ".join(clauses)}
+                    ORDER BY id ASC
+                    """,
+                    params,
+                )
+            ).fetchall()
+            return [
+                GraphEntity(
+                    id=row["id"],
+                    tenant_id=row["tenant_id"],
+                    domain_id=row["domain_id"],
+                    entity_type=row["entity_type"],
+                    name=row["name"],
+                    properties=row["properties"],
+                )
+                for row in rows
+            ]
+
+    async def list_graph_relations(
+        self, *, tenant_id: str = "default", entity_id: str | None = None
+    ) -> list[GraphRelation]:
+        """List canonical graph relations, optionally connected to entity_id."""
+        clauses = ["tenant_id = %(tenant_id)s"]
+        params: dict[str, Any] = {"tenant_id": tenant_id}
+        if entity_id:
+            clauses.append("(src_id = %(eid)s OR dst_id = %(eid)s)")
+            params["eid"] = entity_id
+
+        async with self._conn() as conn:
+            rows = await (
+                await conn.execute(
+                    f"""
+                    SELECT id, tenant_id, src_id, dst_id, rel_type, properties
+                    FROM graph_relations
+                    WHERE {" AND ".join(clauses)}
+                    ORDER BY created_at ASC
+                    """,
+                    params,
+                )
+            ).fetchall()
+            return [
+                GraphRelation(
+                    id=str(row["id"]),
+                    tenant_id=row["tenant_id"],
+                    src_id=row["src_id"],
+                    dst_id=row["dst_id"],
+                    rel_type=row["rel_type"],
+                    properties=row["properties"],
+                )
+                for row in rows
+            ]
+
     async def count_episodes(self, *, tenant_id: str) -> int:
         return await self._count("episodes", tenant_id)
 
     async def count_kb_sections(self, *, tenant_id: str) -> int:
         return await self._count("kb_sections", tenant_id)
 
+    async def count_graph_entities(self, *, tenant_id: str = "default") -> int:
+        return await self._count("graph_entities", tenant_id)
+
+    async def count_graph_relations(self, *, tenant_id: str = "default") -> int:
+        return await self._count("graph_relations", tenant_id)
+
     async def _count(self, table: str, tenant_id: str) -> int:
         # Security guard, not an assert: asserts vanish under `python -O`,
         # and this is the only barrier before f-string SQL interpolation.
-        if table not in {"episodes", "kb_sections"}:
+        if table not in {"episodes", "kb_sections", "graph_entities", "graph_relations"}:
             raise ValueError(f"refusing to interpolate table name: {table!r}")
         async with self._conn() as conn:
             row = await (

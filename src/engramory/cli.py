@@ -38,6 +38,7 @@ from engramory.adapters.factory import dev_adapters, require_dev_profile
 from engramory.core.models import ValidationError
 from engramory.core.repository import Repository, StoreUnavailable
 from engramory.workers.distillation import reflect
+from engramory.workers.graph_projection import reproject_all
 from engramory.workers.runner import start_daemon
 
 CONFIG_DIRNAME = ".engramory"
@@ -304,6 +305,35 @@ def _cmd_profile_get(args: argparse.Namespace) -> int:
     return _run_with_surface(args, op, lambda p: f"{p['agent_id']} ({p['display_name']})")
 
 
+def _cmd_graph_reproject(args: argparse.Namespace) -> int:
+    """Rebuild all graph projections from PostgreSQL into Neo4j (ADR-01/03/05)."""
+    config = _load_config(getattr(args, "config", None))
+    adapters = dev_adapters(config.dsn)
+    if not adapters.graph:
+        _emit(
+            args.json,
+            {"error": "no graph adapter configured"},
+            "error: no graph adapter configured",
+        )
+        return 1
+
+    repo = Repository(config.dsn)
+    tenant_id = args.tenant_id or config.ctx.tenant_id
+
+    async def run_reproject() -> dict[str, Any]:
+        assert adapters.graph is not None
+        nodes, edges = await reproject_all(repo, adapters.graph, tenant_id=tenant_id)
+        return {"status": "ok", "tenant_id": tenant_id, "nodes": nodes, "edges": edges}
+
+    payload = asyncio.run(run_reproject())
+    msg = (
+        f"reprojected graph for tenant '{tenant_id}': "
+        f"{payload['nodes']} node(s), {payload['edges']} edge(s)"
+    )
+    _emit(args.json, payload, msg)
+    return 0
+
+
 def _cmd_status(args: argparse.Namespace) -> int:
     """Dev-tier ops command: store reachability + tenant counts."""
     config = _load_config(getattr(args, "config", None))
@@ -314,13 +344,16 @@ def _cmd_status(args: argparse.Namespace) -> int:
             "store": "ok",
             "episodes": await repo.count_episodes(tenant_id=config.ctx.tenant_id),
             "kb_sections": await repo.count_kb_sections(tenant_id=config.ctx.tenant_id),
+            "graph_entities": await repo.count_graph_entities(tenant_id=config.ctx.tenant_id),
+            "graph_relations": await repo.count_graph_relations(tenant_id=config.ctx.tenant_id),
         }
 
     payload = asyncio.run(counts())
     _emit(
         args.json,
         payload,
-        f"store ok — {payload['episodes']} episode(s), {payload['kb_sections']} kb section(s)",
+        f"store ok — {payload['episodes']} episode(s), {payload['kb_sections']} kb section(s), "
+        f"{payload['graph_entities']} entity(ies), {payload['graph_relations']} relation(s)",
     )
     return 0
 
@@ -401,6 +434,16 @@ def _build_parser() -> argparse.ArgumentParser:
     p_wstart = w_sub.add_parser("start", help="start the reflection background runner")
     p_wstart.add_argument("--interval", type=int, default=None, help="reflection interval seconds")
     p_wstart.set_defaults(func=_cmd_worker_start)
+
+    p_graph = sub.add_parser("graph", help="L0/L1 graph tools")
+    g_sub = p_graph.add_subparsers(dest="graph_command", required=True)
+    p_greproject = g_sub.add_parser(
+        "reproject", help="rebuild graph projections from PostgreSQL into Neo4j"
+    )
+    p_greproject.add_argument(
+        "--tenant-id", default=None, help="target tenant (default: from config)"
+    )
+    p_greproject.set_defaults(func=_cmd_graph_reproject)
 
     p_status = sub.add_parser("status", help="ops: store reachability + counts")
     p_status.set_defaults(func=_cmd_status)

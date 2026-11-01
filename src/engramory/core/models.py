@@ -170,3 +170,41 @@ class AgentProfile:
     def __post_init__(self) -> None:
         _require(bool(self.agent_id), "AgentProfile.agent_id is required")
         object.__setattr__(self, "standing_preferences", _frozen_mapping(self.standing_preferences))
+
+
+@dataclass(frozen=True, slots=True)
+class GraphEntity:
+    """Canonical graph entity (ADR-01 / ADR-03 / ADR-05) — graph_entities table."""
+
+    id: str
+    entity_type: str
+    name: str
+    tenant_id: str = "default"
+    domain_id: str = "default"
+    properties: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        _require(bool(self.id), "GraphEntity.id is required")
+        _require(bool(self.entity_type), "GraphEntity.entity_type is required")
+        _require(bool(self.name), "GraphEntity.name is required")
+        _require(bool(self.tenant_id), "GraphEntity.tenant_id is required")
+        object.__setattr__(self, "properties", _frozen_mapping(self.properties))
+
+
+@dataclass(frozen=True, slots=True)
+class GraphRelation:
+    """Canonical graph relation (ADR-01 / ADR-03 / ADR-05) — graph_relations table."""
+
+    src_id: str
+    dst_id: str
+    rel_type: str
+    tenant_id: str = "default"
+    properties: Mapping[str, Any] = field(default_factory=dict)
+    id: str | None = None
+
+    def __post_init__(self) -> None:
+        _require(bool(self.src_id), "GraphRelation.src_id is required")
+        _require(bool(self.dst_id), "GraphRelation.dst_id is required")
+        _require(bool(self.rel_type), "GraphRelation.rel_type is required")
+        _require(bool(self.tenant_id), "GraphRelation.tenant_id is required")
+        object.__setattr__(self, "properties", _frozen_mapping(self.properties))
