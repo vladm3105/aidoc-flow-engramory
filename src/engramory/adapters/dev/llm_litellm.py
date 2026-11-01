@@ -14,7 +14,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 DEFAULT_BASE_URL = "http://localhost:4000/v1"
-DEFAULT_EMBED_MODEL = "openrouter/qwen/qwen3-embedding-8b"
+DEFAULT_EMBED_MODEL = "embed"
 DEFAULT_EMBED_DIMS = 1536
 DEFAULT_CHAT_MODEL = "chat"
 
@@ -105,7 +105,7 @@ class LiteLLMAdapter:
             "model": chosen_model,
             "input": list(texts),
         }
-        if self._default_embed_dims:
+        if self._default_embed_dims and chosen_model != "embed":
             payload["dimensions"] = self._default_embed_dims
         res = await asyncio.to_thread(self._sync_request, "embeddings", payload)
         data = res.get("data", [])
