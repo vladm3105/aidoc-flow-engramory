@@ -14,6 +14,7 @@ def test_migrations_exist_and_ordered() -> None:
         "0001_init_memory.sql",
         "0002_add_domain_scope.sql",
         "0003_reconcile_contracts.sql",
+        "0004_ambient_gateway_view.sql",
     ]
 
 
@@ -51,3 +52,11 @@ def test_migration_0003_enforces_tenant_wall() -> None:
     sql = (MIGRATIONS / "0003_reconcile_contracts.sql").read_text()
     assert sql.count("ALTER COLUMN tenant_id SET NOT NULL") == 2  # episodes + memories
     assert "idx_memories_tenant_live" in sql
+
+
+def test_migration_0004_ambient_gateway_view() -> None:
+    """0004 exposes the immutable read-only view contract for platform-litellm-laya."""
+    sql = (MIGRATIONS / "0004_ambient_gateway_view.sql").read_text()
+    assert "v_ambient_memory_active" in sql
+    assert "status = 'active'" in sql
+    assert "valid_to IS NULL" in sql
