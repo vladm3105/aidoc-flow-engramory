@@ -118,6 +118,8 @@ Verified June 2026: **Apache AGE is a managed extension on Azure Database for Po
 
 This resolves the RAC↔Nexus divergence cleanly in favor of your existing investment: **Postgres spine for canonical data + vectors; Neo4j as the graph engine when needed, behind `GraphPort`, portable to either cloud via Aura.**
 
+For complete details on the migration and post-migration graph architecture, see [Neo4j Migration Architecture](NEO4J_MIGRATION_ARCHITECTURE.md) and [PLAN-006](../plans/PLAN-006_neo4j-graph-engine-integration.md).
+
 ---
 
 ## Memory architecture (the part neither RAC nor Nexus has)
