@@ -1,0 +1,80 @@
+# =============================================================================
+#  CHG-005: Staging Traffic Readiness Remediation
+# =============================================================================
+#  Flow: F2 / direct (staging readiness remediation) · Level: C3 · Entry gate: GATE-CODE
+#  Semver: minor (additive migrations, new adapters, workers, CLI commands)
+#  Plan: plans/PLAN-005_stage-traffic-readiness.md
+#  Issue: https://github.com/vladm3105/aidoc-flow-engramory/issues/58
+# =============================================================================
+
+id: CHG-005
+title: "Staging Traffic Readiness Remediation for Ambient Gateway Traffic"
+
+metadata:
+  document_type: "chg-document"
+  layer: 9
+  purpose: governance
+  last_updated: "2026-11-01"
+  framework_version: "0.96.4"
+  change_level:
+    value: C3
+  change_source:
+    value: direct
+
+document_control:
+  project_name: "aidoc-flow-engramory"
+  document_id: "CHG-005"
+  version: "1.0"
+  status: In-Progress
+  author: "AI coding agent + owner"
+  created_date: "2026-11-01"
+  last_updated: "2026-11-01"
+  framework_version: "0.96.4"
+  revision_history:
+    - version: "1.0"
+      date: "2026-11-01"
+      author: "AI coding agent"
+      description: "Initial C3 change request for staging traffic readiness remediation"
+
+change_control:
+  chg_id: "CHG-005"
+  status: In-Progress
+  change_level: C3
+  change_source: direct
+  entry_gate: GATE-CODE
+  semver_impact: minor
+  version_action: none
+  author: "AI coding agent + owner"
+  date_proposed: "2026-11-01T17:43:00Z"
+  date_approved: "2026-11-01T17:43:00Z"
+  date_implemented: null
+  supersedes: []
+  decision: "DEC-CHG-005"
+  decision_title: "Remediate Engramory for LiteLLM ambient gateway live traffic"
+  decision_rationale: "Connect LiteLLM embedding adapter, pin 384-dim HNSW indexes safely, populate vector representations during reflection, provide knowledge ingestion tooling, author background distillation worker runner, and create production container."
+
+change_description:
+  summary: "Implement 5 core remediation phases from PLAN-005 to prepare aidoc-flow-engramory for staging traffic from platform-litellm-laya."
+  why: "Enable real staging traffic to query ambient memories and knowledge via pgvector HNSW indexing and LiteLLM gateway."
+  trigger: "User prompt: review and implement staging traffic readiness gaps."
+  emergency_exclusion: "Not emergency: planned capability upgrade and hardening."
+  scope:
+    in:
+      - "src/engramory/adapters/dev/llm_litellm.py"
+      - "src/engramory/adapters/factory.py"
+      - "db/migrations/0005_pin_embeddings_hnsw.sql"
+      - "src/engramory/workers/distillation.py"
+      - "src/engramory/cli.py"
+      - "scripts/ingest_docs.py"
+      - "src/engramory/workers/runner.py"
+      - "Dockerfile"
+      - "plans/PLAN-005_stage-traffic-readiness.md"
+      - "docs/sdd/09_CHG/CHG-005_stage_traffic_readiness.yaml"
+    out:
+      - "platform-litellm-laya core proxy"
+      - "cloud adapters (gcp/azure - deferred to BRD-02)"
+
+seed_scope:
+  layer: 9
+  affected_documents:
+    - "docs/sdd/09_CHG/CHG-005_stage_traffic_readiness.yaml"
