@@ -285,11 +285,17 @@ kb_sections(
   citation TEXT NOT NULL,       -- Section anchor or heading path
   text TEXT NOT NULL,           -- Authoritative section content
   version INTEGER NOT NULL,     -- Immutable versioning (new versions append)
-  embedding VECTOR,             -- Regenerable dense embedding (pgvector)
-  embedding_model TEXT,
-  embedding_dims INTEGER
+  embedding VECTOR(1536),       -- Regenerable dense embedding (pgvector HNSW)
+  embedding_model TEXT,         -- Default: 'openrouter/qwen/qwen3-embedding-8b'
+  embedding_dims INTEGER        -- Default: 1536
 )
 ```
+
+### Standard Vector Dimensions & Default Embedding Model (Migration 0006)
+
+- **Standard Dimensionality (`vector(1536)`):** Engramory standardizes its `pgvector` HNSW indexes on **1,536 dimensions**. This provides near-lossless semantic fidelity while fitting within PostgreSQL HNSW limits (< 2,000 dimensions) and keeping RAM consumption predictable (~6.1 GB for 1M vectors).
+- **Default Embedding Model:** `openrouter/qwen/qwen3-embedding-8b` (configured with `dimensions: 1536` via Matryoshka Representation Learning). It provides top-tier MTEB multilingual, technical, and code retrieval benchmarks.
+- **Portability Guarantee:** Standardizing on 1,536 dimensions matches industry standards (OpenAI `text-embedding-3-small`, `text-embedding-3-large`, Voyage AI), enabling seamless model switching in the LiteLLM gateway without requiring SQL schema migrations.
 
 ### 3. Hybrid Retrieval & Cumulative `@-tag` Lineage
 

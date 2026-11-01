@@ -36,9 +36,9 @@ It consolidates two predecessor designs — **RAC** (a working knowledge platfor
 ## Design pillars
 
 1. **Ports & adapters** — the core depends on interfaces; infrastructure swaps per environment.
-2. **PostgreSQL is the spine** — relational + vectors (pgvector) + canonical memory live in Postgres.
+2. **PostgreSQL is the spine** — relational + vectors (`pgvector` HNSW on `vector(1536)`) + canonical memory live in Postgres.
 3. **Own the canonical store** — distilled memory is plain rows (raw text + provenance + regenerable embeddings); engines are replaceable processors.
-4. **One model gateway** — all LLM/embedding calls go through LiteLLM (Ollama in dev → Vertex/Azure in cloud).
+4. **One model gateway** — all LLM/embedding calls go through LiteLLM (Qwen 8B 1536d / Ollama in dev → OpenRouter / Vertex / Azure in cloud).
 5. **Self-hosted for dev, portable to GCP or Azure** — cloud migration is an adapter swap, not a rewrite.
 6. **Config over code** — each project/domain is YAML on the shared core.
 

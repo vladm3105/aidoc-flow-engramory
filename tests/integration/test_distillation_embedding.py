@@ -15,8 +15,8 @@ from engramory.workers.distillation import reflect
 pytestmark = pytest.mark.asyncio
 
 
-def _vec384(val: float = 0.5) -> list[float]:
-    v = [0.0] * 384
+def _vec1536(val: float = 0.5) -> list[float]:
+    v = [0.0] * 1536
     v[0] = val
     return v
 
@@ -35,9 +35,9 @@ async def test_reflect_populates_embedding_projection_and_ambient_view(pg_dsn: s
     ep_id = await repo.add_episode(episode)
     assert ep_id is not None
 
-    # 2. Mock LLMPort returning 384-dim vector
+    # 2. Mock LLMPort returning 1536-dim vector
     mock_llm = AsyncMock(spec=LLMPort)
-    mock_llm.embed.return_value = [_vec384(0.88)]
+    mock_llm.embed.return_value = [_vec1536(0.88)]
 
     # 3. Run distillation reflection
     created = await reflect(
@@ -51,7 +51,7 @@ async def test_reflect_populates_embedding_projection_and_ambient_view(pg_dsn: s
 
     # 4. Verify memory is retrievable via PgVectorAdapter
     hits = await vec.query(
-        embedding=_vec384(0.88),
+        embedding=_vec1536(0.88),
         k=1,
         filter={"tenant_id": "tenant-embed-test"},
     )
@@ -70,6 +70,6 @@ async def test_reflect_populates_embedding_projection_and_ambient_view(pg_dsn: s
             )
         ).fetchone()
         assert row is not None
-        assert row["embedding_dims"] == 384
+        assert row["embedding_dims"] == 1536
         assert row["has_emb"] is True
         assert "Always run database migrations" in row["content"]
