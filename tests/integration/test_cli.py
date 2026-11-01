@@ -277,3 +277,43 @@ def test_status_reports_counts(project_dir: Path, pg_dsn: str) -> None:
     payload = json.loads(out)
     assert payload["store"] == "ok"
     assert payload["episodes"] == 1
+
+
+# ── knowledge ─────────────────────────────────────────────────────────────
+
+
+def test_knowledge_ingest(project_dir: Path, pg_dsn: str) -> None:
+    _init(pg_dsn, tenant="t-cli-k")
+    code, out = _run(
+        "--json",
+        "knowledge",
+        "ingest",
+        "--doc-id",
+        "ADR-010",
+        "--citation",
+        "§decision",
+        "--text",
+        "All memory access must route through the unified access surface.",
+        "--evidence-ref",
+        "git:abc1234",
+    )
+    assert code == 0
+    payload = json.loads(out)
+    assert payload["doc_id"] == "ADR-010"
+    assert payload["citation"] == "§decision"
+    assert "id" in payload
+
+    # Test empty evidence ref fails governed write
+    code, _ = _run(
+        "knowledge",
+        "ingest",
+        "--doc-id",
+        "ADR-010",
+        "--citation",
+        "§decision",
+        "--text",
+        "some text",
+        "--evidence-ref",
+        "",
+    )
+    assert code == 1

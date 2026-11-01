@@ -10,8 +10,9 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from engramory.adapters.dev.llm_litellm import LiteLLMAdapter
 from engramory.adapters.dev.vector_pg import PgVectorAdapter
-from engramory.ports import VectorPort
+from engramory.ports import LLMPort, VectorPort
 
 PROFILES = ("dev", "gcp", "azure")
 
@@ -22,10 +23,11 @@ class AdapterSet:
 
     profile: str
     vector: VectorPort
+    llm: LLMPort
 
 
 def dev_adapters(dsn: str) -> AdapterSet:
-    return AdapterSet(profile="dev", vector=PgVectorAdapter(dsn))
+    return AdapterSet(profile="dev", vector=PgVectorAdapter(dsn), llm=LiteLLMAdapter())
 
 
 def adapters_for_profile(profile: str | None = None, *, dsn: str) -> AdapterSet:

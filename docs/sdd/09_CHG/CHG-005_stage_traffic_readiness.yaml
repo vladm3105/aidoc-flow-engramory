@@ -25,7 +25,7 @@ document_control:
   project_name: "aidoc-flow-engramory"
   document_id: "CHG-005"
   version: "1.0"
-  status: In-Progress
+  status: Completed
   author: "AI coding agent + owner"
   created_date: "2026-11-01"
   last_updated: "2026-11-01"
@@ -38,7 +38,7 @@ document_control:
 
 change_control:
   chg_id: "CHG-005"
-  status: In-Progress
+  status: Completed
   change_level: C3
   change_source: direct
   entry_gate: GATE-CODE
@@ -47,7 +47,7 @@ change_control:
   author: "AI coding agent + owner"
   date_proposed: "2026-11-01T17:43:00Z"
   date_approved: "2026-11-01T17:43:00Z"
-  date_implemented: null
+  date_implemented: "2026-11-01T17:52:00Z"
   supersedes: []
   decision: "DEC-CHG-005"
   decision_title: "Remediate Engramory for LiteLLM ambient gateway live traffic"
