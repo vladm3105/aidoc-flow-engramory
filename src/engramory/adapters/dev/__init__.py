@@ -7,7 +7,8 @@ gain dev adapters as their consumers arrive.
 
 from __future__ import annotations
 
+from engramory.adapters.dev.graph_neo4j import Neo4jGraphAdapter
 from engramory.adapters.dev.llm_litellm import LiteLLMAdapter
 from engramory.adapters.dev.vector_pg import PgVectorAdapter
 
-__all__ = ["LiteLLMAdapter", "PgVectorAdapter"]
+__all__ = ["LiteLLMAdapter", "Neo4jGraphAdapter", "PgVectorAdapter"]
