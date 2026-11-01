@@ -8,7 +8,10 @@ license = { text = "Apache-2.0" }
 authors = [{ name = "Engramory contributors" }]
 # The ports layer stays stdlib-only by design. psycopg is spine infrastructure
 # (ADR-01 / SPEC-06): the repository uses the Postgres driver directly.
-dependencies = ["psycopg[binary]>=3.2"]
+dependencies = [
+    "neo4j>=5.26.0",
+    "psycopg[binary]>=3.2",
+]
 
 [project.optional-dependencies]
 dev = ["ruff", "pytest", "pytest-asyncio", "pytest-cov", "mypy"]

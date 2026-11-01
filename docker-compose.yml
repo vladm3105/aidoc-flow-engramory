@@ -78,12 +78,25 @@ services:
       - ./config/litellm.config.yaml:/app/config.yaml:ro
 
   neo4j:
-    profiles: ["graph"]
-    image: neo4j:5-community
+    image: neo4j:5.26-community
+    container_name: engramory-neo4j
     environment:
       NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-change_me}
-    ports: ["7474:7474", "7687:7687"]
-    volumes: ["neo4jdata:/data"]
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_server_memory_heap_initial__size: 512m
+      NEO4J_server_memory_heap_max__size: 1g
+      NEO4J_server_memory_pagecache_size: 512m
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4jdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 25s
 
   keycloak:
     # Deprecated in platform standard (Authentik is authoritative IdP, Doc 27)

@@ -1,6 +1,6 @@
 # PLAN-006: Neo4j Graph Engine Integration & Architecture
 
-> **Status:** Draft  
+> **Status:** In Progress  
 > **Date:** 2026-11-01  
 > **Authors:** Engramory Core Team  
 > **Owning Repo:** `aidoc-flow-engramory`  

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import pytest
 
+from engramory.adapters.dev.graph_neo4j import Neo4jGraphAdapter
 from engramory.adapters.dev.llm_litellm import LiteLLMAdapter
 from engramory.adapters.dev.vector_pg import PgVectorAdapter
 from engramory.adapters.factory import dev_adapters
@@ -92,6 +93,7 @@ async def test_factory_wires_dev_profile(pg_dsn: str) -> None:
     adapters = dev_adapters(pg_dsn)
     assert isinstance(adapters.vector, PgVectorAdapter)
     assert isinstance(adapters.llm, LiteLLMAdapter)
+    assert isinstance(adapters.graph, Neo4jGraphAdapter)
     with pytest.raises(NotImplementedError):
         from engramory.adapters.factory import adapters_for_profile
 
