@@ -70,5 +70,15 @@ async def test_neo4j_live_crud_and_traversal(neo4j_adapter: Neo4jGraphAdapter) -
         assert "test-adr-02" in filtered_ids
         assert "test-adr-01" in filtered_ids
 
+        # 7. Delete edge: (test-adr-03)-[DEPENDS_ON]->(test-adr-02)
+        await adapter.delete_edge(src="test-adr-03", dst="test-adr-02", rel="DEPENDS_ON")
+        remaining_neighbors = await adapter.neighbors(id="test-adr-03", depth=1)
+        assert len(remaining_neighbors) == 0
+
+        # 8. Delete node: test-adr-01
+        await adapter.delete_node(id="test-adr-01")
+        all_remaining = await adapter.neighbors(id="test-adr-02", depth=1)
+        assert "test-adr-01" not in {n["id"] for n in all_remaining}
+
     finally:
         await adapter.close()

@@ -74,5 +74,16 @@ async def test_ingest_adr_knowledge_graph_and_traverse_surface(
         context_nodes = await expand_graph_context(graph, ["ADR-03"], depth=2)
         assert len(context_nodes) > 0
 
+        # Test canonical deletion in PostgreSQL
+        # 1. Delete entity ADR-10 with cascading foreign keys
+        initial_ent_count = await repo.count_graph_entities(tenant_id=tenant_id)
+        await repo.delete_graph_entity("ADR-10", tenant_id=tenant_id)
+        assert await repo.count_graph_entities(tenant_id=tenant_id) == initial_ent_count - 1
+        assert await repo.get_graph_entity("ADR-10", tenant_id=tenant_id) is None
+
+        # 2. Key error on deleting non-existent entity
+        with pytest.raises(KeyError):
+            await repo.delete_graph_entity("NON_EXISTENT", tenant_id=tenant_id)
+
     finally:
         await graph.close()
