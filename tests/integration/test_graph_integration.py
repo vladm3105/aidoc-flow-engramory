@@ -14,8 +14,8 @@ NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_AUTH = (os.getenv("NEO4J_USER", "neo4j"), os.getenv("NEO4J_PASSWORD", "change_me"))
 
 
-async def test_neo4j_live_crud_and_traversal() -> None:
-    adapter = Neo4jGraphAdapter(uri=NEO4J_URI, auth=NEO4J_AUTH)
+async def test_neo4j_live_crud_and_traversal(neo4j_adapter: Neo4jGraphAdapter) -> None:
+    adapter = neo4j_adapter
 
     try:
         # 1. Bootstrap schema constraints

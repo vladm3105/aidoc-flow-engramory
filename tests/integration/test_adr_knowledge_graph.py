@@ -33,9 +33,12 @@ async def test_extract_adr_graph_parses_yaml_files() -> None:
     assert "ADR-03" in entity_ids
 
 
-async def test_ingest_adr_knowledge_graph_and_traverse_surface(pg_dsn: str) -> None:
+async def test_ingest_adr_knowledge_graph_and_traverse_surface(
+    pg_dsn: str,
+    neo4j_adapter: Neo4jGraphAdapter,
+) -> None:
     repo = Repository(pg_dsn)
-    graph = Neo4jGraphAdapter(uri=NEO4J_URI, auth=NEO4J_AUTH)
+    graph = neo4j_adapter
     tenant_id = "tenant-adr-test"
 
     try:
