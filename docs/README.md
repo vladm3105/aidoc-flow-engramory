@@ -12,6 +12,9 @@ Engramory enforces **hierarchical access control** (`agent → project → domai
 
 | Doc | Purpose |
 |---|---|
+| [DATA_FLOW_AND_LIFECYCLE.md](DATA_FLOW_AND_LIFECYCLE.md) | Data flow, document lifecycle, CRUD tool audit, and sequential diagrams |
+| [NEO4J_MIGRATION_ARCHITECTURE.md](NEO4J_MIGRATION_ARCHITECTURE.md) | Neo4j graph engine architecture, dual-store contract, and rebuildable projection |
+| [runbooks/neo4j_ops.md](runbooks/neo4j_ops.md) | Neo4j operations runbook, memory tuning, health verification, and disaster recovery |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Target architecture, multi-agent operating model, SQL schema, hybrid retrieval, and portability matrix |
 | [CORES.md](CORES.md) | The two bounded cores (Memory & Knowledge), access hierarchy, audit loop, and shared spine |
 | [STRATEGY.md](STRATEGY.md) | Build strategy & recommendation: native PostgreSQL spine, swappable processors, and evaluation-led delivery |
