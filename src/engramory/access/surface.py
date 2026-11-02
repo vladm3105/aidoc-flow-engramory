@@ -23,13 +23,14 @@ membership.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from engramory.access.authz import ActorContext, AuthzDecision, TargetScope, authorize
 from engramory.core.models import AgentProfile, Episode, KBSection
 from engramory.core.repository import Repository
+from engramory.ports import GraphPort
 
 # PRD.01.perf.context_token_budget — the default cap on injected context.
 DEFAULT_TOKEN_BUDGET = 2000
@@ -77,8 +78,9 @@ class MemoryHit:
 class AccessSurface:
     """Authorized, scoped, audited read/write interface for all agents."""
 
-    def __init__(self, repository: Repository) -> None:
+    def __init__(self, repository: Repository, *, graph: GraphPort | None = None) -> None:
         self._repo = repository
+        self._graph = graph
 
     async def _decide(
         self, ctx: ActorContext, action: str, target: TargetScope, note: str | None = None
@@ -111,6 +113,7 @@ class AccessSurface:
         tenant_id: str | None = None,
         k: int = 8,
         token_budget: int | None = DEFAULT_TOKEN_BUDGET,
+        expand_graph: bool = False,
     ) -> list[MemoryHit]:
         """Scoped retrieval of distilled memory; every hit is retrieval-logged.
 
@@ -138,7 +141,15 @@ class AccessSurface:
                     break
                 budget -= tokens
             assert memory.id is not None  # hydrated rows always carry id
-            kept.append((memory.id, memory.summary, memory.confidence, memory.provenance, tokens))
+            prov = dict(memory.provenance)
+            if expand_graph and self._graph is not None:
+                try:
+                    neighbors = await self._graph.neighbors(id=memory.id, depth=1)
+                    if neighbors:
+                        prov["related_entities"] = [n.get("id") for n in neighbors]
+                except Exception:  # noqa: BLE001  # reason: graph traversal failure must not abort primary memory retrieval
+                    pass
+            kept.append((memory.id, memory.summary, memory.confidence, prov, tokens))
         retrieval_ids = await self._repo.log_retrievals(
             memory_ids=[m[0] for m in kept],
             tenant_id=target.tenant_id,
@@ -158,6 +169,22 @@ class AccessSurface:
                 kept, retrieval_ids, strict=True
             )
         ]
+
+    async def graph_neighbors(
+        self,
+        ctx: ActorContext,
+        *,
+        id: str,
+        rel: str | None = None,
+        depth: int = 1,
+        scope: str = "project",
+    ) -> Sequence[Mapping[str, Any]]:
+        """Retrieve connected graph neighbors for an entity (ADR-03 / GraphPort)."""
+        target = TargetScope(tenant_id=ctx.tenant_id, scope=scope)
+        await self._decide(ctx, "graph_neighbors", target)
+        if self._graph is None:
+            return []
+        return await self._graph.neighbors(id=id, rel=rel, depth=depth)
 
     async def memory_add(
         self,

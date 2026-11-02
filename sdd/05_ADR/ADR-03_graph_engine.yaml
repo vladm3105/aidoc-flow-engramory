@@ -20,6 +20,7 @@ document_control:
   spec_ready_score: "[Pending]/100"
   revision_history:
     - { version: "1.0", date: "2026-06-22T00:00:00", author: "Engramory team", changes: "Initial ADR (from docs/adr/0003)." }
+    - { version: "1.1", date: "2026-11-01T00:00:00", author: "Engramory team", changes: "Implemented Neo4j CE adapter behind GraphPort and canonical Postgres projection replayer per PLAN-006." }
 
 context:
   problem_statement: |
@@ -96,6 +97,7 @@ architecture_flow:
 implementation_assessment:
   mvp_phases:
     - { phase: "GraphPort + pure-PG adapter", scope: "Edges + recursive CTE", risk: "Deep traversal performance" }
+    - { phase: "Neo4j CE adapter + Postgres projection", scope: "Async Neo4jGraphAdapter behind GraphPort, canonical Postgres entities/relations schema, projection worker", risk: "Resolved" }
   rollback_plan: { strategy: "Re-project graph from canonical store into chosen engine", trigger: "Engine swap", estimated_effort: "Re-run extraction" }
   monitoring_baseline:
     - { metric: "graph query latency", target: "within retrieval p95 budget", alert_threshold: "exceeds budget" }

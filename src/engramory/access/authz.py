@@ -20,6 +20,7 @@ KNOWN_ACTIONS = frozenset(
         "memory_forget",
         "agent_profile_get",
         "knowledge_ingest",
+        "graph_neighbors",
     }
 )
 

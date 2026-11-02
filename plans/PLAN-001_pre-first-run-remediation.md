@@ -51,7 +51,7 @@
 - [ ] **Step 1: Sync main and prune**
 
 ```bash
-cd /opt/data/aidoc-flow/engramory
+cd <workspace>/engramory
 git fetch origin --prune
 git checkout main && git pull --ff-only
 ```
@@ -948,7 +948,7 @@ Note: governance-tier PRs are excluded from auto-merge (`tier=spec`) — founder
 | 43 | Weak protocol test (isclass only) | `assert inspect.isclass(port), f"{name} should be a class"` | tests/test_ports.py:31 |
 | 44 | TODO recommends Option A (AI_REVIEW_TOKEN secret) | `**Recommendation:** Option A as immediate unblock` | TODO.md:57 |
 | 45 | ROADMAP prescribes a different fix (pin-bump to local-config canon) | `bump the ai-review pin to the aidoc-flow-ci version that reads a local` | roadmap/ROADMAP.md:25 |
-| 46 | Canon trust job at HEAD still checks out private operations@main (so ROADMAP's fix is not executable) | `repository: vladm3105/aidoc-flow-operations` | aidoc-flow-ci/.github/workflows/ai-review.yml:107 *(cross-repo; resolve with `--root /opt/data/aidoc-flow`)* |
+| 46 | Canon trust job at HEAD still checks out private operations@main (so ROADMAP's fix is not executable) | `repository: vladm3105/aidoc-flow-operations` | aidoc-flow-ci/.github/workflows/ai-review.yml:107 *(cross-repo; resolve with `--root <workspace>`)* |
 | 47 | ROADMAP date drift (7-08 header vs 7-07 status) | `## Current status (2026-07-07)` | roadmap/ROADMAP.md:17 |
 | 48 | ROADMAP already scopes MVP-1 to feedback loop + eval harness + Mem0 | `Mem0` | roadmap/ROADMAP.md:23 |
 | 49 | CLAUDE.md CI-state paragraph is dated 2026-07-06 with dead "(this PR)" deixis and omits audit-trail/standards-drift | `auto-merge-ai-prs.yml`@ci/v1.5.1 (this PR) | CLAUDE.md:73 |
