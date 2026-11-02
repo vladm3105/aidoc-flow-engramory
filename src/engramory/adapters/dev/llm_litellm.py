@@ -71,7 +71,7 @@ class LiteLLMAdapter:
         req = urllib.request.Request(url, data=data, headers=headers, method="POST")
         with urllib.request.urlopen(req, timeout=self._timeout_sec) as resp:
             raw = resp.read().decode("utf-8")
-            return json.loads(raw)  # type: ignore[no-any-return]
+            return json.loads(raw)  # type: ignore[no-any-return]  # reason: json.loads returns Any and caller parses structure
 
     async def chat(
         self,

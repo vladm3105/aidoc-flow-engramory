@@ -1,12 +1,12 @@
 # PLAN-006: Neo4j Graph Engine Integration & Architecture
 
-> **Status:** In Progress  
+> **Status:** Completed  
 > **Date:** 2026-11-01  
 > **Authors:** Engramory Core Team  
 > **Owning Repo:** `aidoc-flow-engramory`  
 > **Cross-Repo Impact:** `platform-litellm-laya`  
 > **Target Environments:** Local Dev Stack & Pre-Production Staging (`100.98.134.10`)  
-> **Canonical Decisions:** [ADR-01 (PostgreSQL Spine)](../sdd/05_ADR/ADR-01_postgres_spine.yaml), [ADR-02 (Ports & Adapters)](../sdd/05_ADR/ADR-02_ports_and_adapters.yaml), [ADR-03 (Graph Engine: Neo4j over AGE)](../sdd/05_ADR/ADR-03_graph_engine.yaml), [ADR-05 (Rebuildable Projections)](../sdd/05_ADR/ADR-05_rebuildable_projections.yaml)
+> **Canonical Decisions:** [ADR-01 (PostgreSQL Spine)](../sdd/05_ADR/ADR-01_postgres_spine.yaml), [ADR-02 (Ports & Adapters)](../sdd/05_ADR/ADR-02_ports_and_adapters.yaml), [ADR-03 (Graph Engine: Neo4j over AGE)](../sdd/05_ADR/ADR-03_graph_engine.yaml), [ADR-05 (Rebuildable Projections)](../sdd/05_ADR/ADR-05_canonical_memory.yaml)
 
 ---
 
@@ -19,7 +19,7 @@ Neo4j will enable high-performance multi-hop relationship traversals, entity net
 ### Architectural Invariants
 
 1. **PostgreSQL Remains the Single Canonical Source of Truth ([ADR-01](../sdd/05_ADR/ADR-01_postgres_spine.yaml)):**
-   * The graph in Neo4j is strictly a **rebuildable projection** ([ADR-05](../sdd/05_ADR/ADR-05_rebuildable_projections.yaml)).
+   * The graph in Neo4j is strictly a **rebuildable projection** ([ADR-05](../sdd/05_ADR/ADR-05_canonical_memory.yaml)).
    * All canonical entities, relationships, lineage, and document source texts reside in PostgreSQL. If the Neo4j database or volume is lost, a background projection worker or migration script can reconstruct the entire graph from PostgreSQL.
 2. **Ports & Adapters Isolation ([ADR-02](../sdd/05_ADR/ADR-02_ports_and_adapters.yaml)):**
    * Business core (`core/`, `mcp/`, `workers/`) only depends on [`GraphPort`](../src/engramory/ports/graph.py).

@@ -21,6 +21,7 @@ import time
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -128,3 +129,33 @@ def pg_dsn() -> Iterator[str]:
                 f"leaked container {name}: {rm.stderr.decode(errors='replace')}",
                 stacklevel=1,
             )
+
+
+def _neo4j_reachable(host: str = "127.0.0.1", port: int = 7687) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=1.0):
+            return True
+    except OSError:
+        return False
+
+
+@pytest.fixture
+def neo4j_adapter() -> Iterator[Any]:
+    from engramory.adapters.dev.graph_neo4j import Neo4jGraphAdapter
+
+    uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+    auth = (os.getenv("NEO4J_USER", "neo4j"), os.getenv("NEO4J_PASSWORD", "change_me"))
+    host = "127.0.0.1"
+    port = 7687
+    if "://" in uri:
+        netloc = uri.split("://", 1)[1]
+        if ":" in netloc:
+            parts = netloc.split(":")
+            host = parts[0] or "127.0.0.1"
+            port = int(parts[1].split("/")[0])
+    if not _neo4j_reachable(host, port):
+        pytest.skip(
+            "integration: neo4j unavailable — reason: requires running neo4j container on bolt://localhost:7687"
+        )
+    adapter = Neo4jGraphAdapter(uri=uri, auth=auth)
+    yield adapter
