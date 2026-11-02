@@ -13,7 +13,15 @@ from engramory.ports import GraphPort
 
 def test_neo4j_adapter_satisfies_graph_port_interface() -> None:
     adapter = Neo4jGraphAdapter()
-    for method_name in ("upsert_node", "upsert_edge", "neighbors", "delete_node", "delete_edge"):
+    for method_name in (
+        "upsert_node",
+        "upsert_edge",
+        "neighbors",
+        "ancestors",
+        "descendants",
+        "delete_node",
+        "delete_edge",
+    ):
         assert hasattr(adapter, method_name), f"Missing method {method_name}"
         port_sig = inspect.signature(getattr(GraphPort, method_name))
         adapter_sig = inspect.signature(getattr(adapter, method_name))
@@ -152,3 +160,60 @@ async def test_delete_edge_executes_delete_rel() -> None:
     assert "DELETE r" in cypher_query
     assert parameters["src"] == "ADR-03"
     assert parameters["dst"] == "ADR-02"
+
+
+@pytest.mark.asyncio
+async def test_ancestors_executes_directed_path_query() -> None:
+    mock_result = AsyncMock()
+    mock_result.data.return_value = [
+        {"id": "SPEC-03", "labels": ["Entity", "SPEC"], "properties": {"title": "Retrieval"}},
+        {"id": "ADR-03", "labels": ["Entity", "ADR"], "properties": {"title": "Graph Engine"}},
+    ]
+    mock_session = AsyncMock()
+    mock_session.run.return_value = mock_result
+    mock_driver = MagicMock()
+    mock_driver.session.return_value.__aenter__.return_value = mock_session
+
+    adapter = Neo4jGraphAdapter(driver=mock_driver)
+    results = await adapter.ancestors(id="IPLAN-03", depth=4)
+
+    assert len(results) == 2
+    assert results[0]["id"] == "SPEC-03"
+    assert results[0]["labels"] == ["SPEC"]
+    assert results[1]["id"] == "ADR-03"
+
+    mock_session.run.assert_awaited_once()
+    call_args = mock_session.run.await_args
+    cypher_query = call_args[0][0]
+    parameters = call_args[0][1]
+
+    assert "MATCH (n:Entity {id: $id})-[*1..4]->(m:Entity)" in cypher_query
+    assert parameters["id"] == "IPLAN-03"
+
+
+@pytest.mark.asyncio
+async def test_descendants_executes_directed_inpath_query() -> None:
+    mock_result = AsyncMock()
+    mock_result.data.return_value = [
+        {"id": "SPEC-03", "labels": ["Entity", "SPEC"], "properties": {"title": "Retrieval"}},
+        {"id": "IPLAN-03", "labels": ["Entity", "IPLAN"], "properties": {"title": "Build"}},
+    ]
+    mock_session = AsyncMock()
+    mock_session.run.return_value = mock_result
+    mock_driver = MagicMock()
+    mock_driver.session.return_value.__aenter__.return_value = mock_session
+
+    adapter = Neo4jGraphAdapter(driver=mock_driver)
+    results = await adapter.descendants(id="ADR-03", depth=5)
+
+    assert len(results) == 2
+    assert results[0]["id"] == "SPEC-03"
+    assert results[1]["id"] == "IPLAN-03"
+
+    mock_session.run.assert_awaited_once()
+    call_args = mock_session.run.await_args
+    cypher_query = call_args[0][0]
+    parameters = call_args[0][1]
+
+    assert "MATCH (n:Entity {id: $id})<-[*1..5]-(m:Entity)" in cypher_query
+    assert parameters["id"] == "ADR-03"

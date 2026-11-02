@@ -36,12 +36,15 @@ Engramory separates persistent canonical state and relational graph traversal ac
 
 ## 2. Tool & Capability Inventory: Insert, Update, Delete & Retrieve
 
+> [!NOTE]
+> For the complete architecture, real-world scale evaluation (1,180 files in `b-local-privy`), layer taxonomy, and sequence diagrams across all 10 SDD layers (`01_BRD` to `10_EVAL`), see [SDD Knowledge Graph Architecture](SDD_KNOWLEDGE_GRAPH_ARCHITECTURE.md).
+
 | Surface / Layer | Insertion / Add | Update / Modify | Deletion / Retire | Retrieval / Query |
 |---|---|---|---|---|
-| **Agent Face (MCP / SPEC-01)** | `memory_add`<br>`knowledge_ingest` | Append new version with `supersedes`<br>`knowledge_ingest` (upsert) | `memory_forget` (soft retire; sets `valid_to=now()`) | `memory_search`<br>`graph_neighbors`<br>`agent_profile_get` |
-| **Access Surface (`AccessSurface`)** | `memory_add(...)`<br>`knowledge_ingest(...)` | `knowledge_ingest(...)`<br>Superseding append | `memory_forget(...)` (soft delete) | `memory_search(..., expand_graph=True)`<br>`graph_neighbors(id, depth)` |
-| **Canonical Repo (`Repository`)** | `add_episode`<br>`add_memory`<br>`upsert_kb_section`<br>`upsert_graph_entity`<br>`upsert_graph_relation` | `upsert_kb_section` (`ON CONFLICT DO UPDATE`)<br>`upsert_graph_entity` (`ON CONFLICT DO UPDATE`)<br>`upsert_graph_relation` (`ON CONFLICT DO UPDATE`) | `retire_memory` (soft: `status='superseded'`)<br>`delete_graph_entity` (hard: cascading FKs)<br>`delete_graph_relation` (hard) | `get_memories`<br>`get_kb_sections`<br>`get_graph_entity`<br>`get_graph_entities`<br>`get_graph_relations` |
-| **Graph Adapter (`Neo4jGraphAdapter`)** | `upsert_node`<br>`upsert_edge` | `upsert_node` (`MERGE ... SET +=`)<br>`upsert_edge` (`MERGE ... SET +=`) | `delete_node` (`DETACH DELETE n`)<br>`delete_edge` (`MATCH ()-[r]->() DELETE r`) | `neighbors(id, rel, depth)` (1..5 hops) |
+| **Agent Face (MCP / SPEC-01)** | `memory_add`<br>`knowledge_ingest`<br>`sdd_ingest` | Append new version with `supersedes`<br>`knowledge_ingest` (upsert) | `memory_forget` (soft retire; sets `valid_to=now()`) | `memory_search`<br>`graph_neighbors`<br>`context_slice`<br>`blast_radius`<br>`agent_profile_get` |
+| **Access Surface (`AccessSurface`)** | `memory_add(...)`<br>`knowledge_ingest(...)` | `knowledge_ingest(...)`<br>Superseding append | `memory_forget(...)` (soft delete) | `memory_search(..., expand_graph=True)`<br>`graph_neighbors(id, depth)`<br>`context_slice(task_id, depth)`<br>`blast_radius(doc_id, depth)` |
+| **Canonical Repo (`Repository`)** | `add_episode`<br>`add_memory`<br>`upsert_kb_section`<br>`upsert_graph_entity`<br>`upsert_graph_relation` | `upsert_kb_section` (`ON CONFLICT DO UPDATE`)<br>`upsert_graph_entity` (`ON CONFLICT DO UPDATE`)<br>`upsert_graph_relation` (`ON CONFLICT DO UPDATE`) | `retire_memory` (soft: `status='superseded'`)<br>`delete_graph_entity` (hard: cascading FKs)<br>`delete_graph_relation` (hard) | `get_memories`<br>`get_kb_sections`<br>`get_graph_entity`<br>`get_graph_entities`<br>`get_graph_relations`<br>`count_graph_entities`<br>`count_graph_relations` |
+| **Graph Adapter (`Neo4jGraphAdapter`)** | `upsert_node`<br>`upsert_edge` | `upsert_node` (`MERGE ... SET +=`)<br>`upsert_edge` (`MERGE ... SET +=`) | `delete_node` (`DETACH DELETE n`)<br>`delete_edge` (`MATCH ()-[r]->() DELETE r`) | `neighbors(id, rel, depth)`<br>`ancestors(id, rel, depth)`<br>`descendants(id, rel, depth)` |
 
 ---
 

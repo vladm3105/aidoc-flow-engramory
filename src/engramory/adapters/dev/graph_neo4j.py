@@ -140,6 +140,70 @@ class Neo4jGraphAdapter:
                 for record in records
             ]
 
+    async def ancestors(
+        self,
+        *,
+        id: str,
+        rel: str | None = None,
+        depth: int = 6,
+    ) -> Sequence[Mapping[str, Any]]:
+        """Return upstream ancestor nodes reachable from `id` (directed out-edges)."""
+        safe_depth = max(1, min(depth, 10))
+        if rel:
+            sanitized_rel = _sanitize_ident(rel, "relationship type")
+            rel_pattern = f":`{sanitized_rel}`*1..{safe_depth}"
+        else:
+            rel_pattern = f"*1..{safe_depth}"
+
+        query = f"""
+        MATCH (n:Entity {{id: $id}})-[{rel_pattern}]->(m:Entity)
+        WHERE m.id <> $id
+        RETURN DISTINCT m.id AS id, labels(m) AS labels, properties(m) AS properties
+        """
+        async with self._driver.session() as session:
+            result = await session.run(query, {"id": id})
+            records = await result.data()
+            return [
+                {
+                    "id": record["id"],
+                    "labels": [lbl for lbl in record["labels"] if lbl != "Entity"],
+                    "properties": record["properties"],
+                }
+                for record in records
+            ]
+
+    async def descendants(
+        self,
+        *,
+        id: str,
+        rel: str | None = None,
+        depth: int = 6,
+    ) -> Sequence[Mapping[str, Any]]:
+        """Return downstream descendant nodes reachable from `id` (directed in-edges)."""
+        safe_depth = max(1, min(depth, 10))
+        if rel:
+            sanitized_rel = _sanitize_ident(rel, "relationship type")
+            rel_pattern = f":`{sanitized_rel}`*1..{safe_depth}"
+        else:
+            rel_pattern = f"*1..{safe_depth}"
+
+        query = f"""
+        MATCH (n:Entity {{id: $id}})<-[{rel_pattern}]-(m:Entity)
+        WHERE m.id <> $id
+        RETURN DISTINCT m.id AS id, labels(m) AS labels, properties(m) AS properties
+        """
+        async with self._driver.session() as session:
+            result = await session.run(query, {"id": id})
+            records = await result.data()
+            return [
+                {
+                    "id": record["id"],
+                    "labels": [lbl for lbl in record["labels"] if lbl != "Entity"],
+                    "properties": record["properties"],
+                }
+                for record in records
+            ]
+
     async def delete_node(self, *, id: str) -> None:
         """Delete a node and its attached relationships from Neo4j."""
         query = """

@@ -186,6 +186,36 @@ class AccessSurface:
             return []
         return await self._graph.neighbors(id=id, rel=rel, depth=depth)
 
+    async def context_slice(
+        self,
+        ctx: ActorContext,
+        *,
+        task_id: str,
+        depth: int = 6,
+        scope: str = "project",
+    ) -> Sequence[Mapping[str, Any]]:
+        """Retrieve upstream contract closure (ancestors) for an SDD task node."""
+        target = TargetScope(tenant_id=ctx.tenant_id, scope=scope)
+        await self._decide(ctx, "context_slice", target)
+        if self._graph is None:
+            return []
+        return await self._graph.ancestors(id=task_id, depth=depth)
+
+    async def blast_radius(
+        self,
+        ctx: ActorContext,
+        *,
+        doc_id: str,
+        depth: int = 6,
+        scope: str = "project",
+    ) -> Sequence[Mapping[str, Any]]:
+        """Retrieve downstream dependent nodes (descendants) affected by a change."""
+        target = TargetScope(tenant_id=ctx.tenant_id, scope=scope)
+        await self._decide(ctx, "blast_radius", target)
+        if self._graph is None:
+            return []
+        return await self._graph.descendants(id=doc_id, depth=depth)
+
     async def memory_add(
         self,
         ctx: ActorContext,

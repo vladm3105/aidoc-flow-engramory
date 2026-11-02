@@ -29,6 +29,18 @@ class GraphPort(Protocol):
         """Return nodes reachable from `id` within `depth` hops (bounded traversal)."""
         ...
 
+    async def ancestors(
+        self, *, id: str, rel: str | None = None, depth: int = 6
+    ) -> Sequence[Mapping[str, Any]]:
+        """Return upstream ancestor nodes reachable from `id` along directed out-edges."""
+        ...
+
+    async def descendants(
+        self, *, id: str, rel: str | None = None, depth: int = 6
+    ) -> Sequence[Mapping[str, Any]]:
+        """Return downstream descendant nodes reachable from `id` along directed in-edges."""
+        ...
+
     async def delete_node(self, *, id: str) -> None:
         """Delete a node and its attached relationships."""
         ...
