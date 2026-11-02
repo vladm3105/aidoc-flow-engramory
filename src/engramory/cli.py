@@ -35,6 +35,7 @@ from typing import Any
 from engramory.access.authz import ActorContext
 from engramory.access.surface import AccessSurface, AuthzError, GovernedWriteRejected
 from engramory.adapters.factory import dev_adapters, require_dev_profile
+from engramory.core.kb_graph import ingest_sdd_knowledge_graph
 from engramory.core.models import ValidationError
 from engramory.core.repository import Repository, StoreUnavailable
 from engramory.workers.distillation import reflect
@@ -185,7 +186,8 @@ def _run_with_surface(
     human: Callable[[dict[str, Any]], str],
 ) -> int:
     config = _load_config(getattr(args, "config", None))
-    surface = AccessSurface(Repository(config.dsn))
+    adapters = dev_adapters(config.dsn)
+    surface = AccessSurface(Repository(config.dsn), graph=adapters.graph)
     payload = asyncio.run(op(surface, config.ctx))
     _emit(args.json, payload, human(payload))
     return 0
@@ -334,6 +336,131 @@ def _cmd_graph_reproject(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_sdd_ingest(args: argparse.Namespace) -> int:
+    """Ingest SDD multi-layer corpus into PostgreSQL and project to Neo4j."""
+    config = _load_config(getattr(args, "config", None))
+    adapters = dev_adapters(config.dsn)
+    repo = Repository(config.dsn)
+    sdd_root = Path(args.sdd_root)
+    tenant_id = args.tenant_id or config.ctx.tenant_id
+    project_id = args.project_id or config.ctx.project_id
+
+    async def run_ingest() -> dict[str, Any]:
+        num_ent, num_rel = await ingest_sdd_knowledge_graph(
+            repo,
+            adapters.graph,
+            sdd_root=sdd_root,
+            tenant_id=tenant_id,
+            project_id=project_id,
+        )
+        return {
+            "status": "ok",
+            "sdd_root": str(sdd_root),
+            "tenant_id": tenant_id,
+            "project_id": project_id,
+            "entities_ingested": num_ent,
+            "relations_ingested": num_rel,
+        }
+
+    payload = asyncio.run(run_ingest())
+    msg = (
+        f"ingested SDD corpus from '{sdd_root}': "
+        f"{payload['entities_ingested']} entities, {payload['relations_ingested']} relations "
+        f"(project '{project_id}', tenant '{tenant_id}')"
+    )
+    _emit(args.json, payload, msg)
+    return 0
+
+
+def _cmd_sdd_slice(args: argparse.Namespace) -> int:
+    """Compute deterministic upstream ancestor closure for an IPLAN task."""
+    scope = getattr(args, "scope", "project")
+
+    async def op(surface: AccessSurface, ctx: ActorContext) -> dict[str, Any]:
+        ancestors = await surface.context_slice(
+            ctx,
+            task_id=args.task,
+            depth=args.depth,
+            scope=scope,
+        )
+        return {
+            "task_id": args.task,
+            "depth": args.depth,
+            "ancestor_count": len(ancestors),
+            "ancestors": list(ancestors),
+        }
+
+    def format_slice(p: dict[str, Any]) -> str:
+        ancestors = p["ancestors"]
+        if not ancestors:
+            return f"no upstream ancestors found for task {p['task_id']}"
+        lines = [f"Context slice for {p['task_id']} ({len(ancestors)} upstream contracts):"]
+        for a in ancestors:
+            labels = ",".join(a.get("labels", []))
+            title = a.get("properties", {}).get("name", "")
+            lines.append(f"  - [{labels}] {a.get('id')}: {title}")
+        return "\n".join(lines)
+
+    return _run_with_surface(args, op, format_slice)
+
+
+def _cmd_sdd_blast_radius(args: argparse.Namespace) -> int:
+    """Compute downstream descendant impact of modifying a document."""
+    scope = getattr(args, "scope", "project")
+
+    async def op(surface: AccessSurface, ctx: ActorContext) -> dict[str, Any]:
+        descendants = await surface.blast_radius(
+            ctx,
+            doc_id=args.doc,
+            depth=args.depth,
+            scope=scope,
+        )
+        return {
+            "doc_id": args.doc,
+            "depth": args.depth,
+            "impact_count": len(descendants),
+            "descendants": list(descendants),
+        }
+
+    def format_blast(p: dict[str, Any]) -> str:
+        descendants = p["descendants"]
+        if not descendants:
+            return f"no downstream dependents found for document {p['doc_id']}"
+        lines = [
+            f"Blast radius for {p['doc_id']} ({len(descendants)} impacted downstream artifacts):"
+        ]
+        for d in descendants:
+            labels = ",".join(d.get("labels", []))
+            title = d.get("properties", {}).get("name", "")
+            lines.append(f"  - [{labels}] {d.get('id')}: {title}")
+        return "\n".join(lines)
+
+    return _run_with_surface(args, op, format_blast)
+
+
+def _cmd_mcp_serve(args: argparse.Namespace) -> int:
+    """Run the MCP Gateway JSON-RPC server over stdio (SPEC-01 / ADR-10)."""
+    from engramory.mcp.server import McpServer
+
+    config = _load_config(getattr(args, "config", None))
+    adapters = dev_adapters(config.dsn)
+    repo = Repository(config.dsn)
+    surface = AccessSurface(repo, graph=adapters.graph)
+
+    async def do_ingest(sdd_root: str, tenant_id: str, project_id: str) -> tuple[int, int]:
+        return await ingest_sdd_knowledge_graph(
+            repo,
+            adapters.graph,
+            sdd_root=sdd_root,
+            tenant_id=tenant_id,
+            project_id=project_id,
+        )
+
+    server = McpServer(surface, config.ctx, ingest_fn=do_ingest)
+    asyncio.run(server.run_stdio())
+    return 0
+
+
 def _cmd_status(args: argparse.Namespace) -> int:
     """Dev-tier ops command: store reachability + tenant counts."""
     config = _load_config(getattr(args, "config", None))
@@ -444,6 +571,50 @@ def _build_parser() -> argparse.ArgumentParser:
         "--tenant-id", default=None, help="target tenant (default: from config)"
     )
     p_greproject.set_defaults(func=_cmd_graph_reproject)
+
+    p_sdd = sub.add_parser("sdd", help="SDD knowledge graph & context slicing tools")
+    sdd_sub = p_sdd.add_subparsers(dest="sdd_command", required=True)
+
+    p_sdd_ingest = sdd_sub.add_parser(
+        "ingest", help="ingest multi-layer SDD corpus into Postgres and Neo4j"
+    )
+    p_sdd_ingest.add_argument(
+        "--sdd-root", default="sdd", help="root directory of SDD layers (default: sdd)"
+    )
+    p_sdd_ingest.add_argument(
+        "--project-id", default=None, help="target project id (default: from config)"
+    )
+    p_sdd_ingest.add_argument(
+        "--tenant-id", default=None, help="target tenant id (default: from config)"
+    )
+    p_sdd_ingest.set_defaults(func=_cmd_sdd_ingest)
+
+    p_sdd_slice = sdd_sub.add_parser(
+        "slice", help="compute deterministic upstream ancestor context slice for a task"
+    )
+    p_sdd_slice.add_argument("--task", required=True, help="task id (e.g. IPLAN-03)")
+    p_sdd_slice.add_argument(
+        "--depth", type=int, default=6, help="maximum traversal depth (default: 6)"
+    )
+    p_sdd_slice.add_argument(
+        "--scope", default="project", help="visibility scope (default: project)"
+    )
+    p_sdd_slice.set_defaults(func=_cmd_sdd_slice)
+
+    p_sdd_blast = sdd_sub.add_parser(
+        "blast-radius", help="compute downstream blast radius impact of a document change"
+    )
+    p_sdd_blast.add_argument("--doc", required=True, help="document id (e.g. ADR-03 or SPEC-03)")
+    p_sdd_blast.add_argument(
+        "--depth", type=int, default=6, help="maximum traversal depth (default: 6)"
+    )
+    p_sdd_blast.add_argument(
+        "--scope", default="project", help="visibility scope (default: project)"
+    )
+    p_sdd_blast.set_defaults(func=_cmd_sdd_blast_radius)
+
+    p_mcp = sub.add_parser("mcp", help="run MCP gateway server over stdio")
+    p_mcp.set_defaults(func=_cmd_mcp_serve)
 
     p_status = sub.add_parser("status", help="ops: store reachability + counts")
     p_status.set_defaults(func=_cmd_status)
