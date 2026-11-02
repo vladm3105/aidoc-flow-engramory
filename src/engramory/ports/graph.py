@@ -28,3 +28,11 @@ class GraphPort(Protocol):
     ) -> Sequence[Mapping[str, Any]]:
         """Return nodes reachable from `id` within `depth` hops (bounded traversal)."""
         ...
+
+    async def delete_node(self, *, id: str) -> None:
+        """Delete a node and its attached relationships."""
+        ...
+
+    async def delete_edge(self, *, src: str, dst: str, rel: str | None = None) -> None:
+        """Delete relationship(s) between src and dst."""
+        ...

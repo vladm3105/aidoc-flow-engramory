@@ -18,7 +18,7 @@ Per **ADR-03**, Engramory adopts **Neo4j Community Edition (CE)** in development
 > **PostgreSQL is the single canonical source of truth.**  
 > Neo4j is **never** an independent source of truth. The Neo4j graph is a **derived, rebuildable projection** of entities, relations, and lineage recorded in PostgreSQL.
 
-If a Neo4j instance or its storage volume is corrupted, upgraded, or destroyed, the entire graph can be deterministically re-projected from PostgreSQL with zero data loss.
+If a Neo4j instance or its storage volume is corrupted, upgraded, or destroyed, the entire graph can be deterministically re-projected from PostgreSQL with zero data loss. See [Data Flow, Lifecycle & Sequential Diagrams](DATA_FLOW_AND_LIFECYCLE.md) for detailed mutation and retrieval flows.
 
 ---
 

@@ -139,3 +139,26 @@ class Neo4jGraphAdapter:
                 }
                 for record in records
             ]
+
+    async def delete_node(self, *, id: str) -> None:
+        """Delete a node and its attached relationships from Neo4j."""
+        query = """
+        MATCH (n:Entity {id: $id})
+        DETACH DELETE n
+        """
+        async with self._driver.session() as session:
+            await session.run(query, {"id": id})
+
+    async def delete_edge(self, *, src: str, dst: str, rel: str | None = None) -> None:
+        """Delete relationship(s) between src and dst from Neo4j."""
+        if rel:
+            sanitized_rel = _sanitize_ident(rel, "relationship type")
+            rel_clause = f"[r:`{sanitized_rel}`]"
+        else:
+            rel_clause = "[r]"
+        query = f"""
+        MATCH (a:Entity {{id: $src}})-{rel_clause}->(b:Entity {{id: $dst}})
+        DELETE r
+        """
+        async with self._driver.session() as session:
+            await session.run(query, {"src": src, "dst": dst})

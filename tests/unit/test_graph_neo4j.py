@@ -13,7 +13,7 @@ from engramory.ports import GraphPort
 
 def test_neo4j_adapter_satisfies_graph_port_interface() -> None:
     adapter = Neo4jGraphAdapter()
-    for method_name in ("upsert_node", "upsert_edge", "neighbors"):
+    for method_name in ("upsert_node", "upsert_edge", "neighbors", "delete_node", "delete_edge"):
         assert hasattr(adapter, method_name), f"Missing method {method_name}"
         port_sig = inspect.signature(getattr(GraphPort, method_name))
         adapter_sig = inspect.signature(getattr(adapter, method_name))
@@ -113,3 +113,42 @@ async def test_neighbors_parses_records() -> None:
     assert neighbors[0]["id"] == "ADR-02"
     assert neighbors[0]["labels"] == ["ADR"]
     assert neighbors[0]["properties"]["title"] == "Ports and Adapters"
+
+
+@pytest.mark.asyncio
+async def test_delete_node_executes_detach_delete() -> None:
+    mock_session = AsyncMock()
+    mock_driver = MagicMock()
+    mock_driver.session.return_value.__aenter__.return_value = mock_session
+
+    adapter = Neo4jGraphAdapter(driver=mock_driver)
+    await adapter.delete_node(id="ADR-01")
+
+    mock_session.run.assert_awaited_once()
+    call_args = mock_session.run.await_args
+    cypher_query = call_args[0][0]
+    parameters = call_args[0][1]
+
+    assert "MATCH (n:Entity {id: $id})" in cypher_query
+    assert "DETACH DELETE n" in cypher_query
+    assert parameters["id"] == "ADR-01"
+
+
+@pytest.mark.asyncio
+async def test_delete_edge_executes_delete_rel() -> None:
+    mock_session = AsyncMock()
+    mock_driver = MagicMock()
+    mock_driver.session.return_value.__aenter__.return_value = mock_session
+
+    adapter = Neo4jGraphAdapter(driver=mock_driver)
+    await adapter.delete_edge(src="ADR-03", dst="ADR-02", rel="DEPENDS_ON")
+
+    mock_session.run.assert_awaited_once()
+    call_args = mock_session.run.await_args
+    cypher_query = call_args[0][0]
+    parameters = call_args[0][1]
+
+    assert "MATCH (a:Entity {id: $src})-[r:`DEPENDS_ON`]->(b:Entity {id: $dst})" in cypher_query
+    assert "DELETE r" in cypher_query
+    assert parameters["src"] == "ADR-03"
+    assert parameters["dst"] == "ADR-02"

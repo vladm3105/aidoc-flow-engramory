@@ -600,6 +600,40 @@ class Repository:
             assert row is not None
             return str(row["id"])
 
+    async def delete_graph_entity(self, id: str, *, tenant_id: str = "default") -> None:
+        """Delete a canonical graph entity. Foreign keys cascade-delete relations."""
+        async with self._conn() as conn:
+            cur = await conn.execute(
+                """
+                DELETE FROM graph_entities
+                WHERE tenant_id = %(tenant_id)s AND id = %(id)s
+                """,
+                {"tenant_id": tenant_id, "id": id},
+            )
+            if cur.rowcount != 1:
+                raise KeyError(id)
+
+    async def delete_graph_relation(
+        self, *, src_id: str, dst_id: str, rel_type: str, tenant_id: str = "default"
+    ) -> None:
+        """Delete a canonical graph relation."""
+        async with self._conn() as conn:
+            cur = await conn.execute(
+                """
+                DELETE FROM graph_relations
+                WHERE tenant_id = %(tenant_id)s AND src_id = %(src_id)s
+                  AND dst_id = %(dst_id)s AND rel_type = %(rel_type)s
+                """,
+                {
+                    "tenant_id": tenant_id,
+                    "src_id": src_id,
+                    "dst_id": dst_id,
+                    "rel_type": rel_type,
+                },
+            )
+            if cur.rowcount != 1:
+                raise KeyError(f"{src_id}->{dst_id}:{rel_type}")
+
     async def get_graph_entity(self, id: str, *, tenant_id: str = "default") -> GraphEntity | None:
         """Retrieve a canonical graph entity by id and tenant_id."""
         async with self._conn() as conn:
