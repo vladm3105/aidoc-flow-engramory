@@ -124,15 +124,40 @@ flowchart TD
      - `S3_PORT=9000`
      - `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318`
      - `AIDOC_TELEMETRY_NETWORK=platform-mesh`
-4. **Deploy Script Authoring**:
+4. **Synchronize PostgreSQL Credentials**:
+   - Explicitly synchronize the `engramory` database role password on `stage-postgres18` via `stage_bootstrap` before service startup:
+
+     ```bash
+     sudo -u platform XDG_RUNTIME_DIR=/run/user/1004 docker exec stage-postgres18 \
+       psql -U stage_bootstrap -d stage_control \
+       -c "ALTER USER engramory WITH PASSWORD '<staging-secret>';"
+     ```
+
+5. **Deploy Script Authoring**:
    - Create `scripts/deploy-stage.sh` in repository adhering to `technology_stack 16 §3.2` and mirroring `platform-litellm` patterns.
 
 ### Phase 2: Database Schema & Migration Verification
 
 1. **Verify PostgreSQL Tables on `stage-postgres18`**:
    - Confirm pre-existing tables in `engramory` database (`agent_profiles`, `audit_records`, `consolidation_runs`, `episodes`, `graph_entities`, `graph_relations`, `kb_sections`, `memories`, `memory_retrievals`).
-2. **Execute Incremental Migrations**:
-   - Apply migrations `0001` through `0007` to ensure all columns, indices, and constraints are in exact alignment.
+2. **Execute Incremental Migrations via SQL Pipeline**:
+   - Apply migrations `0001` through `0007` sequentially via `psql` execution into `stage-postgres18`:
+
+     ```bash
+     for sql in $(ls /home/platform/platform-engramory/db/migrations/*.sql | sort); do
+       echo "Applying $sql..."
+       sudo -u platform XDG_RUNTIME_DIR=/run/user/1004 docker exec -i stage-postgres18 \
+         psql -U stage_bootstrap -d engramory < "$sql"
+     done
+     ```
+
+   - Grant table and sequence permissions to `engramory`:
+
+     ```sql
+     GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO engramory;
+     GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO engramory;
+     ```
+
    - Verify HNSW cosine index on `memories.embedding`:
 
      ```sql
@@ -146,12 +171,16 @@ flowchart TD
 
 ### Phase 3: Stage Compose Orchestration & Service Startup
 
-1. **Compose Configuration Authoring**:
-   - Author `/home/platform/platform-engramory/compose.platform.yaml` for staging:
-     - `engramory-mcp`: Dual SSE/HTTP server publishing host port `8005:8000`, attached to `platform-mesh`.
+1. **Standalone Production Compose Configuration**:
+   - Author `/home/platform/platform-engramory/compose.platform.yaml` as a standalone compose file in the `platform` rootless namespace (mirroring `platform-litellm/compose.platform.yaml` and `platform-temporal/compose.yaml`):
+     - Declares ONLY `engramory-mcp`, `engramory-worker`, `engramory-seaweedfs`, and `seaweedfs-init`.
+     - Omits local `postgres` and `neo4j` services; all persistence targets `stage-postgres18:5432` and `stage-neo4j:7687` directly across `platform-mesh`.
+     - Mounts ecosystem repositories root read-only: `${HOST_SPOKE_DEV_PATH:-/opt/data}:/workspace:ro` for SDD ingestion.
+     - `engramory-mcp`: Dual SSE/HTTP server publishing host port `8005:8000`, attached to `platform-mesh`. Includes healthcheck probing `http://localhost:8000/`.
      - `engramory-worker`: Distillation loop with 300s cycle, attached to `platform-mesh`.
-     - `engramory-seaweedfs`: Artifact object store publishing host port `9000:9000`, attached to `platform-mesh`.
+     - `engramory-seaweedfs`: Artifact object store publishing ONLY host port `9000:9000` (internal filer :8888 and master :9333 not exposed to host), attached to `platform-mesh`.
      - `seaweedfs-init`: One-shot bucket initializer for `s3.bucket.create -name engramory`.
+     - `networks`: Declares `platform-mesh` as `external: true`.
 2. **Build Container Images on Stage Host**:
    - Sync clean repository tree to `/home/platform/platform-engramory` via `rsync`.
    - Build multi-stage production images in the platform namespace:
@@ -168,13 +197,31 @@ flowchart TD
 ### Phase 4: Multi-Project SDD Corpus Ingestion
 
 1. **Ingest Core Repository (`aidoc-flow-engramory`)**:
-   - Run `engramory sdd ingest --sdd-root sdd/ --project-id aidoc-flow-engramory --tenant-id default`.
+   - Execute ingestion inside container with direct access to mounted `/workspace`:
+
+     ```bash
+     sudo -u platform XDG_RUNTIME_DIR=/run/user/1004 docker exec engramory-mcp \
+       engramory sdd ingest --sdd-root /workspace/aidoc-flow/engramory/sdd --project-id aidoc-flow-engramory --tenant-id default
+     ```
+
    - Validate creation of BRD, PRD, SYS, SRS, ADR, SPEC, and BDD entities.
 2. **Ingest Framework Authority (`aidoc-flow-framework`)**:
-   - Run `engramory sdd ingest --sdd-root ../aidoc-flow-framework/docs/sdd --project-id aidoc-framework --tenant-id default`.
+   - Run ingestion for framework 10-layer SDD specifications:
+
+     ```bash
+     sudo -u platform XDG_RUNTIME_DIR=/run/user/1004 docker exec engramory-mcp \
+       engramory sdd ingest --sdd-root /workspace/aidoc-flow/aidoc-flow-framework/docs/sdd --project-id aidoc-framework --tenant-id default
+     ```
+
    - Verify cross-project graph isolation and non-colliding entity identifiers.
 3. **Ingest Edge Context CLI (`aidoc-context-tools`)**:
-   - Run `engramory sdd ingest --sdd-root ../aidoc-context-tools/docs/sdd --project-id aidoc-context-tools --tenant-id default`.
+   - Run ingestion for context tools specifications:
+
+     ```bash
+     sudo -u platform XDG_RUNTIME_DIR=/run/user/1004 docker exec engramory-mcp \
+       engramory sdd ingest --sdd-root /workspace/aidoc-flow/aidoc-context-tools/docs/sdd --project-id aidoc-context-tools --tenant-id default
+     ```
+
 4. **Graph Projection Validation in Neo4j**:
    - Run Cypher query on `stage-neo4j`:
 
@@ -230,9 +277,18 @@ flowchart TD
 
 ### Pass 2 - 2026-11-03 - independent
 
-- Independent reviewer verification:
-  - Verified semantic truth: All symbols (`container_name: engramory-postgres`, `container_name: engramory-seaweedfs`, `container_name: engramory-mcp`, `"${MCP_PORT:-8000}:8000"`, `container_name: engramory-worker`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `AIDOC_TELEMETRY_NETWORK`, `embedding`, `idx_memories_embedding_hnsw`, `vector(1536)`, `graph_entities`, `serverInfo`, `run_worker_loop`, `Coroot Community 1.27.4`) exist and accurately represent production behavior.
-  - Verified completeness: Staging host network topology (`platform-mesh`), ports (`8005`, `9000`), credentials, database schema version, and multi-project corpus sync are exhaustively covered.
-  - Verified no wrong assumptions: Discovered port 8000 conflict with `aidoc-cli-agent-runner` on staging host and properly accommodated via `MCP_PORT=8005`.
-  - Zero open or load-bearing findings.
-  - **Result:** ready — no further findings.
+- Independent reviewer findings (`verified-planning-reviewer`):
+  1. `[load-bearing]` Compose boundary ambiguity: using `compose.platform.yaml` as an overlay would attempt to start duplicate `postgres` and `neo4j` containers on stage, conflicting with `stage-postgres18` and `stage-neo4j`. Fold: Defined `compose.platform.yaml` as a standalone compose file omitting local database services and targeting shared instances across `platform-mesh`.
+  2. `[load-bearing]` Staging PostgreSQL password mismatch risk: user `engramory` exists on `stage-postgres18` but password was not synchronized with `.env.stage`. Fold: Added explicit `ALTER USER engramory WITH PASSWORD` pre-flight command in Phase 1 via `stage_bootstrap`.
+  3. `[load-bearing]` Missing migration execution mechanism: repository lacks automated CLI migration command. Fold: Specified concrete sequential `psql` loop executing `db/migrations/*.sql` and granting schema rights in Phase 2.
+  4. `[load-bearing]` Container filesystem isolation during SDD ingestion: container lacked access to host ecosystem repositories (`aidoc-framework`, `aidoc-context-tools`). Fold: Added `${HOST_SPOKE_DEV_PATH:-/opt/data}:/workspace:ro` read-only mount to `engramory-mcp` in `compose.platform.yaml` and updated ingestion paths to `/workspace/...`.
+  5. `[load-bearing]` Network resolution redundancy: overlaying `docker-compose.telemetry-net.yml` created redundant network definitions. Fold: Attached all services directly to `platform-mesh: {external: true}` in `compose.platform.yaml`.
+  6. `[minor]` SeaweedFS host port safety: Fold: Restricted host port publication to S3 (`9000:9000`), keeping filer and master ports internal to `platform-mesh`.
+
+### Pass 3 - 2026-11-03 - independent
+
+- Re-review of folded plan:
+  - Verified all 5 load-bearing findings successfully resolved.
+  - Confirmed standalone compose structure matches staging platform standards (`platform-litellm`, `platform-temporal`).
+  - Confirmed `/workspace` mount enables cross-repository SDD ingestion without host Python/uv dependencies.
+  - **Result:** ready — zero remaining load-bearing findings.
