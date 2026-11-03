@@ -51,25 +51,29 @@ curl -s -f http://localhost:7474 > /dev/null && echo "Neo4j HTTP: OK"
 docker exec engramory-neo4j cypher-shell -u neo4j -p change_me "RETURN 1 AS alive;"
 ```
 
-### 3.2 Ingesting Knowledge Base ADR Graph
+### 3.2 Ingesting Multi-Layer SDD Knowledge Graph
 
-To extract the structured ADR knowledge graph from markdown/yaml specifications, persist to canonical PostgreSQL, and project into Neo4j:
+To extract the structured SDD knowledge graph from markdown/yaml specifications (across BRD, PRD, SYS, SRS, ADR, ARCH, DSG, IMP, TEST, EVAL layers), persist to canonical PostgreSQL, and project into Neo4j:
 
 ```bash
-# Run via python / worker entrypoint
-python -c "
-import asyncio
-from engramory.adapters.factory import dev_adapters
-from engramory.core.kb_graph import sync_adr_knowledge_graph
+# Ingest local or staging repository SDD corpus
+uv run engramory sdd ingest \
+  --sdd-root sdd \
+  --tenant-id default \
+  --project-id aidoc-flow-engramory
 
-async def main():
-    adapters = await dev_adapters()
-    summary = await sync_adr_knowledge_graph('sdd/05_ADR', adapters.repository, adapters.graph)
-    print('ADR Graph Sync Summary:', summary)
-
-asyncio.run(main())
-"
+# Ingest an external or sibling project corpus (e.g. b-local-privy)
+uv run engramory sdd ingest \
+  --sdd-root ../b-local-privy/sdd \
+  --tenant-id default \
+  --project-id b-local-privy
 ```
+
+Key guarantees during ingestion:
+
+1. **Referential Integrity & Stub Generation**: If a document control header references draft or future document targets not yet committed to the corpus (e.g. `EVAL-02`), stub entities (`status="stub"`, `stub=True`) are automatically generated to ensure graph completeness and zero PostgreSQL foreign key violations.
+2. **Transactional Bulk Upserts**: All extracted entities and relations are written using bulk `executemany` statements inside a single transaction to maintain atomic consistency.
+3. **Compound UID Multi-Tenancy**: Nodes in Neo4j are stored with a unique compound `uid = "{tenant_id}:{id}"` alongside `tenant_id` and `id` properties. This provides complete tenant isolation on Neo4j Community Edition without requiring Enterprise composite node keys.
 
 ---
 
@@ -89,11 +93,18 @@ docker compose up -d neo4j
 
 ### Step 2: Re-project All Entities & Relations from PostgreSQL
 
-Execute the deterministic projection worker command:
+Execute the deterministic projection worker command (optionally specifying `--tenant-id`):
 
 ```bash
-uv run engramory graph reproject
+# Reproject all tenants or specific tenant
+uv run engramory graph reproject --tenant-id default
 ```
+
+The reprojection worker:
+
+- Ensures the `entity_uid_unique` constraint (`uid = tenant_id:id`) is initialized.
+- Purges stale Neo4j nodes that were deleted from PostgreSQL.
+- Batches node merges (`MERGE (n:Entity {uid: $uid}) ...`) and relationship edges.
 
 Output:
 
@@ -114,7 +125,20 @@ uv run engramory status
 
 ---
 
-## 5. Security & Isolation
+## 5. Offline & High-Availability Fallback (PostgreSQL CTE)
+
+Neo4j is not a single point of failure for context slicing or blast radius calculations.
+If Neo4j is offline, unreachable, or unconfigured (`_graph is None` or query timeout):
+
+1. `AccessSurface.context_slice` and `AccessSurface.blast_radius` automatically fall back to **canonical PostgreSQL recursive CTE traversal**:
+   - Upstream ancestor closure: `Repository.find_ancestors(entity_id, tenant_id=..., max_depth=...)`
+   - Downstream blast radius: `Repository.find_descendants(entity_id, tenant_id=..., max_depth=...)`
+2. Traversal queries in PostgreSQL execute `WITH RECURSIVE` queries directly on indexed `graph_relations` (`source_id`, `target_id`, `tenant_id`).
+3. Results are identical in structure and ordering, allowing CI pipelines and developer workstations to operate without running a Neo4j daemon.
+
+---
+
+## 6. Security & Isolation
 
 1. **Vendor Boundary**: The official `neo4j` Python driver must never be imported in `engramory.core`, `engramory.ports`, or `engramory.workers`. All graph operations transit through `GraphPort` in `src/engramory/ports/graph.py`.
 2. **Network Exposure**: In production and staging, the Neo4j Bolt port (`7687`) is bound strictly to `platform-mesh` internal overlay network. It must never be exposed to public interfaces without TLS and gateway authorization.

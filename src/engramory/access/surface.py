@@ -23,6 +23,7 @@ membership.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -31,6 +32,8 @@ from engramory.access.authz import ActorContext, AuthzDecision, TargetScope, aut
 from engramory.core.models import AgentProfile, Episode, KBSection
 from engramory.core.repository import Repository
 from engramory.ports import GraphPort
+
+logger = logging.getLogger(__name__)
 
 # PRD.01.perf.context_token_budget — the default cap on injected context.
 DEFAULT_TOKEN_BUDGET = 2000
@@ -182,9 +185,14 @@ class AccessSurface:
         """Retrieve connected graph neighbors for an entity (ADR-03 / GraphPort)."""
         target = TargetScope(tenant_id=ctx.tenant_id, scope=scope)
         await self._decide(ctx, "graph_neighbors", target)
-        if self._graph is None:
-            return []
-        return await self._graph.neighbors(id=id, rel=rel, depth=depth)
+        if self._graph is not None:
+            try:
+                return await self._graph.neighbors(
+                    id=id, rel=rel, depth=depth, tenant_id=ctx.tenant_id
+                )
+            except Exception:
+                logger.debug("Graph adapter neighbors query failed")
+        return []
 
     async def context_slice(
         self,
@@ -197,9 +205,14 @@ class AccessSurface:
         """Retrieve upstream contract closure (ancestors) for an SDD task node."""
         target = TargetScope(tenant_id=ctx.tenant_id, scope=scope)
         await self._decide(ctx, "context_slice", target)
-        if self._graph is None:
-            return []
-        return await self._graph.ancestors(id=task_id, depth=depth)
+        if self._graph is not None:
+            try:
+                hits = await self._graph.ancestors(id=task_id, depth=depth, tenant_id=ctx.tenant_id)
+                if hits:
+                    return hits
+            except Exception:
+                logger.debug("Graph adapter ancestors query failed, falling back to PostgreSQL CTE")
+        return await self._repo.find_ancestors(id=task_id, tenant_id=ctx.tenant_id, depth=depth)
 
     async def blast_radius(
         self,
@@ -212,9 +225,18 @@ class AccessSurface:
         """Retrieve downstream dependent nodes (descendants) affected by a change."""
         target = TargetScope(tenant_id=ctx.tenant_id, scope=scope)
         await self._decide(ctx, "blast_radius", target)
-        if self._graph is None:
-            return []
-        return await self._graph.descendants(id=doc_id, depth=depth)
+        if self._graph is not None:
+            try:
+                hits = await self._graph.descendants(
+                    id=doc_id, depth=depth, tenant_id=ctx.tenant_id
+                )
+                if hits:
+                    return hits
+            except Exception:
+                logger.debug(
+                    "Graph adapter descendants query failed, falling back to PostgreSQL CTE"
+                )
+        return await self._repo.find_descendants(id=doc_id, tenant_id=ctx.tenant_id, depth=depth)
 
     async def memory_add(
         self,

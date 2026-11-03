@@ -57,10 +57,16 @@ class Neo4jGraphAdapter:
 
     async def init_schema(self) -> None:
         """Ensure uniqueness constraints and indexes exist in Neo4j."""
+        drop_old = "DROP CONSTRAINT entity_id_unique IF EXISTS"
         query = (
-            "CREATE CONSTRAINT entity_id_unique IF NOT EXISTS FOR (n:Entity) REQUIRE n.id IS UNIQUE"
+            "CREATE CONSTRAINT entity_uid_unique IF NOT EXISTS "
+            "FOR (n:Entity) REQUIRE n.uid IS UNIQUE"
         )
         async with self._driver.session() as session:
+            try:
+                await session.run(drop_old)
+            except Exception:
+                pass
             await session.run(query)
 
     async def upsert_node(
@@ -73,6 +79,8 @@ class Neo4jGraphAdapter:
         """Insert or update a node with given labels and properties."""
         sanitized_labels = [_sanitize_ident(label, "label") for label in labels]
         clean_props = dict(props or {})
+        tenant_id = clean_props.get("tenant_id", "default")
+        node_uid = f"{tenant_id}:{id}"
 
         # Build Cypher with sanitized labels appended
         label_str = ":Entity"
@@ -81,11 +89,14 @@ class Neo4jGraphAdapter:
                 label_str += f":`{label}`"
 
         query = f"""
-        MERGE (n:Entity {{id: $id}})
-        SET n{label_str}, n += $props
+        MERGE (n:Entity {{uid: $uid}})
+        SET n.id = $id, n.tenant_id = $tenant_id, n{label_str}, n += $props
         """
         async with self._driver.session() as session:
-            await session.run(query, {"id": id, "props": clean_props})
+            await session.run(
+                query,
+                {"uid": node_uid, "id": id, "tenant_id": tenant_id, "props": clean_props},
+            )
 
     async def upsert_edge(
         self,
@@ -98,15 +109,30 @@ class Neo4jGraphAdapter:
         """Insert or update a directed relationship src -[rel]-> dst."""
         sanitized_rel = _sanitize_ident(rel, "relationship type")
         clean_props = dict(props or {})
+        tenant_id = clean_props.get("tenant_id", "default")
+        src_uid = f"{tenant_id}:{src}"
+        dst_uid = f"{tenant_id}:{dst}"
 
         query = f"""
-        MERGE (a:Entity {{id: $src}})
-        MERGE (b:Entity {{id: $dst}})
+        MERGE (a:Entity {{uid: $src_uid}})
+        ON CREATE SET a.id = $src, a.tenant_id = $tenant_id
+        MERGE (b:Entity {{uid: $dst_uid}})
+        ON CREATE SET b.id = $dst, b.tenant_id = $tenant_id
         MERGE (a)-[r:`{sanitized_rel}`]->(b)
         SET r += $props
         """
         async with self._driver.session() as session:
-            await session.run(query, {"src": src, "dst": dst, "props": clean_props})
+            await session.run(
+                query,
+                {
+                    "src_uid": src_uid,
+                    "dst_uid": dst_uid,
+                    "src": src,
+                    "dst": dst,
+                    "tenant_id": tenant_id,
+                    "props": clean_props,
+                },
+            )
 
     async def neighbors(
         self,
@@ -114,6 +140,7 @@ class Neo4jGraphAdapter:
         id: str,
         rel: str | None = None,
         depth: int = 1,
+        tenant_id: str = "default",
     ) -> Sequence[Mapping[str, Any]]:
         """Return nodes reachable from `id` within `depth` hops (bounded traversal)."""
         safe_depth = max(1, min(depth, 5))
@@ -123,13 +150,19 @@ class Neo4jGraphAdapter:
         else:
             rel_pattern = f"*1..{safe_depth}"
 
+        node_uid = f"{tenant_id}:{id}"
         query = f"""
-        MATCH (n:Entity {{id: $id}})-[{rel_pattern}]-(m:Entity)
-        WHERE m.id <> $id
+        MATCH (n:Entity)
+        WHERE (
+            n.uid = $uid
+            OR (n.id = $id AND ($tenant_id = 'default' OR n.tenant_id = $tenant_id))
+        )
+        MATCH (n)-[{rel_pattern}]-(m:Entity)
+        WHERE (m.tenant_id = n.tenant_id) AND m <> n
         RETURN DISTINCT m.id AS id, labels(m) AS labels, properties(m) AS properties
         """
         async with self._driver.session() as session:
-            result = await session.run(query, {"id": id})
+            result = await session.run(query, {"uid": node_uid, "id": id, "tenant_id": tenant_id})
             records = await result.data()
             return [
                 {
@@ -146,6 +179,7 @@ class Neo4jGraphAdapter:
         id: str,
         rel: str | None = None,
         depth: int = 6,
+        tenant_id: str = "default",
     ) -> Sequence[Mapping[str, Any]]:
         """Return upstream ancestor nodes reachable from `id` (directed out-edges)."""
         safe_depth = max(1, min(depth, 10))
@@ -155,13 +189,19 @@ class Neo4jGraphAdapter:
         else:
             rel_pattern = f"*1..{safe_depth}"
 
+        src_uid = f"{tenant_id}:{id}"
         query = f"""
-        MATCH (n:Entity {{id: $id}})-[{rel_pattern}]->(m:Entity)
-        WHERE m.id <> $id
+        MATCH (n:Entity)
+        WHERE (
+            n.uid = $uid
+            OR (n.id = $id AND ($tenant_id = 'default' OR n.tenant_id = $tenant_id))
+        )
+        MATCH (n)-[{rel_pattern}]->(m:Entity)
+        WHERE (m.tenant_id = n.tenant_id) AND m <> n
         RETURN DISTINCT m.id AS id, labels(m) AS labels, properties(m) AS properties
         """
         async with self._driver.session() as session:
-            result = await session.run(query, {"id": id})
+            result = await session.run(query, {"uid": src_uid, "id": id, "tenant_id": tenant_id})
             records = await result.data()
             return [
                 {
@@ -178,6 +218,7 @@ class Neo4jGraphAdapter:
         id: str,
         rel: str | None = None,
         depth: int = 6,
+        tenant_id: str = "default",
     ) -> Sequence[Mapping[str, Any]]:
         """Return downstream descendant nodes reachable from `id` (directed in-edges)."""
         safe_depth = max(1, min(depth, 10))
@@ -187,13 +228,19 @@ class Neo4jGraphAdapter:
         else:
             rel_pattern = f"*1..{safe_depth}"
 
+        dst_uid = f"{tenant_id}:{id}"
         query = f"""
-        MATCH (n:Entity {{id: $id}})<-[{rel_pattern}]-(m:Entity)
-        WHERE m.id <> $id
+        MATCH (n:Entity)
+        WHERE (
+            n.uid = $uid
+            OR (n.id = $id AND ($tenant_id = 'default' OR n.tenant_id = $tenant_id))
+        )
+        MATCH (m:Entity)-[{rel_pattern}]->(n)
+        WHERE (m.tenant_id = n.tenant_id) AND m <> n
         RETURN DISTINCT m.id AS id, labels(m) AS labels, properties(m) AS properties
         """
         async with self._driver.session() as session:
-            result = await session.run(query, {"id": id})
+            result = await session.run(query, {"uid": dst_uid, "id": id, "tenant_id": tenant_id})
             records = await result.data()
             return [
                 {
@@ -204,25 +251,46 @@ class Neo4jGraphAdapter:
                 for record in records
             ]
 
-    async def delete_node(self, *, id: str) -> None:
+    async def delete_node(self, *, id: str, tenant_id: str = "default") -> None:
         """Delete a node and its attached relationships from Neo4j."""
+        node_uid = f"{tenant_id}:{id}"
         query = """
-        MATCH (n:Entity {id: $id})
+        MATCH (n:Entity {uid: $uid})
         DETACH DELETE n
         """
         async with self._driver.session() as session:
-            await session.run(query, {"id": id})
+            await session.run(query, {"uid": node_uid})
 
-    async def delete_edge(self, *, src: str, dst: str, rel: str | None = None) -> None:
+    async def delete_edge(
+        self, *, src: str, dst: str, rel: str | None = None, tenant_id: str = "default"
+    ) -> None:
         """Delete relationship(s) between src and dst from Neo4j."""
+        src_uid = f"{tenant_id}:{src}"
+        dst_uid = f"{tenant_id}:{dst}"
         if rel:
             sanitized_rel = _sanitize_ident(rel, "relationship type")
             rel_clause = f"[r:`{sanitized_rel}`]"
         else:
             rel_clause = "[r]"
+
         query = f"""
-        MATCH (a:Entity {{id: $src}})-{rel_clause}->(b:Entity {{id: $dst}})
+        MATCH (a:Entity {{uid: $src_uid}})-{rel_clause}->(b:Entity {{uid: $dst_uid}})
         DELETE r
         """
         async with self._driver.session() as session:
-            await session.run(query, {"src": src, "dst": dst})
+            await session.run(query, {"src_uid": src_uid, "dst_uid": dst_uid})
+
+    async def purge_stale_nodes(self, *, tenant_id: str, active_ids: Sequence[str]) -> int:
+        """Delete any nodes belonging to tenant_id whose IDs are not in active_ids."""
+        active_uids = [f"{tenant_id}:{i}" for i in active_ids]
+        query = """
+        MATCH (n:Entity)
+        WHERE n.tenant_id = $tenant_id AND NOT n.uid IN $active_uids
+        WITH n, count(n) AS cnt
+        DETACH DELETE n
+        RETURN cnt
+        """
+        async with self._driver.session() as session:
+            result = await session.run(query, {"tenant_id": tenant_id, "active_uids": active_uids})
+            rec = await result.single()
+            return int(rec["cnt"]) if rec else 0

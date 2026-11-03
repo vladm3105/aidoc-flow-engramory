@@ -65,14 +65,14 @@ def pg_dsn() -> Iterator[str]:
         yield env_dsn
         return
 
-    if os.environ.get("CI"):
+    if os.environ.get("GITHUB_ACTIONS"):
         # CI runs must not depend on a Docker Hub pull per run (rate limits /
         # outages would fail, not skip). Enable in CI by adding a `services:`
         # postgres container to ci.yml and exporting ENGRAMORY_TEST_DSN.
-        pytest.skip("integration: CI without ENGRAMORY_TEST_DSN — see conftest note")
+        pytest.skip("integration: CI without ENGRAMORY_TEST_DSN — reason: see conftest note")
 
     if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
-        pytest.skip("integration: no ENGRAMORY_TEST_DSN and docker unavailable")
+        pytest.skip("integration: docker unavailable — reason: requires running docker daemon")
 
     port = _free_port()  # TOCTOU window until docker binds it — acceptable in tests
     name = f"engramory-it-{uuid.uuid4().hex[:8]}"

@@ -13,7 +13,7 @@ can fail closed with a retryable error (EARS.01.03.c900).
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -600,6 +600,71 @@ class Repository:
             assert row is not None
             return str(row["id"])
 
+    async def bulk_upsert_graph_entities(self, entities: Sequence[GraphEntity]) -> int:
+        """Bulk insert or update canonical graph entities in a single transaction."""
+        if not entities:
+            return 0
+        async with self._conn() as conn:
+            async with conn.transaction():
+                async with conn.cursor() as cur:
+                    await cur.executemany(
+                        """
+                        INSERT INTO graph_entities
+                            (id, tenant_id, domain_id, entity_type, name, properties, updated_at)
+                        VALUES
+                            (%(id)s, %(tenant_id)s, %(domain_id)s, %(entity_type)s,
+                             %(name)s, %(properties)s, NOW())
+                        ON CONFLICT (tenant_id, id)
+                            DO UPDATE SET
+                                domain_id = EXCLUDED.domain_id,
+                                entity_type = EXCLUDED.entity_type,
+                                name = EXCLUDED.name,
+                                properties = EXCLUDED.properties,
+                                updated_at = NOW()
+                        """,
+                        [
+                            {
+                                "id": e.id,
+                                "tenant_id": e.tenant_id,
+                                "domain_id": e.domain_id,
+                                "entity_type": e.entity_type,
+                                "name": e.name,
+                                "properties": json.dumps(dict(e.properties)),
+                            }
+                            for e in entities
+                        ],
+                    )
+        return len(entities)
+
+    async def bulk_upsert_graph_relations(self, relations: Sequence[GraphRelation]) -> int:
+        """Bulk insert or update canonical graph relationships in a single transaction."""
+        if not relations:
+            return 0
+        async with self._conn() as conn:
+            async with conn.transaction():
+                async with conn.cursor() as cur:
+                    await cur.executemany(
+                        """
+                        INSERT INTO graph_relations (
+                            tenant_id, src_id, dst_id, rel_type, properties
+                        )
+                        VALUES (%(tenant_id)s, %(src_id)s, %(dst_id)s, %(rel_type)s, %(properties)s)
+                        ON CONFLICT (tenant_id, src_id, dst_id, rel_type)
+                            DO UPDATE SET properties = EXCLUDED.properties
+                        """,
+                        [
+                            {
+                                "tenant_id": r.tenant_id,
+                                "src_id": r.src_id,
+                                "dst_id": r.dst_id,
+                                "rel_type": r.rel_type,
+                                "properties": json.dumps(dict(r.properties)),
+                            }
+                            for r in relations
+                        ],
+                    )
+        return len(relations)
+
     async def delete_graph_entity(self, id: str, *, tenant_id: str = "default") -> None:
         """Delete a canonical graph entity. Foreign keys cascade-delete relations."""
         async with self._conn() as conn:
@@ -723,6 +788,112 @@ class Repository:
                     rel_type=row["rel_type"],
                     properties=row["properties"],
                 )
+                for row in rows
+            ]
+
+    async def find_ancestors(
+        self,
+        *,
+        id: str,
+        tenant_id: str = "default",
+        depth: int = 6,
+    ) -> Sequence[Mapping[str, Any]]:
+        """Return upstream ancestor nodes reachable from `id` (directed out-edges src -> dst)."""
+        safe_depth = max(1, min(depth, 10))
+        async with self._conn() as conn:
+            rows = await (
+                await conn.execute(
+                    """
+                    WITH RECURSIVE lineage AS (
+                        SELECT dst_id, 1 AS depth, ARRAY[src_id] AS path
+                        FROM graph_relations
+                        WHERE tenant_id = %(tenant_id)s AND src_id = %(id)s
+                        UNION ALL
+                        SELECT r.dst_id, l.depth + 1, l.path || r.src_id
+                        FROM graph_relations r
+                        JOIN lineage l ON r.src_id = l.dst_id
+                        WHERE r.tenant_id = %(tenant_id)s
+                          AND l.depth < %(max_depth)s
+                          AND NOT (r.dst_id = ANY(l.path))
+                    )
+                    SELECT DISTINCT e.id, e.entity_type, e.name, e.properties
+                    FROM lineage l
+                    JOIN graph_entities e ON e.tenant_id = %(tenant_id)s AND e.id = l.dst_id
+                    WHERE e.id <> %(id)s
+                    ORDER BY e.id ASC
+                    """,
+                    {"tenant_id": tenant_id, "id": id, "max_depth": safe_depth},
+                )
+            ).fetchall()
+            return [
+                {
+                    "id": row["id"],
+                    "labels": [row["entity_type"]],
+                    "properties": {
+                        "name": row["name"],
+                        "tenant_id": tenant_id,
+                        **(
+                            row["properties"]
+                            if isinstance(row["properties"], dict)
+                            else json.loads(row["properties"])
+                            if row["properties"]
+                            else {}
+                        ),
+                    },
+                }
+                for row in rows
+            ]
+
+    async def find_descendants(
+        self,
+        *,
+        id: str,
+        tenant_id: str = "default",
+        depth: int = 6,
+    ) -> Sequence[Mapping[str, Any]]:
+        """Return downstream descendant nodes reachable from `id` (directed in-edges dst <- src)."""
+        safe_depth = max(1, min(depth, 10))
+        async with self._conn() as conn:
+            rows = await (
+                await conn.execute(
+                    """
+                    WITH RECURSIVE blast AS (
+                        SELECT src_id, 1 AS depth, ARRAY[dst_id] AS path
+                        FROM graph_relations
+                        WHERE tenant_id = %(tenant_id)s AND dst_id = %(id)s
+                        UNION ALL
+                        SELECT r.src_id, b.depth + 1, b.path || r.dst_id
+                        FROM graph_relations r
+                        JOIN blast b ON r.dst_id = b.src_id
+                        WHERE r.tenant_id = %(tenant_id)s
+                          AND b.depth < %(max_depth)s
+                          AND NOT (r.src_id = ANY(b.path))
+                    )
+                    SELECT DISTINCT e.id, e.entity_type, e.name, e.properties
+                    FROM blast b
+                    JOIN graph_entities e ON e.tenant_id = %(tenant_id)s AND e.id = b.src_id
+                    WHERE e.id <> %(id)s
+                    ORDER BY e.id ASC
+                    """,
+                    {"tenant_id": tenant_id, "id": id, "max_depth": safe_depth},
+                )
+            ).fetchall()
+            return [
+                {
+                    "id": row["id"],
+                    "labels": [row["entity_type"]],
+                    "properties": {
+                        "name": row["name"],
+                        "tenant_id": tenant_id,
+                        **(
+                            row["properties"]
+                            if isinstance(row["properties"], dict)
+                            else json.loads(row["properties"])
+                            if row["properties"]
+                            else {}
+                        ),
+                    },
+                }
                 for row in rows
             ]
 

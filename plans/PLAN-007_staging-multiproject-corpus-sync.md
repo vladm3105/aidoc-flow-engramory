@@ -11,6 +11,7 @@
 The goal of this plan is to execute and harden multi-project SDD corpus synchronization between canonical PostgreSQL storage and rebuildable Neo4j graph projections.
 
 The plan specifically addresses and patches the **6 critical gaps** discovered during real-world corpus testing (1,180 files in `b-local-privy`, 48 files in `aidoc-flow-engramory`):
+
 1. **Extraction Normalization & Foreign Key Safety**: Parsing multi-target comma lists, filtering placeholders (`ADR-NN`), and resolving dangling references via automatic stub creation to eliminate Postgres `ForeignKeyViolationError`.
 2. **Multi-Project Identity Scoping**: Preventing ID collisions (e.g. `ADR-001` in both `privy` and `engramory`) across tenants and within shared domain tenants.
 3. **Neo4j Community Edition Compatibility**: Using compound unique keys (`uid = f"{tenant_id}:{id}"`) compatible with single-property unique constraints in Neo4j Community.
@@ -69,6 +70,7 @@ flowchart TD
 ## 3. Detailed Implementation Phases
 
 ### Phase 1: Robust Extractor & Referential Integrity
+
 - **Target File**: `src/engramory/core/kb_graph.py`
 - **Actions**:
   1. Update regex parsing in `extract_sdd_graph` to split comma/semicolon/newline-delimited references in YAML frontmatter and document control blocks.
@@ -77,6 +79,7 @@ flowchart TD
   4. Auto-generate stub `GraphEntity` rows for missing relation targets (`dst_id` not found in extracted set) with property `{"status": "external_or_stub", "stub": True}`. This guarantees that `FOREIGN KEY (tenant_id, dst_id) REFERENCES graph_entities` is never violated.
 
 ### Phase 2: Multi-Project & Multi-Tenant Identity Model
+
 - **Target Files**:
   - `src/engramory/adapters/dev/graph_neo4j.py`
   - `src/engramory/core/kb_graph.py`
@@ -84,13 +87,16 @@ flowchart TD
 - **Actions**:
   1. **Neo4j Single-Property Constraint**:
      Update `init_schema()`:
+
      ```cypher
      CREATE CONSTRAINT entity_uid_unique IF NOT EXISTS FOR (n:Entity) REQUIRE n.uid IS UNIQUE
      ```
+
   2. **Compound Node UID**:
      In `Neo4jGraphAdapter`, calculate `node_uid = f"{tenant_id}:{id}"` (or `f"{tenant_id}:{project_id}:{id}"` if multi-project shared tenant). Store `uid`, `id`, `tenant_id`, `project_id` as indexed properties.
   3. **Scoped Traversal**:
      In `ancestors`, `descendants`, and `neighbors`, enforce tenant boundary filtering in Cypher:
+
      ```cypher
      MATCH (n:Entity {uid: $uid})-[...]->(m:Entity)
      WHERE m.tenant_id = $tenant_id
@@ -98,6 +104,7 @@ flowchart TD
      ```
 
 ### Phase 3: Transactional Bulk Persistence & Reconciliation
+
 - **Target Files**:
   - `src/engramory/core/repository.py`
   - `src/engramory/workers/graph_projection.py`
@@ -106,14 +113,17 @@ flowchart TD
   2. Update `reproject_all(repo, graph, tenant_id=...)`:
      - Query canonical PostgreSQL entity IDs for `tenant_id`.
      - In Neo4j, delete any entity nodes belonging to `tenant_id` whose `id` is no longer in PostgreSQL:
+
        ```cypher
        MATCH (n:Entity {tenant_id: $tenant_id})
        WHERE NOT n.id IN $canonical_ids
        DETACH DELETE n
        ```
+
      - Project canonical entities and relations in batches.
 
 ### Phase 4: PostgreSQL Recursive CTE Graph Fallback
+
 - **Target Files**:
   - `src/engramory/core/repository.py`
   - `src/engramory/access/surface.py`
@@ -123,6 +133,7 @@ flowchart TD
      If `self._graph is None`, fall back seamlessly to `self._repo.find_ancestors()` and `self._repo.find_descendants()`.
 
 ### Phase 5: Verification, Multi-Project Integration Tests & Staging Run
+
 - **Target Files**:
   - `tests/integration/test_multiproject_sdd.py`
   - `docs/runbooks/neo4j_ops.md`

@@ -65,9 +65,10 @@ async def test_upsert_node_executes_parameterized_query() -> None:
     cypher_query = call_args[0][0]
     parameters = call_args[0][1]
 
-    assert "MERGE (n:Entity {id: $id})" in cypher_query
+    assert "MERGE (n:Entity {uid: $uid})" in cypher_query
     assert ":`ADR`:`Architecture`" in cypher_query
     assert parameters["id"] == "ADR-01"
+    assert parameters["uid"] == "default:ADR-01"
     assert parameters["props"]["title"] == "Postgres Spine"
 
 
@@ -90,11 +91,11 @@ async def test_upsert_edge_executes_parameterized_query() -> None:
     cypher_query = call_args[0][0]
     parameters = call_args[0][1]
 
-    assert "MERGE (a:Entity {id: $src})" in cypher_query
-    assert "MERGE (b:Entity {id: $dst})" in cypher_query
+    assert "MERGE (a:Entity {uid: $src_uid})" in cypher_query
+    assert "MERGE (b:Entity {uid: $dst_uid})" in cypher_query
     assert "-[r:`DEPENDS_ON`]->" in cypher_query
-    assert parameters["src"] == "ADR-04"
-    assert parameters["dst"] == "ADR-02"
+    assert parameters["src_uid"] == "default:ADR-04"
+    assert parameters["dst_uid"] == "default:ADR-02"
     assert parameters["props"]["weight"] == 1.0
 
 
@@ -137,9 +138,9 @@ async def test_delete_node_executes_detach_delete() -> None:
     cypher_query = call_args[0][0]
     parameters = call_args[0][1]
 
-    assert "MATCH (n:Entity {id: $id})" in cypher_query
+    assert "MATCH (n:Entity {uid: $uid})" in cypher_query
     assert "DETACH DELETE n" in cypher_query
-    assert parameters["id"] == "ADR-01"
+    assert parameters["uid"] == "default:ADR-01"
 
 
 @pytest.mark.asyncio
@@ -156,10 +157,13 @@ async def test_delete_edge_executes_delete_rel() -> None:
     cypher_query = call_args[0][0]
     parameters = call_args[0][1]
 
-    assert "MATCH (a:Entity {id: $src})-[r:`DEPENDS_ON`]->(b:Entity {id: $dst})" in cypher_query
+    assert (
+        "MATCH (a:Entity {uid: $src_uid})-[r:`DEPENDS_ON`]->(b:Entity {uid: $dst_uid})"
+        in cypher_query
+    )
     assert "DELETE r" in cypher_query
-    assert parameters["src"] == "ADR-03"
-    assert parameters["dst"] == "ADR-02"
+    assert parameters["src_uid"] == "default:ADR-03"
+    assert parameters["dst_uid"] == "default:ADR-02"
 
 
 @pytest.mark.asyncio
@@ -187,8 +191,9 @@ async def test_ancestors_executes_directed_path_query() -> None:
     cypher_query = call_args[0][0]
     parameters = call_args[0][1]
 
-    assert "MATCH (n:Entity {id: $id})-[*1..4]->(m:Entity)" in cypher_query
-    assert parameters["id"] == "IPLAN-03"
+    assert "-[*1..4]->(m:Entity)" in cypher_query
+    assert "n.uid = $uid" in cypher_query
+    assert parameters["uid"] == "default:IPLAN-03"
 
 
 @pytest.mark.asyncio
@@ -215,5 +220,6 @@ async def test_descendants_executes_directed_inpath_query() -> None:
     cypher_query = call_args[0][0]
     parameters = call_args[0][1]
 
-    assert "MATCH (n:Entity {id: $id})<-[*1..5]-(m:Entity)" in cypher_query
-    assert parameters["id"] == "ADR-03"
+    assert "MATCH (m:Entity)-[*1..5]->(n)" in cypher_query
+    assert "n.uid = $uid" in cypher_query
+    assert parameters["uid"] == "default:ADR-03"

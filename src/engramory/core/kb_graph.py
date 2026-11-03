@@ -62,6 +62,33 @@ def normalize_sdd_id(raw_id: str) -> str:
     return cleaned
 
 
+def extract_sdd_target_ids(raw_value: Any) -> list[str]:
+    """Extract and normalize all distinct SDD target IDs from a field value."""
+    if not raw_value:
+        return []
+    candidates = (
+        [str(x) for x in raw_value if x] if isinstance(raw_value, list) else [str(raw_value)]
+    )
+    targets: list[str] = []
+    for cand in candidates:
+        matches = re.findall(
+            r"\b(BRD|PRD|EARS|BDD|ADR|SPEC|TDD|IPLAN|CHG|EVAL)[-._]([0-9]+[a-zA-Z0-9_\-]*)\b",
+            cand,
+            re.IGNORECASE,
+        )
+        if matches:
+            for prefix, suffix in matches:
+                if suffix.upper() == "NN" or "TEMPLATE" in suffix.upper():
+                    continue
+                targets.append(normalize_sdd_id(f"{prefix.upper()}-{suffix}"))
+        else:
+            cleaned = cand.split()[0].rstrip(".,;")
+            norm = normalize_sdd_id(cleaned)
+            if norm and not norm.endswith("-NN") and "TEMPLATE" not in norm.upper():
+                targets.append(norm)
+    return list(dict.fromkeys(targets))
+
+
 def extract_adr_graph(
     adr_dir: Path | str,
     *,
@@ -232,18 +259,15 @@ def extract_sdd_graph(
 
             # 1. Structural schema fields in YAML
             # source_spec in IPLAN
-            if "source_spec" in dc or "source_spec" in data:
-                spec_val = dc.get("source_spec") or data.get("source_spec")
-                if spec_val:
-                    dst = normalize_sdd_id(str(spec_val))
-                    if dst and dst != doc_id:
-                        relations_map[(doc_id, dst, "IMPLEMENTS")] = "source_spec"
+            spec_val = dc.get("source_spec") or data.get("source_spec")
+            for dst in extract_sdd_target_ids(spec_val):
+                if dst != doc_id:
+                    relations_map[(doc_id, dst, "IMPLEMENTS")] = "source_spec"
 
             # source_document in BDD / EARS / SPEC
             src_doc = data.get("source_document") or dc.get("source_document")
-            if src_doc:
-                dst = normalize_sdd_id(str(src_doc))
-                if dst and dst != doc_id:
+            for dst in extract_sdd_target_ids(src_doc):
+                if dst != doc_id:
                     rel_type = (
                         "SATISFIES"
                         if doc_id.startswith("SPEC")
@@ -257,66 +281,96 @@ def extract_sdd_graph(
             arch_dec = data.get("architecture_decision") or data.get("component_overview", {}).get(
                 "architecture_decision"
             )
-            if arch_dec:
-                dst = normalize_sdd_id(str(arch_dec))
-                if dst and dst != doc_id:
+            for dst in extract_sdd_target_ids(arch_dec):
+                if dst != doc_id:
                     relations_map[(doc_id, dst, "CONSTRAINED_BY")] = "architecture_decision"
 
             # brd_reference in PRD
             brd_ref = data.get("brd_reference")
-            if brd_ref:
-                dst = normalize_sdd_id(str(brd_ref))
-                if dst and dst != doc_id:
+            for dst in extract_sdd_target_ids(brd_ref):
+                if dst != doc_id:
                     relations_map[(doc_id, dst, "FULFILLS")] = "brd_reference"
 
             # authoring_chg in IPLAN / document_control
             auth_chg = dc.get("authoring_chg") or data.get("chg_id")
-            if auth_chg:
-                dst = normalize_sdd_id(str(auth_chg))
-                if dst and dst != doc_id:
+            for dst in extract_sdd_target_ids(auth_chg):
+                if dst != doc_id:
                     relations_map[(dst, doc_id, "MODIFIES")] = "authoring_chg"
 
             # related_decisions.dependencies in ADR
             adr_deps = data.get("related_decisions", {}).get("dependencies", [])
             for dep in adr_deps:
                 dst_adr = dep.get("adr")
-                if dst_adr:
-                    dst = normalize_sdd_id(str(dst_adr))
-                    if dst and dst != doc_id:
+                for dst in extract_sdd_target_ids(dst_adr):
+                    if dst != doc_id:
                         rel_type = dep.get("relationship", "DEPENDS_ON").upper().replace(" ", "_")
                         relations_map[(doc_id, dst, rel_type)] = dep.get("rationale", "")
 
             # 2. Free-text lineage tag matching (@kind: TARGET)
             for m in TAG_RE.finditer(content):
                 kind = m.group("kind").lower()
-                target_id = normalize_sdd_id(m.group("target"))
-                if not target_id or target_id == doc_id:
-                    continue
+                for target_id in extract_sdd_target_ids(m.group("target")):
+                    if not target_id or target_id == doc_id:
+                        continue
 
-                if kind == "spec":
-                    rel = "IMPLEMENTS" if doc_id.startswith("IPLAN") else "DEPENDS_ON"
-                elif kind == "adr":
-                    rel = "CONSTRAINED_BY"
-                elif kind == "bdd":
-                    rel = "VERIFIES" if doc_id.startswith("TDD") else "SATISFIES"
-                elif kind == "ears":
-                    rel = "SATISFIES" if doc_id.startswith("SPEC") else "SPECIFIES"
-                elif kind == "prd":
-                    rel = "ORIGINATES_FROM"
-                elif kind == "brd":
-                    rel = "FULFILLS"
-                elif kind == "tdd":
-                    rel = "VERIFIES_WITH"
-                elif kind == "depends":
-                    rel = "DEPENDS_ON"
-                elif kind == "chg":
-                    rel = "MODIFIED_BY"
-                else:
-                    rel = "REFERENCES"
+                    if kind == "spec":
+                        rel = "IMPLEMENTS" if doc_id.startswith("IPLAN") else "DEPENDS_ON"
+                    elif kind == "adr":
+                        rel = "CONSTRAINED_BY"
+                    elif kind == "bdd":
+                        rel = "VERIFIES" if doc_id.startswith("TDD") else "SATISFIES"
+                    elif kind == "ears":
+                        rel = "SATISFIES" if doc_id.startswith("SPEC") else "SPECIFIES"
+                    elif kind == "prd":
+                        rel = "ORIGINATES_FROM"
+                    elif kind == "brd":
+                        rel = "FULFILLS"
+                    elif kind == "tdd":
+                        rel = "VERIFIES_WITH"
+                    elif kind == "depends":
+                        rel = "DEPENDS_ON"
+                    elif kind == "chg":
+                        rel = "MODIFIED_BY"
+                    else:
+                        rel = "REFERENCES"
 
-                key = (doc_id, target_id, rel)
-                if key not in relations_map:
-                    relations_map[key] = f"lineage_tag_@{kind}"
+                    key = (doc_id, target_id, rel)
+                    if key not in relations_map:
+                        relations_map[key] = f"lineage_tag_@{kind}"
+
+    # 3. Ensure referential integrity by auto-creating stubs for unresolved relation targets
+    for _src, dst, _rel in sorted(relations_map.keys()):
+        if dst not in entities_map:
+            prefix = dst.split("-")[0].upper() if "-" in dst else "SDD"
+            entity_type = (
+                prefix
+                if prefix
+                in (
+                    "BRD",
+                    "PRD",
+                    "EARS",
+                    "BDD",
+                    "ADR",
+                    "SPEC",
+                    "TDD",
+                    "IPLAN",
+                    "CHG",
+                    "EVAL",
+                )
+                else "SDD"
+            )
+            entities_map[dst] = GraphEntity(
+                id=dst,
+                entity_type=entity_type,
+                name=f"Stub: {dst}",
+                tenant_id=tenant_id,
+                domain_id=domain_id,
+                properties={
+                    "status": "stub",
+                    "stub": True,
+                    "project_id": project_id,
+                },
+            )
 
     relations: list[GraphRelation] = [
         GraphRelation(
@@ -344,11 +398,8 @@ async def ingest_adr_knowledge_graph(
     entities, relations = extract_adr_graph(adr_dir, tenant_id=tenant_id, domain_id=domain_id)
 
     # 1. Canonical PostgreSQL store
-    for entity in entities:
-        await repo.upsert_graph_entity(entity)
-
-    for relation in relations:
-        await repo.upsert_graph_relation(relation)
+    await repo.bulk_upsert_graph_entities(entities)
+    await repo.bulk_upsert_graph_relations(relations)
 
     # 2. Rebuildable projection to Neo4j
     if graph is not None:
@@ -403,11 +454,8 @@ async def ingest_sdd_knowledge_graph(
     )
 
     # 1. Canonical PostgreSQL persistence (ADR-01)
-    for entity in entities:
-        await repo.upsert_graph_entity(entity)
-
-    for relation in relations:
-        await repo.upsert_graph_relation(relation)
+    await repo.bulk_upsert_graph_entities(entities)
+    await repo.bulk_upsert_graph_relations(relations)
 
     # 2. Rebuildable projection to Neo4j (ADR-05)
     if graph is not None:
