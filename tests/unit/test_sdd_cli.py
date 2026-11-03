@@ -21,13 +21,44 @@ def test_parser_has_sdd_subcommands() -> None:
     assert args.sdd_command == "ingest"
     assert args.sdd_root == "sdd"
     assert args.project_id == "myproj"
+    assert args.no_reconcile is False
+
+    # sdd ingest with --no-reconcile
+    args_nr = parser.parse_args(["sdd", "ingest", "--no-reconcile"])
+    assert args_nr.no_reconcile is True
 
     # sdd slice
-    args = parser.parse_args(["sdd", "slice", "--task", "IPLAN-03", "--depth", "4"])
+    args = parser.parse_args(
+        [
+            "sdd",
+            "slice",
+            "--task",
+            "IPLAN-03",
+            "--depth",
+            "4",
+            "--layers",
+            "SPEC,ADR",
+            "--max-tokens",
+            "1500",
+            "--markdown",
+        ]
+    )
     assert args.command == "sdd"
     assert args.sdd_command == "slice"
     assert args.task == "IPLAN-03"
     assert args.depth == 4
+    assert args.layers == "SPEC,ADR"
+    assert args.max_tokens == 1500
+    assert args.markdown is True
+
+    # mcp serve sse
+    args_mcp = parser.parse_args(
+        ["mcp", "--transport", "sse", "--host", "0.0.0.0", "--port", "9000"]
+    )
+    assert args_mcp.command == "mcp"
+    assert args_mcp.transport == "sse"
+    assert args_mcp.host == "0.0.0.0"
+    assert args_mcp.port == 9000
 
     # sdd blast-radius
     args = parser.parse_args(["sdd", "blast-radius", "--doc", "ADR-03", "--depth", "3"])

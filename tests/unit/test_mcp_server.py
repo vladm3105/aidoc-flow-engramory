@@ -99,8 +99,120 @@ async def test_mcp_call_sdd_context_slice(
     assert len(data) == 2
     assert data[0]["id"] == "SPEC-03"
     mock_surface.context_slice.assert_awaited_once_with(
-        mock_ctx, task_id="IPLAN-03", depth=5, scope="project"
+        mock_ctx, task_id="IPLAN-03", depth=5, scope="project", layers=None, max_tokens=2000
     )
+
+
+@pytest.mark.asyncio
+async def test_mcp_call_sdd_context_slice_markdown(
+    mock_surface: AccessSurface, mock_ctx: ActorContext
+) -> None:
+    server = McpServer(mock_surface, mock_ctx)
+    req = {
+        "jsonrpc": "2.0",
+        "id": 10,
+        "method": "tools/call",
+        "params": {
+            "name": "sdd_context_slice",
+            "arguments": {
+                "task_id": "IPLAN-03",
+                "format": "markdown",
+                "layers": ["SPEC", "ADR"],
+                "tenant_id": "custom-tenant",
+                "project_id": "custom-proj",
+            },
+        },
+    }
+    resp = await server.handle_request(req)
+    assert resp is not None
+    assert resp["id"] == 10
+    content = resp["result"]["content"]
+    assert len(content) == 1
+    assert "## Context Slice for IPLAN-03" in content[0]["text"]
+    assert "SPEC-03" in content[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_call_sdd_ingest(mock_surface: AccessSurface, mock_ctx: ActorContext) -> None:
+    mock_ingest = AsyncMock(return_value=(15, 20))
+    server = McpServer(mock_surface, mock_ctx, ingest_fn=mock_ingest)
+    req = {
+        "jsonrpc": "2.0",
+        "id": 11,
+        "method": "tools/call",
+        "params": {
+            "name": "sdd_ingest",
+            "arguments": {
+                "sdd_root": "sdd",
+                "project_id": "my-project",
+                "reconcile": True,
+            },
+        },
+    }
+    resp = await server.handle_request(req)
+    assert resp is not None
+    assert resp["id"] == 11
+    assert "Ingested 15 entities and 20 relations" in resp["result"]["content"][0]["text"]
+    mock_ingest.assert_awaited_once_with(
+        sdd_root="sdd",
+        tenant_id="test-tenant",
+        project_id="my-project",
+        reconcile=True,
+    )
+
+
+def test_mcp_http_server_endpoints(mock_surface: AccessSurface, mock_ctx: ActorContext) -> None:
+    import http.client
+    import threading
+
+    server = McpServer(mock_surface, mock_ctx)
+    httpd = server.create_http_server(host="127.0.0.1", port=0)
+    port = httpd.server_address[1]
+
+    t = threading.Thread(target=httpd.serve_forever, daemon=True)
+    t.start()
+    try:
+        # 1. Test GET / (health/status)
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/")
+        resp = conn.getresponse()
+        assert resp.status == 200
+        data = json.loads(resp.read().decode("utf-8"))
+        assert data["status"] == "ok"
+        assert data["service"] == "engramory-mcp"
+        conn.close()
+
+        # 2. Test GET /sse endpoint announcement
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/sse")
+        resp = conn.getresponse()
+        assert resp.status == 200
+        line1 = resp.readline().decode("utf-8")
+        line2 = resp.readline().decode("utf-8")
+        assert "event: endpoint" in line1
+        assert "data: /messages" in line2
+        conn.close()
+
+        # 3. Test POST /messages JSON-RPC tools/list
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        rpc_req = {"jsonrpc": "2.0", "id": 99, "method": "tools/list"}
+        post_data = json.dumps(rpc_req)
+        headers = {
+            "Content-Type": "application/json",
+            "X-Tenant-ID": "header-tenant",
+            "X-Project-ID": "header-project",
+        }
+        conn.request("POST", "/messages", body=post_data, headers=headers)
+        resp = conn.getresponse()
+        assert resp.status == 200
+        res = json.loads(resp.read().decode("utf-8"))
+        assert res["id"] == 99
+        tools = res["result"]["tools"]
+        assert any(tool["name"] == "sdd_context_slice" for tool in tools)
+        conn.close()
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
 
 
 @pytest.mark.asyncio

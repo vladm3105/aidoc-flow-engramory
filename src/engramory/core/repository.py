@@ -699,6 +699,51 @@ class Repository:
             if cur.rowcount != 1:
                 raise KeyError(f"{src_id}->{dst_id}:{rel_type}")
 
+    async def purge_stale_graph_entities(
+        self,
+        *,
+        tenant_id: str = "default",
+        project_id: str = "default",
+        active_ids: Sequence[str],
+    ) -> list[str]:
+        """Purge canonical graph entities for a tenant and project no longer in active_ids.
+
+        Foreign keys automatically cascade-delete associated relations.
+        Returns the list of deleted entity IDs.
+        """
+        if not active_ids:
+            return []
+        async with self._conn() as conn:
+            async with conn.transaction():
+                query = """
+                SELECT id FROM graph_entities
+                WHERE tenant_id = %(tenant_id)s
+                  AND properties->>'project_id' = %(project_id)s
+                  AND NOT id = ANY(%(active_ids)s)
+                """
+                cur = await conn.execute(
+                    query,
+                    {
+                        "tenant_id": tenant_id,
+                        "project_id": project_id,
+                        "active_ids": list(active_ids),
+                    },
+                )
+                rows = await cur.fetchall()
+                stale_ids = [r["id"] for r in rows]
+                if not stale_ids:
+                    return []
+
+                await conn.execute(
+                    """
+                    DELETE FROM graph_entities
+                    WHERE tenant_id = %(tenant_id)s
+                      AND id = ANY(%(stale_ids)s)
+                    """,
+                    {"tenant_id": tenant_id, "stale_ids": stale_ids},
+                )
+                return stale_ids
+
     async def get_graph_entity(self, id: str, *, tenant_id: str = "default") -> GraphEntity | None:
         """Retrieve a canonical graph entity by id and tenant_id."""
         async with self._conn() as conn:

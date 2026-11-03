@@ -35,7 +35,7 @@ from typing import Any
 from engramory.access.authz import ActorContext
 from engramory.access.surface import AccessSurface, AuthzError, GovernedWriteRejected
 from engramory.adapters.factory import dev_adapters, require_dev_profile
-from engramory.core.kb_graph import ingest_sdd_knowledge_graph
+from engramory.core.kb_graph import ingest_sdd_knowledge_graph, resolve_sdd_project_id
 from engramory.core.models import ValidationError
 from engramory.core.repository import Repository, StoreUnavailable
 from engramory.workers.distillation import reflect
@@ -343,7 +343,12 @@ def _cmd_sdd_ingest(args: argparse.Namespace) -> int:
     repo = Repository(config.dsn)
     sdd_root = Path(args.sdd_root)
     tenant_id = args.tenant_id or config.ctx.tenant_id
-    project_id = args.project_id or config.ctx.project_id
+    project_id = resolve_sdd_project_id(
+        sdd_root,
+        explicit_id=args.project_id,
+        config_id=config.ctx.project_id,
+    )
+    reconcile = not getattr(args, "no_reconcile", False)
 
     async def run_ingest() -> dict[str, Any]:
         num_ent, num_rel = await ingest_sdd_knowledge_graph(
@@ -352,12 +357,14 @@ def _cmd_sdd_ingest(args: argparse.Namespace) -> int:
             sdd_root=sdd_root,
             tenant_id=tenant_id,
             project_id=project_id,
+            reconcile=reconcile,
         )
         return {
             "status": "ok",
             "sdd_root": str(sdd_root),
             "tenant_id": tenant_id,
             "project_id": project_id,
+            "reconcile": reconcile,
             "entities_ingested": num_ent,
             "relations_ingested": num_rel,
         }
@@ -375,6 +382,10 @@ def _cmd_sdd_ingest(args: argparse.Namespace) -> int:
 def _cmd_sdd_slice(args: argparse.Namespace) -> int:
     """Compute deterministic upstream ancestor closure for an IPLAN task."""
     scope = getattr(args, "scope", "project")
+    raw_layers = getattr(args, "layers", None)
+    layers = [x.strip() for x in raw_layers.split(",") if x.strip()] if raw_layers else None
+    max_tokens = getattr(args, "max_tokens", 2000)
+    as_markdown = getattr(args, "markdown", False)
 
     async def op(surface: AccessSurface, ctx: ActorContext) -> dict[str, Any]:
         ancestors = await surface.context_slice(
@@ -382,6 +393,8 @@ def _cmd_sdd_slice(args: argparse.Namespace) -> int:
             task_id=args.task,
             depth=args.depth,
             scope=scope,
+            layers=layers,
+            max_tokens=max_tokens,
         )
         return {
             "task_id": args.task,
@@ -392,6 +405,10 @@ def _cmd_sdd_slice(args: argparse.Namespace) -> int:
 
     def format_slice(p: dict[str, Any]) -> str:
         ancestors = p["ancestors"]
+        if as_markdown:
+            from engramory.mcp.server import format_context_slice_markdown
+
+            return format_context_slice_markdown(p["task_id"], ancestors)
         if not ancestors:
             return f"no upstream ancestors found for task {p['task_id']}"
         lines = [f"Context slice for {p['task_id']} ({len(ancestors)} upstream contracts):"]
@@ -439,7 +456,7 @@ def _cmd_sdd_blast_radius(args: argparse.Namespace) -> int:
 
 
 def _cmd_mcp_serve(args: argparse.Namespace) -> int:
-    """Run the MCP Gateway JSON-RPC server over stdio (SPEC-01 / ADR-10)."""
+    """Run the MCP Gateway JSON-RPC server over stdio or SSE (SPEC-01 / ADR-10)."""
     from engramory.mcp.server import McpServer
 
     config = _load_config(getattr(args, "config", None))
@@ -447,17 +464,26 @@ def _cmd_mcp_serve(args: argparse.Namespace) -> int:
     repo = Repository(config.dsn)
     surface = AccessSurface(repo, graph=adapters.graph)
 
-    async def do_ingest(sdd_root: str, tenant_id: str, project_id: str) -> tuple[int, int]:
+    async def do_ingest(
+        sdd_root: str, tenant_id: str, project_id: str, reconcile: bool = True
+    ) -> tuple[int, int]:
         return await ingest_sdd_knowledge_graph(
             repo,
             adapters.graph,
             sdd_root=sdd_root,
             tenant_id=tenant_id,
             project_id=project_id,
+            reconcile=reconcile,
         )
 
     server = McpServer(surface, config.ctx, ingest_fn=do_ingest)
-    asyncio.run(server.run_stdio())
+    transport = getattr(args, "transport", "stdio")
+    if transport == "sse":
+        host = getattr(args, "host", "127.0.0.1")
+        port = getattr(args, "port", 8000)
+        server.run_sse(host=host, port=port)
+    else:
+        asyncio.run(server.run_stdio())
     return 0
 
 
@@ -587,6 +613,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p_sdd_ingest.add_argument(
         "--tenant-id", default=None, help="target tenant id (default: from config)"
     )
+    p_sdd_ingest.add_argument(
+        "--no-reconcile",
+        action="store_true",
+        help="disable automatic pruning of stale deleted/renamed entities",
+    )
     p_sdd_ingest.set_defaults(func=_cmd_sdd_ingest)
 
     p_sdd_slice = sdd_sub.add_parser(
@@ -598,6 +629,22 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_sdd_slice.add_argument(
         "--scope", default="project", help="visibility scope (default: project)"
+    )
+    p_sdd_slice.add_argument(
+        "--layers",
+        default=None,
+        help="comma-separated list of SDD layers to include (e.g. SPEC,ADR,EARS)",
+    )
+    p_sdd_slice.add_argument(
+        "--max-tokens",
+        type=int,
+        default=2000,
+        help="maximum token budget for the slice (default: 2000)",
+    )
+    p_sdd_slice.add_argument(
+        "--markdown",
+        action="store_true",
+        help="format output as structured markdown with links",
     )
     p_sdd_slice.set_defaults(func=_cmd_sdd_slice)
 
@@ -613,7 +660,17 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_sdd_blast.set_defaults(func=_cmd_sdd_blast_radius)
 
-    p_mcp = sub.add_parser("mcp", help="run MCP gateway server over stdio")
+    p_mcp = sub.add_parser("mcp", help="run MCP gateway server (stdio or SSE)")
+    p_mcp.add_argument(
+        "--transport",
+        choices=["stdio", "sse"],
+        default="stdio",
+        help="MCP transport protocol (default: stdio)",
+    )
+    p_mcp.add_argument("--host", default="127.0.0.1", help="SSE host to bind (default: 127.0.0.1)")
+    p_mcp.add_argument(
+        "--port", type=int, default=8000, help="SSE port to listen on (default: 8000)"
+    )
     p_mcp.set_defaults(func=_cmd_mcp_serve)
 
     p_status = sub.add_parser("status", help="ops: store reachability + counts")

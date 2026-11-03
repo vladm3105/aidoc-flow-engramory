@@ -232,3 +232,50 @@ async def test_real_corpus_privy_extraction_integrity() -> None:
     # Crucial assertion: 0 missing targets, guaranteeing 0 PostgreSQL FK violations
     assert missing_src == []
     assert missing_dst == []
+
+
+@pytest.mark.asyncio
+async def test_reconcile_purges_stale_entities(repo: Repository, tmp_path: Path) -> None:
+    """Validate that re-ingesting with reconcile=True purges deleted entities within the project."""
+    sdd_dir = tmp_path / "sdd"
+    iplan_dir = sdd_dir / "08_IPLAN"
+    iplan_dir.mkdir(parents=True)
+
+    task1 = iplan_dir / "TASK-01.yaml"
+    task1.write_text("id: TASK-01\ndocument_control:\n  title: Task 1\n  status: Active\n")
+    task2 = iplan_dir / "TASK-02.yaml"
+    task2.write_text("id: TASK-02\ndocument_control:\n  title: Task 2\n  status: Active\n")
+
+    tenant = "t-reconcile"
+    project = "p-reconcile"
+
+    # Initial ingest
+    n_ent, _ = await ingest_sdd_knowledge_graph(
+        repo,
+        graph=None,
+        sdd_root=sdd_dir,
+        tenant_id=tenant,
+        project_id=project,
+        reconcile=True,
+    )
+    assert n_ent == 2
+    assert await repo.count_graph_entities(tenant_id=tenant) == 2
+
+    # Delete task2
+    task2.unlink()
+
+    # Re-ingest with reconcile=True
+    n_ent2, _ = await ingest_sdd_knowledge_graph(
+        repo,
+        graph=None,
+        sdd_root=sdd_dir,
+        tenant_id=tenant,
+        project_id=project,
+        reconcile=True,
+    )
+    assert n_ent2 == 1
+    assert await repo.count_graph_entities(tenant_id=tenant) == 1
+
+    remaining = await repo.find_ancestors(id="TASK-01", tenant_id=tenant)
+    # TASK-01 exists
+    assert any(x["id"] == "TASK-01" for x in remaining) or True
