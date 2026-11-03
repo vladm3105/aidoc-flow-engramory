@@ -73,6 +73,14 @@ async def reproject_all(
     if hasattr(graph, "init_schema"):
         await graph.init_schema()
 
+    # Reconcile deletions if graph adapter supports purge
+    if hasattr(graph, "purge_stale_nodes"):
+        entities = await repo.list_graph_entities(tenant_id=tenant_id)
+        canonical_ids = [e.id for e in entities]
+        purged = await graph.purge_stale_nodes(tenant_id=tenant_id, active_ids=canonical_ids)
+        if isinstance(purged, int) and purged > 0:
+            logger.info("Purged %d stale graph nodes for tenant %s", purged, tenant_id)
+
     node_count = await project_entities(repo, graph, tenant_id=tenant_id)
     edge_count = await project_relations(repo, graph, tenant_id=tenant_id)
     logger.info(

@@ -24,27 +24,29 @@ class GraphPort(Protocol):
         ...
 
     async def neighbors(
-        self, *, id: str, rel: str | None = None, depth: int = 1
+        self, *, id: str, rel: str | None = None, depth: int = 1, tenant_id: str = "default"
     ) -> Sequence[Mapping[str, Any]]:
         """Return nodes reachable from `id` within `depth` hops (bounded traversal)."""
         ...
 
     async def ancestors(
-        self, *, id: str, rel: str | None = None, depth: int = 6
+        self, *, id: str, rel: str | None = None, depth: int = 6, tenant_id: str = "default"
     ) -> Sequence[Mapping[str, Any]]:
         """Return upstream ancestor nodes reachable from `id` along directed out-edges."""
         ...
 
     async def descendants(
-        self, *, id: str, rel: str | None = None, depth: int = 6
+        self, *, id: str, rel: str | None = None, depth: int = 6, tenant_id: str = "default"
     ) -> Sequence[Mapping[str, Any]]:
         """Return downstream descendant nodes reachable from `id` along directed in-edges."""
         ...
 
-    async def delete_node(self, *, id: str) -> None:
+    async def delete_node(self, *, id: str, tenant_id: str = "default") -> None:
         """Delete a node and its attached relationships."""
         ...
 
-    async def delete_edge(self, *, src: str, dst: str, rel: str | None = None) -> None:
+    async def delete_edge(
+        self, *, src: str, dst: str, rel: str | None = None, tenant_id: str = "default"
+    ) -> None:
         """Delete relationship(s) between src and dst."""
         ...
