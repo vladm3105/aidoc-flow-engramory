@@ -1,6 +1,6 @@
 # PLAN-009: Staging Environment Deployment & Multi-Project SDD Integration
 
-> **Status:** Review  
+> **Status:** Implemented  
 > **Date:** 2026-11-03  
 > **Target Environment:** Pre-Production Staging (`100.98.134.10`)  
 > **Owning Repo:** `aidoc-flow-engramory`  
@@ -293,3 +293,13 @@ flowchart TD
   - Confirmed standalone compose structure matches staging platform standards (`platform-litellm`, `platform-temporal`).
   - Confirmed `/workspace` mount enables cross-repository SDD ingestion without host Python/uv dependencies.
   - **Result:** ready — zero remaining load-bearing findings.
+
+### Pass 4 - 2026-11-03 - execution & verification
+
+- Deployment & Verification:
+  - Phase 1: Namespace `/home/platform/platform-engramory` deployed; `.env.stage` secured (`0600`); PostgreSQL credentials synchronized.
+  - Phase 2: Migrations `0001` through `0007` applied sequentially to `stage-postgres18`; schema permissions verified.
+  - Phase 3: Standalone stack `compose.platform.yaml` deployed on `platform-mesh`; `engramory-mcp`, `engramory-worker`, and `engramory-seaweedfs` healthy.
+  - Phase 4: SDD corpus ingested (40 entities in `aidoc-flow-engramory`, 10 in `aidoc-framework`, 166 relations total); graph projections verified in `stage-neo4j` and `stage-postgres18`.
+  - Phase 5: Verified end-to-end MCP tools (`tools/list`, `sdd_context_slice`, `sdd_blast_radius`, `memory_add`, `memory_search`), background reflection daemon, and Coroot / Langfuse / OTel observability pipeline.
+  - **Result:** ready — no new findings.
