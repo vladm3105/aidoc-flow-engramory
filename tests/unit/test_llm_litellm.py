@@ -60,3 +60,15 @@ async def test_chat_success() -> None:
             model="chat",
         )
         assert reply == "Hello! I am Engramory."
+
+
+def test_api_key_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LITELLM_API_KEY", raising=False)
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "secret-master-token")
+    # Must NOT fall back to master key per platform policy
+    adapter = LiteLLMAdapter(base_url="http://mock-proxy:4000/v1")
+    assert adapter._api_key == "sk-platform-token"
+
+    monkeypatch.setenv("LITELLM_API_KEY", "custom-virtual-token")
+    adapter2 = LiteLLMAdapter(base_url="http://mock-proxy:4000/v1")
+    assert adapter2._api_key == "custom-virtual-token"

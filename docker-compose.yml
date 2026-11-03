@@ -125,7 +125,7 @@ services:
       ENGRAMORY_PROFILE: dev
       ENGRAMORY_REFLECT_INTERVAL_SEC: ${ENGRAMORY_REFLECT_INTERVAL_SEC:-300}
       LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://host.docker.internal:4000/v1}
-      LITELLM_API_KEY: ${LITELLM_API_KEY:-${LITELLM_MASTER_KEY:-sk-platform-token}}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-platform-token}
     restart: unless-stopped
 
 volumes:
