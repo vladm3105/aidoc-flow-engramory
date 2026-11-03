@@ -1,0 +1,31 @@
+# Optional single-host dev/stage overlay (ADR-0025 / ENGRAMORY-OBSERVABILITY-INTEGRATION):
+# join the engramory services to the platform telemetry network so aidoc-otel-collector
+# and Coroot node agent / HyperDX can collect telemetry and communicate.
+#
+# Usage (unified collector stack must already be up):
+#   docker compose -f docker-compose.yml -f docker-compose.telemetry-net.yml up -d
+#
+# The external network name follows aidoc-observability-monitoring's compose project
+# (`name: aidoc-platform`, network `aidoc_telemetry-net`).
+# Override with AIDOC_TELEMETRY_NETWORK if renamed in environment.
+services:
+  mcp:
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://aidoc-otel-collector:4318}
+      - OTEL_SERVICE_NAME=engramory-mcp
+    networks:
+      - default
+      - telemetry
+
+  worker:
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://aidoc-otel-collector:4318}
+      - OTEL_SERVICE_NAME=engramory-worker
+    networks:
+      - default
+      - telemetry
+
+networks:
+  telemetry:
+    external: true
+    name: "${AIDOC_TELEMETRY_NETWORK:-aidoc-platform_aidoc_telemetry-net}"
