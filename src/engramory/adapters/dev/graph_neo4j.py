@@ -36,11 +36,21 @@ class Neo4jGraphAdapter:
         auth: tuple[str, str] | None = None,
         driver: AsyncDriver | None = None,
     ) -> None:
-        resolved_uri = uri or os.getenv("NEO4J_URI") or DEFAULT_NEO4J_URI
+        resolved_uri = (
+            uri or os.getenv("ENGRAMORY_GRAPH_URL") or os.getenv("NEO4J_URI") or DEFAULT_NEO4J_URI
+        )
         self._uri: str = resolved_uri
-        user: str = (auth[0] if auth else None) or os.getenv("NEO4J_USER") or DEFAULT_NEO4J_USER
+        user: str = (
+            (auth[0] if auth else None)
+            or os.getenv("ENGRAMORY_GRAPH_USER")
+            or os.getenv("NEO4J_USER")
+            or DEFAULT_NEO4J_USER
+        )
         password: str = (
-            (auth[1] if auth else None) or os.getenv("NEO4J_PASSWORD") or DEFAULT_NEO4J_PASSWORD
+            (auth[1] if auth else None)
+            or os.getenv("ENGRAMORY_GRAPH_PASSWORD")
+            or os.getenv("NEO4J_PASSWORD")
+            or DEFAULT_NEO4J_PASSWORD
         )
         self._auth: tuple[str, str] = (user, password)
         self._driver = driver or AsyncGraphDatabase.driver(self._uri, auth=self._auth)
