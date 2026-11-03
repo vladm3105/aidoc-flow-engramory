@@ -280,17 +280,31 @@ class Neo4jGraphAdapter:
         async with self._driver.session() as session:
             await session.run(query, {"src_uid": src_uid, "dst_uid": dst_uid})
 
-    async def purge_stale_nodes(self, *, tenant_id: str, active_ids: Sequence[str]) -> int:
-        """Delete any nodes belonging to tenant_id whose IDs are not in active_ids."""
+    async def purge_stale_nodes(
+        self,
+        *,
+        tenant_id: str,
+        active_ids: Sequence[str],
+        project_id: str | None = None,
+    ) -> int:
+        """Delete any nodes belonging to tenant_id (and optional project_id)
+        whose IDs are not in active_ids.
+        """
         active_uids = [f"{tenant_id}:{i}" for i in active_ids]
-        query = """
+        where_clauses = ["n.tenant_id = $tenant_id", "NOT n.uid IN $active_uids"]
+        params: dict[str, Any] = {"tenant_id": tenant_id, "active_uids": active_uids}
+        if project_id:
+            where_clauses.append("n.project_id = $project_id")
+            params["project_id"] = project_id
+
+        query = f"""
         MATCH (n:Entity)
-        WHERE n.tenant_id = $tenant_id AND NOT n.uid IN $active_uids
+        WHERE {" AND ".join(where_clauses)}
         WITH n, count(n) AS cnt
         DETACH DELETE n
         RETURN cnt
         """
         async with self._driver.session() as session:
-            result = await session.run(query, {"tenant_id": tenant_id, "active_uids": active_uids})
+            result = await session.run(query, params)
             rec = await result.single()
-            return int(rec["cnt"]) if rec else 0
+            return int(rec["cnt"]) if rec and rec["cnt"] is not None else 0

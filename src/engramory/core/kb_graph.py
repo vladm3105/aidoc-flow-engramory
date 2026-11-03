@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import logging
 import re
+import subprocess
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -436,6 +438,79 @@ async def ingest_adr_knowledge_graph(
     return len(entities), len(relations)
 
 
+def resolve_sdd_project_id(
+    sdd_root: Path | str,
+    explicit_id: str | None = None,
+    config_id: str | None = None,
+) -> str:
+    """Resolve project_id deterministically from flags, .aidoc/profile.yaml, Git, or config."""
+    if explicit_id and explicit_id.strip():
+        return explicit_id.strip()
+
+    root_path = Path(sdd_root).resolve()
+    search_dirs: list[Path] = [root_path]
+    curr = root_path
+    for _ in range(3):
+        if curr.parent != curr:
+            curr = curr.parent
+            search_dirs.append(curr)
+    for d in search_dirs:
+        # 1. Check .aidoc/profile.yaml
+        profile_path = d / ".aidoc" / "profile.yaml"
+        if not profile_path.is_file():
+            profile_path = d / "profile.yaml"
+        if profile_path.is_file():
+            try:
+                data = yaml.safe_load(profile_path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    meta = data.get("metadata", {})
+                    if isinstance(meta, dict) and meta.get("project_name"):
+                        return str(meta["project_name"]).strip()
+                    if data.get("project_name"):
+                        return str(data["project_name"]).strip()
+                    if data.get("name"):
+                        return str(data["name"]).strip()
+            except Exception:
+                pass
+
+        # 2. Check pyproject.toml
+        pyproject_path = d / "pyproject.toml"
+        if pyproject_path.is_file():
+            try:
+                data_toml = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+                proj_name = data_toml.get("project", {}).get("name")
+                if proj_name:
+                    return str(proj_name).strip()
+            except Exception:
+                pass
+
+        # 3. Check git remote origin
+        if (d / ".git").exists() or (d.parent / ".git").exists():
+            try:
+                out = subprocess.run(
+                    ["git", "config", "--get", "remote.origin.url"],
+                    cwd=str(d),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if out.returncode == 0 and out.stdout.strip():
+                    url = out.stdout.strip().rstrip("/")
+                    if url.endswith(".git"):
+                        url = url[:-4]
+                    name = url.split("/")[-1].split(":")[-1]
+                    if name:
+                        return name.strip()
+            except Exception:
+                pass
+
+    if config_id and config_id not in ("p1", "default", "core"):
+        return config_id
+
+    # Fallback to directory name
+    return root_path.parent.name if root_path.name in ("sdd", "docs") else root_path.name
+
+
 async def ingest_sdd_knowledge_graph(
     repo: Repository,
     graph: GraphPort | None = None,
@@ -444,6 +519,7 @@ async def ingest_sdd_knowledge_graph(
     tenant_id: str = "default",
     project_id: str = "core",
     domain_id: str = "core",
+    reconcile: bool = True,
 ) -> tuple[int, int]:
     """Ingest complete multi-layer SDD corpus into PostgreSQL and project to Neo4j."""
     entities, relations = extract_sdd_graph(
@@ -457,10 +533,33 @@ async def ingest_sdd_knowledge_graph(
     await repo.bulk_upsert_graph_entities(entities)
     await repo.bulk_upsert_graph_relations(relations)
 
-    # 2. Rebuildable projection to Neo4j (ADR-05)
+    # 2. Reconcile deleted / renamed files by purging stale database entities
+    if reconcile and entities:
+        active_ids = [e.id for e in entities]
+        purged = await repo.purge_stale_graph_entities(
+            tenant_id=tenant_id,
+            project_id=project_id,
+            active_ids=active_ids,
+        )
+        if purged:
+            logger.info(
+                "Reconciled %d stale entities for tenant %s (project %s)",
+                len(purged),
+                tenant_id,
+                project_id,
+            )
+
+    # 3. Rebuildable projection to Neo4j (ADR-05)
     if graph is not None:
         if hasattr(graph, "init_schema"):
             await graph.init_schema()
+
+        if reconcile and entities and hasattr(graph, "purge_stale_nodes"):
+            await graph.purge_stale_nodes(
+                tenant_id=tenant_id,
+                active_ids=[e.id for e in entities],
+                project_id=project_id,
+            )
 
         for entity in entities:
             props = {

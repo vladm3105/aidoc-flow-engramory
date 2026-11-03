@@ -78,6 +78,36 @@ class MemoryHit:
     token_count: int
 
 
+LAYER_ORDER: dict[str, int] = {
+    "BRD": 1,
+    "PRD": 2,
+    "SYS": 3,
+    "EARS": 3,
+    "SRS": 4,
+    "ADR": 5,
+    "ARCH": 6,
+    "DSG": 7,
+    "SPEC": 8,
+    "BDD": 8,
+    "TDD": 9,
+    "IPLAN": 10,
+    "CHG": 11,
+    "EVAL": 12,
+}
+
+
+def _extract_layer_prefix(node: Mapping[str, Any]) -> str:
+    nid = str(node.get("id", ""))
+    if "-" in nid:
+        return nid.split("-")[0].upper()
+    labels = node.get("labels", [])
+    for lbl in labels:
+        lbl_upper = str(lbl).upper()
+        if lbl_upper in LAYER_ORDER:
+            return lbl_upper
+    return "UNKNOWN"
+
+
 class AccessSurface:
     """Authorized, scoped, audited read/write interface for all agents."""
 
@@ -201,18 +231,48 @@ class AccessSurface:
         task_id: str,
         depth: int = 6,
         scope: str = "project",
+        layers: Sequence[str] | None = None,
+        max_tokens: int = 2000,
     ) -> Sequence[Mapping[str, Any]]:
         """Retrieve upstream contract closure (ancestors) for an SDD task node."""
         target = TargetScope(tenant_id=ctx.tenant_id, scope=scope)
         await self._decide(ctx, "context_slice", target)
+        hits: Sequence[Mapping[str, Any]] = []
         if self._graph is not None:
             try:
                 hits = await self._graph.ancestors(id=task_id, depth=depth, tenant_id=ctx.tenant_id)
-                if hits:
-                    return hits
             except Exception:
                 logger.debug("Graph adapter ancestors query failed, falling back to PostgreSQL CTE")
-        return await self._repo.find_ancestors(id=task_id, tenant_id=ctx.tenant_id, depth=depth)
+        if not hits:
+            hits = await self._repo.find_ancestors(id=task_id, tenant_id=ctx.tenant_id, depth=depth)
+
+        # 1. Filter by requested layers if specified
+        if layers:
+            allowed_layers = {layer_name.upper() for layer_name in layers}
+            hits = [h for h in hits if _extract_layer_prefix(h) in allowed_layers]
+
+        # 2. Sort topologically from root requirements down to immediate specifications
+        sorted_hits = sorted(
+            hits,
+            key=lambda n: (
+                LAYER_ORDER.get(_extract_layer_prefix(n), 99),
+                str(n.get("id", "")),
+            ),
+        )
+
+        # 3. Budget tokens if max_tokens is provided
+        budget = max_tokens
+        kept: list[Mapping[str, Any]] = []
+        for h in sorted_hits:
+            props = h.get("properties", {})
+            text_len = len(str(h.get("id", ""))) + len(str(props))
+            approx_tokens = max(1, text_len // 4)
+            if approx_tokens > budget and kept:
+                break
+            budget -= approx_tokens
+            kept.append(h)
+
+        return kept
 
     async def blast_radius(
         self,

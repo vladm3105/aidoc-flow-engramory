@@ -50,3 +50,15 @@ class GraphPort(Protocol):
     ) -> None:
         """Delete relationship(s) between src and dst."""
         ...
+
+    async def purge_stale_nodes(
+        self,
+        *,
+        tenant_id: str,
+        active_ids: Sequence[str],
+        project_id: str | None = None,
+    ) -> int:
+        """Delete any nodes belonging to tenant_id (and optional project_id)
+        whose IDs are not in active_ids.
+        """
+        ...

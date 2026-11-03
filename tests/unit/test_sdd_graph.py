@@ -7,6 +7,7 @@ from pathlib import Path
 from engramory.core.kb_graph import (
     extract_sdd_graph,
     normalize_sdd_id,
+    resolve_sdd_project_id,
 )
 
 
@@ -99,3 +100,28 @@ def test_extract_sdd_graph_synthetic_layers(tmp_path: Path) -> None:
     assert ("PRD-01", "BRD-01", "FULFILLS") in rel_tuples
     assert ("SPEC-01", "ADR-02", "CONSTRAINED_BY") in rel_tuples
     assert ("IPLAN-01", "SPEC-01", "IMPLEMENTS") in rel_tuples
+
+
+def test_resolve_sdd_project_id(tmp_path: Path) -> None:
+    # 1. Explicit ID wins
+    assert resolve_sdd_project_id(tmp_path, explicit_id="explicit-p") == "explicit-p"
+
+    # 2. Configured ID wins if no explicit ID
+    assert resolve_sdd_project_id(tmp_path, config_id="cfg-p") == "cfg-p"
+
+    # 3. .aidoc/profile.yaml metadata.project_name
+    aidoc_dir = tmp_path / ".aidoc"
+    aidoc_dir.mkdir()
+    (aidoc_dir / "profile.yaml").write_text("metadata:\n  project_name: aidoc-profile-proj\n")
+    assert resolve_sdd_project_id(tmp_path) == "aidoc-profile-proj"
+
+    # 4. pyproject.toml [project] name
+    proj_dir = tmp_path / "subproject"
+    proj_dir.mkdir()
+    (proj_dir / "pyproject.toml").write_text('[project]\nname = "pyproject-proj"\n')
+    assert resolve_sdd_project_id(proj_dir) == "pyproject-proj"
+
+    # 5. Directory fallback
+    fallback_dir = tmp_path.parent / "isolated_fallback_dir"
+    fallback_dir.mkdir(exist_ok=True)
+    assert resolve_sdd_project_id(fallback_dir) == "isolated_fallback_dir"
