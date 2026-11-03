@@ -62,38 +62,7 @@ services:
       - platform-mesh
     restart: unless-stopped
 
-  seaweedfs:
-    image: chrislusf/seaweedfs:latest
-    container_name: engramory-seaweedfs
-    command: "server -dir=/data -s3 -s3.port=9000 -volume.max=5"
-    ports:
-      - "${S3_PORT:-9000}:9000"
-    volumes:
-      - seaweedfs-data:/data
-    networks:
-      - platform-mesh
-    restart: unless-stopped
-
-  seaweedfs-init:
-    image: chrislusf/seaweedfs:latest
-    container_name: engramory-seaweedfs-init
-    depends_on:
-      seaweedfs:
-        condition: service_started
-    entrypoint: >
-      /bin/sh -c "
-      sleep 2;
-      echo 's3.bucket.create -name ${S3_BUCKET:-engramory}' | weed shell -master=seaweedfs:9333;
-      echo 'Bucket ${S3_BUCKET:-engramory} initialized successfully.';
-      "
-    networks:
-      - platform-mesh
-    restart: "no"
-
 networks:
   platform-mesh:
     external: true
 
-volumes:
-  seaweedfs-data:
-    name: platform-engramory_seaweedfs-data
