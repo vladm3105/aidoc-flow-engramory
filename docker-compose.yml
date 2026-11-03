@@ -28,31 +28,6 @@ services:
     ports: ["6379:6379"]
     volumes: ["redisdata:/data"]
 
-  seaweedfs:
-    image: chrislusf/seaweedfs:latest
-    container_name: engramory-seaweedfs
-    command: "server -dir=/data -s3 -s3.port=9000 -filer -filer.port=8888 -volume.max=5 -master.volumeSizeLimitMB=1024"
-    ports:
-      - "${S3_PORT:-9000}:9000"
-      - "${S3_FILER_PORT:-8888}:8888"
-    volumes:
-      - seaweedfs-data:/data
-    restart: unless-stopped
-
-  seaweedfs-init:
-    image: chrislusf/seaweedfs:latest
-    container_name: engramory-seaweedfs-init
-    depends_on:
-      seaweedfs:
-        condition: service_started
-    entrypoint: >
-      /bin/sh -c "
-      sleep 2;
-      echo 's3.bucket.create -name ${S3_BUCKET:-engramory}' | weed shell -master=seaweedfs:9333;
-      echo 'Bucket ${S3_BUCKET:-engramory} initialized successfully.';
-      "
-    restart: "no"
-
   ollama:
     profiles: ["local-ai"]
     image: ollama/ollama:0.31.2
@@ -164,7 +139,6 @@ services:
 volumes:
   pgdata:
   redisdata:
-  seaweedfs-data:
   ollamadata:
   neo4jdata:
   keycloakdata:

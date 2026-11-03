@@ -91,10 +91,5 @@ for _ in {1..30}; do
     sleep 2
 done
 
-if ${STAGE_SSH} "curl -s -f http://127.0.0.1:9000/" >/dev/null 2>&1; then
-    echo "[OK] SeaweedFS S3 is healthy on http://${STAGE_HOST}:9000"
-else
-    echo "⚠️  SeaweedFS S3 probe pending on http://${STAGE_HOST}:9000"
-fi
-
 echo "[OK] Engramory deployment to stage completed successfully."
+
