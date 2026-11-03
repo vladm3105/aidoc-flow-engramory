@@ -75,13 +75,13 @@ flowchart TD
 
 | # | Claim | Symbol | Citation |
 |---|---|---|---|
-| 1 | `docker-compose.yml` standardizes PostgreSQL service name to `engramory-postgres` | `container_name: engramory-postgres` | docker-compose.yml:8 |
-| 2 | `docker-compose.yml` standardizes SeaweedFS container name to `engramory-seaweedfs` | `container_name: engramory-seaweedfs` | docker-compose.yml:33 |
-| 3 | `docker-compose.yml` standardizes MCP service container name to `engramory-mcp` | `container_name: engramory-mcp` | docker-compose.yml:119 |
-| 4 | `docker-compose.yml` exposes host MCP port via configurable `MCP_PORT` defaulting to 8000 | `"${MCP_PORT:-8000}:8000"` | docker-compose.yml:136 |
-| 5 | `docker-compose.yml` standardizes worker container name to `engramory-worker` | `container_name: engramory-worker` | docker-compose.yml:150 |
-| 6 | `docker-compose.telemetry-net.yml` routes OTLP spans to `OTEL_EXPORTER_OTLP_ENDPOINT` | `OTEL_EXPORTER_OTLP_ENDPOINT` | docker-compose.telemetry-net.yml:14 |
-| 7 | `docker-compose.telemetry-net.yml` binds to configurable `AIDOC_TELEMETRY_NETWORK` | `AIDOC_TELEMETRY_NETWORK` | docker-compose.telemetry-net.yml:31 |
+| 1 | `compose.platform.yaml` establishes dedicated platform namespace for staging | `name: platform-engramory` | compose.platform.yaml:10 |
+| 2 | `compose.platform.yaml` standardizes SeaweedFS container name | `container_name: engramory-seaweedfs` | compose.platform.yaml:64 |
+| 3 | `compose.platform.yaml` standardizes MCP service container name | `container_name: engramory-mcp` | compose.platform.yaml:18 |
+| 4 | `compose.platform.yaml` exposes host MCP port via configurable `MCP_PORT` defaulting to 8005 | `"${MCP_PORT:-8005}:8000"` | compose.platform.yaml:21 |
+| 5 | `compose.platform.yaml` standardizes worker container name | `container_name: engramory-worker` | compose.platform.yaml:49 |
+| 6 | `compose.platform.yaml` exposes SeaweedFS S3 port via configurable `S3_PORT` defaulting to 9000 | `"${S3_PORT:-9000}:9000"` | compose.platform.yaml:67 |
+| 7 | `compose.platform.yaml` binds stack to external staging platform mesh | `platform-mesh:` | compose.platform.yaml:91 |
 | 8 | Migration 0001 initializes `memories.embedding` column with `vector` type | `embedding` | db/migrations/0001_init_memory.sql:58 |
 | 9 | Migration 0005 establishes cosine distance HNSW index `idx_memories_embedding_hnsw` | `idx_memories_embedding_hnsw` | db/migrations/0005_pin_embeddings_hnsw.sql:14 |
 | 10 | Migration 0006 sets vector dimensions to 1,536 for OpenAI/LiteLLM standard embedding models | `ALTER TABLE memories ALTER COLUMN embedding TYPE vector(1536);` | db/migrations/0006_resize_embeddings_1536.sql:14 |
@@ -90,10 +90,11 @@ flowchart TD
 | 13 | Background worker executes periodic distillation loop with heartbeat | `run_worker_loop` | src/engramory/workers/runner.py:26 |
 | 14 | Observability guide documents Tier-1 Zero-Code Coroot APM 1.27.4 eBPF integration | `Coroot Community 1.27.4` | docs/OBSERVABILITY.md:45 |
 | 15 | Staging host port 8005 is available and unallocated — **blocks Phase 3** | `8005` | PROBE: ssh ya@100.98.134.10 "sudo ss -tulpnH sport = :8005" |
-| 16 | Staging Neo4j service is healthy and accepts Bolt authentication — **blocks Phase 3** | `stage-neo4j` | PROBE: ssh ya@100.98.134.10 "sudo -u platform XDG_RUNTIME_DIR=/run/user/1004 docker exec stage-neo4j cypher-shell -u neo4j -p stage_graph_secret_2026 'RETURN 1;'" |
-| 17 | Staging PostgreSQL database `engramory` has `vector` extension version 0.8.7 enabled — **blocks Phase 2** | `vector` | PROBE: ssh ya@100.98.134.10 "sudo -u platform XDG_RUNTIME_DIR=/run/user/1004 docker exec stage-postgres18 psql -U stage_bootstrap -d engramory -c 'SELECT extversion FROM pg_extension WHERE extname = \"vector\";'" |
-| 18 | Staging LiteLLM proxy responds healthy on internal `platform-mesh` — **blocks Phase 3** | `aidoc-litellm-proxy` | PROBE: `ssh ya@100.98.134.10 "sudo -u platform XDG_RUNTIME_DIR=/run/user/1004 docker exec stage-neo4j wget -q -O- http://aidoc-litellm-proxy:4000/health/liveliness"` |
-| 19 | Staging OpenTelemetry collector is active on port 13133 on `platform-mesh` — **blocks Phase 5** | `otel-collector` | PROBE: `ssh ya@100.98.134.10 "sudo -u platform XDG_RUNTIME_DIR=/run/user/1004 docker exec stage-neo4j wget -q -O- http://otel-collector:13133/"` |
+| 16 | Staging host port 9000 is available for S3 object storage — **blocks Phase 3** | `9000` | PROBE: ssh ya@100.98.134.10 "sudo ss -tulpnH sport = :9000" |
+| 17 | Staging Neo4j service is healthy and accepts Bolt authentication — **blocks Phase 3** | `stage-neo4j` | PROBE: ssh ya@100.98.134.10 "sudo -u platform XDG_RUNTIME_DIR=/run/user/1004 docker exec stage-neo4j cypher-shell -u neo4j -p stage_graph_secret_2026 'RETURN 1;'" |
+| 18 | Staging PostgreSQL database `engramory` has `vector` extension version 0.8.7 enabled — **blocks Phase 2** | `vector` | PROBE: ssh ya@100.98.134.10 "sudo -u platform XDG_RUNTIME_DIR=/run/user/1004 docker exec stage-postgres18 psql -U stage_bootstrap -d engramory -c 'SELECT extversion FROM pg_extension WHERE extname = \"vector\";'" |
+| 19 | Staging LiteLLM proxy responds healthy on internal `platform-mesh` — **blocks Phase 3** | `aidoc-litellm-proxy` | PROBE: `ssh ya@100.98.134.10 "sudo -u platform XDG_RUNTIME_DIR=/run/user/1004 docker exec stage-neo4j wget -q -O- http://aidoc-litellm-proxy:4000/health/liveliness"` |
+| 20 | Staging OpenTelemetry collector is active on port 13133 on `platform-mesh` — **blocks Phase 5** | `otel-collector` | PROBE: `ssh ya@100.98.134.10 "sudo -u platform XDG_RUNTIME_DIR=/run/user/1004 docker exec stage-neo4j wget -q -O- http://otel-collector:13133/"` |
 
 ---
 
@@ -243,10 +244,10 @@ flowchart TD
    - Verify that `engramory-mcp` and `engramory-worker` appear on the application map.
    - Inspect inbound connection from clients on port 8005 and outbound TCP connections to `stage-postgres18:5432`, `stage-neo4j:7687`, and `aidoc-litellm-proxy:4000`.
    - Confirm zero crash loops, zero OOM events, and healthy CPU/memory cgroups.
-3. **HyperDX & OpenTelemetry Tracing Verification (Tier 2)**:
+3. **Telemetry Ingestion & OpenTelemetry Foundation (Tier 2)**:
    - Access HyperDX dashboard at `http://100.98.134.10:18080/`.
-   - Filter traces by service name `engramory-mcp`.
-   - Verify span generation for JSON-RPC requests, PostgreSQL query spans, and Neo4j Cypher executions.
+   - Verify that OTel Collector is healthy on port 13133 and ready to ingest telemetry.
+   - Note: Application-level in-process tracing for `engramory-mcp` is pre-configured via `OTEL_EXPORTER_OTLP_ENDPOINT` and will emit full request/Cypher span waterfalls once `opentelemetry-instrument` is bundled in a subsequent release; Phase 5 verification gates on container network visibility and zero pipeline export errors.
 4. **Langfuse GenAI Tracing Verification (Tier 3)**:
    - Access Langfuse UI at `http://100.98.134.10:13000/`.
    - Verify trace generation for embedding calls (`text-embedding-3-small`) routed through LiteLLM during knowledge ingestion and worker distillation.

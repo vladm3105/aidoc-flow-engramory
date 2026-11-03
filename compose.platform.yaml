@@ -1,0 +1,96 @@
+# ==============================================================================
+# Stage: Engramory memory & knowledge core in the `platform` rootless Docker
+# namespace (UID 1004). Attaches directly to `platform-mesh` alongside
+# stage-postgres18, stage-neo4j, aidoc-litellm-proxy, and otel-collector.
+#
+# Usage as platform user:
+#   docker compose -f compose.platform.yaml up -d
+# ==============================================================================
+
+name: platform-engramory
+
+services:
+  mcp:
+    image: aidoc-engramory-mcp:staging
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: engramory-mcp
+    entrypoint: ["engramory", "mcp", "--transport", "sse", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "${MCP_PORT:-8005}:8000"
+    environment:
+      - ENGRAMORY_DATABASE_URL=${ENGRAMORY_DATABASE_URL:-postgresql://engramory:change_me@stage-postgres18:5432/engramory}
+      - ENGRAMORY_GRAPH_URL=${ENGRAMORY_GRAPH_URL:-bolt://stage-neo4j:7687}
+      - ENGRAMORY_GRAPH_USER=${ENGRAMORY_GRAPH_USER:-neo4j}
+      - ENGRAMORY_GRAPH_PASSWORD=${ENGRAMORY_GRAPH_PASSWORD:-stage_graph_secret_2026}
+      - LITELLM_BASE_URL=${LITELLM_BASE_URL:-http://aidoc-litellm-proxy:4000/v1}
+      - LITELLM_API_KEY=${LITELLM_API_KEY:-sk-platform-token}
+      - ENGRAMORY_PROFILE=dev
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
+      - OTEL_SERVICE_NAME=engramory-mcp
+    volumes:
+      - ${HOST_SPOKE_DEV_PATH:-/opt/data}:/workspace:ro
+    networks:
+      - platform-mesh
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8000/\")' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  worker:
+    image: aidoc-engramory-worker:staging
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: engramory-worker
+    environment:
+      - ENGRAMORY_DATABASE_URL=${ENGRAMORY_DATABASE_URL:-postgresql://engramory:change_me@stage-postgres18:5432/engramory}
+      - ENGRAMORY_PROFILE=dev
+      - ENGRAMORY_REFLECT_INTERVAL_SEC=${ENGRAMORY_REFLECT_INTERVAL_SEC:-300}
+      - LITELLM_BASE_URL=${LITELLM_BASE_URL:-http://aidoc-litellm-proxy:4000/v1}
+      - LITELLM_API_KEY=${LITELLM_API_KEY:-sk-platform-token}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
+      - OTEL_SERVICE_NAME=engramory-worker
+    networks:
+      - platform-mesh
+    restart: unless-stopped
+
+  seaweedfs:
+    image: chrislusf/seaweedfs:latest
+    container_name: engramory-seaweedfs
+    command: "server -dir=/data -s3 -s3.port=9000 -volume.max=5"
+    ports:
+      - "${S3_PORT:-9000}:9000"
+    volumes:
+      - seaweedfs-data:/data
+    networks:
+      - platform-mesh
+    restart: unless-stopped
+
+  seaweedfs-init:
+    image: chrislusf/seaweedfs:latest
+    container_name: engramory-seaweedfs-init
+    depends_on:
+      seaweedfs:
+        condition: service_started
+    entrypoint: >
+      /bin/sh -c "
+      sleep 2;
+      echo 's3.bucket.create -name ${S3_BUCKET:-engramory}' | weed shell -master=seaweedfs:9333;
+      echo 'Bucket ${S3_BUCKET:-engramory} initialized successfully.';
+      "
+    networks:
+      - platform-mesh
+    restart: "no"
+
+networks:
+  platform-mesh:
+    external: true
+
+volumes:
+  seaweedfs-data:
+    name: platform-engramory_seaweedfs-data
