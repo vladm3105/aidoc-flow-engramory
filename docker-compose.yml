@@ -31,7 +31,7 @@ services:
   seaweedfs:
     image: chrislusf/seaweedfs:latest
     container_name: engramory-seaweedfs
-    command: "weed server -dir=/data -s3 -s3.port=9000 -filer -filer.port=8888 -volume.max=5 -master.volumeSizeLimitMB=1024"
+    command: "server -dir=/data -s3 -s3.port=9000 -filer -filer.port=8888 -volume.max=5 -master.volumeSizeLimitMB=1024"
     ports:
       - "${S3_PORT:-9000}:9000"
       - "${S3_FILER_PORT:-8888}:8888"
