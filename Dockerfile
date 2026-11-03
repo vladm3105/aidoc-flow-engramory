@@ -35,6 +35,6 @@ ENV PYTHONUNBUFFERED=1 \
     ENGRAMORY_REFLECT_INTERVAL_SEC=300
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD test -n "$$(find /tmp/engramory-worker.heartbeat -mmin -10 2>/dev/null)" || exit 1
+    CMD test -n "$(find /tmp/engramory-worker.heartbeat -mmin -10 2>/dev/null)" || exit 1
 
 ENTRYPOINT ["engramory", "worker", "start"]

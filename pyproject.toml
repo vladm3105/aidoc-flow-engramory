@@ -52,4 +52,5 @@ ignore_missing_imports = true
 [dependency-groups]
 dev = [
     "bandit>=1.9.4",
+    "pip-audit>=2.10.1",
 ]
