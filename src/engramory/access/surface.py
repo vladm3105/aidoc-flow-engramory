@@ -388,3 +388,50 @@ class AccessSurface:
             version=version,
         )
         return await self._repo.upsert_kb_section(section)
+
+    async def knowledge_ingest_batch(
+        self,
+        ctx: ActorContext,
+        *,
+        sections: Sequence[KBSection],
+        evidence_ref: str | None,
+        scope: str = "project",
+    ) -> list[str]:
+        """Governed batch write: authorize first, then require an approved-evidence
+        reference (ADR-06). Both gates audit their decision."""
+        await self._decide(
+            ctx, "knowledge_ingest", TargetScope(tenant_id=ctx.tenant_id, scope=scope)
+        )
+        if not evidence_ref:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="knowledge_ingest",
+                allowed=False,
+                reason="missing_evidence_ref",
+            )
+            raise GovernedWriteRejected("knowledge_ingest requires evidence_ref")
+        return await self._repo.upsert_kb_sections_batch(sections)
+
+    async def knowledge_search(
+        self,
+        ctx: ActorContext,
+        query: str,
+        *,
+        query_vec: Sequence[float] | None = None,
+        scope: str | None = None,
+        limit: int = 5,
+    ) -> list[KBSection]:
+        """Search knowledge sections with tenant/project scoping."""
+        await self._decide(
+            ctx, "knowledge_search", TargetScope(tenant_id=ctx.tenant_id, scope=scope or "project")
+        )
+        return await self._repo.search_kb_sections(
+            query,
+            tenant_id=ctx.tenant_id,
+            project_id=ctx.project_id,
+            query_vec=query_vec,
+            scope=scope,
+            limit=limit,
+        )

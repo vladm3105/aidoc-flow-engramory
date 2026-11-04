@@ -1,1 +1,203 @@
-"""Knowledge core — ingestion, section retrieval, semantic/graph search (L0)."""
+"""Knowledge core — ingestion, section retrieval, semantic/graph search (L0).
+
+Orchestrates document extraction, hierarchical citations, batch database
+persistence, and optional vector embeddings under Engramory's hexagonal
+architecture.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Sequence
+from pathlib import Path
+
+from engramory.core.citations import (
+    build_doc_id,
+    calculate_line_numbers,
+    format_local_citation,
+)
+from engramory.core.extraction.enrichment import SemanticChunker
+from engramory.core.extraction.router import SmartExtractionRouter
+from engramory.core.models import KBSection
+from engramory.core.repository import Repository
+from engramory.ports.llm import LLMPort
+
+logger = logging.getLogger(__name__)
+
+
+class KnowledgeCore:
+    """Knowledge core orchestration (L0)."""
+
+    def __init__(
+        self,
+        repo: Repository,
+        *,
+        llm: LLMPort | None = None,
+        router: SmartExtractionRouter | None = None,
+        chunker: SemanticChunker | None = None,
+        expected_embedding_dims: int = 1536,
+    ) -> None:
+        self.repo = repo
+        self.llm = llm
+        self.router = router or SmartExtractionRouter()
+        self.chunker = chunker
+        self.expected_embedding_dims = expected_embedding_dims
+
+    async def ingest_file(
+        self,
+        path: Path | str,
+        *,
+        tenant_id: str = "default",
+        project_id: str | None = None,
+        scope: str = "project",
+        evidence_ref: str | None = None,
+        version: int = 1,
+        embed: bool = True,
+    ) -> list[str]:
+        """Ingest a single document into kb_sections."""
+        p = Path(path)
+        if not p.exists():
+            raise FileNotFoundError(f"Knowledge document not found: {p}")
+
+        batch_result = await self.ingest_documents_batch(
+            [p],
+            tenant_id=tenant_id,
+            project_id=project_id,
+            scope=scope,
+            evidence_ref=evidence_ref,
+            version=version,
+            embed=embed,
+        )
+        return batch_result.get(str(p), [])
+
+    async def ingest_documents_batch(
+        self,
+        paths: Sequence[Path | str],
+        *,
+        tenant_id: str = "default",
+        project_id: str | None = None,
+        scope: str = "project",
+        evidence_ref: str | None = None,
+        version: int = 1,
+        embed: bool = True,
+    ) -> dict[str, list[str]]:
+        """Ingest multiple documents into kb_sections with batch upsert and batch embedding."""
+        all_sections: list[KBSection] = []
+        path_to_section_indices: dict[str, list[int]] = {}
+
+        for p_raw in paths:
+            p = Path(p_raw)
+            if not p.exists():
+                logger.warning("Skipping non-existent file in batch: %s", p)
+                continue
+
+            try:
+                full_text = p.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                full_text = ""
+
+            doc_id = build_doc_id(project_id, p.name)
+            extract_res = self.router.extract_document(p)
+            extracted_sections = extract_res.sections
+
+            if self.chunker is not None:
+                extracted_sections = self.chunker.refine_sections(extracted_sections)
+
+            file_sec_indices: list[int] = []
+            for sec in extracted_sections:
+                l_start, l_end = calculate_line_numbers(full_text, sec.char_start, sec.char_end)
+                cit = format_local_citation(str(p), l_start, l_end, sec.citation or sec.section_id)
+
+                kb_sec = KBSection(
+                    tenant_id=tenant_id,
+                    project_id=project_id,
+                    scope=scope,
+                    doc_id=doc_id,
+                    citation=cit,
+                    text=sec.content,
+                    version=version,
+                )
+                file_sec_indices.append(len(all_sections))
+                all_sections.append(kb_sec)
+
+            path_to_section_indices[str(p)] = file_sec_indices
+
+        if not all_sections:
+            return {}
+
+        inserted_ids = await self.repo.upsert_kb_sections_batch(all_sections)
+
+        # Batch embedding if requested and LLM port is available
+        if embed and self.llm is not None:
+            try:
+                texts = [s.text for s in all_sections]
+                embeddings = await self.llm.embed(texts=texts)
+                valid_updates = []
+                for s_id, vec in zip(inserted_ids, embeddings, strict=False):
+                    if len(vec) == self.expected_embedding_dims:
+                        valid_updates.append((s_id, vec))
+                    else:
+                        logger.warning(
+                            "Embedding dim mismatch: expected %d, got %d. Skipping projection.",
+                            self.expected_embedding_dims,
+                            len(vec),
+                        )
+                if valid_updates:
+                    await self.repo.set_kb_sections_embedding_batch(valid_updates)
+            except Exception as e:
+                logger.warning("Failed to compute embeddings for knowledge batch: %s", e)
+
+        # Map back to paths
+        result: dict[str, list[str]] = {}
+        for p_str, indices in path_to_section_indices.items():
+            result[p_str] = [inserted_ids[idx] for idx in indices if idx < len(inserted_ids)]
+
+        return result
+
+    async def search_sections(
+        self,
+        query: str,
+        *,
+        tenant_id: str = "default",
+        project_id: str | None = None,
+        scope: str | None = None,
+        limit: int = 5,
+    ) -> list[KBSection]:
+        """Search knowledge sections with semantic vector projection or text fallback."""
+        query_vec = None
+        if self.llm is not None:
+            try:
+                vecs = await self.llm.embed(texts=[query])
+                if vecs:
+                    query_vec = vecs[0]
+            except Exception as e:
+                logger.warning("Failed to generate embedding for query: %s", e)
+
+        return await self.repo.search_kb_sections(
+            query,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            query_vec=query_vec,
+            scope=scope,
+            limit=limit,
+        )
+
+    async def get_section(self, section_id: str, *, tenant_id: str = "default") -> KBSection | None:
+        """Fetch a section by its ID."""
+        return await self.repo.get_kb_section(section_id, tenant_id=tenant_id)
+
+    async def list_sections(
+        self,
+        *,
+        tenant_id: str = "default",
+        project_id: str | None = None,
+        doc_id: str | None = None,
+        limit: int = 50,
+    ) -> list[KBSection]:
+        """List sections matching tenant and optional project/doc_id."""
+        return await self.repo.list_kb_sections(
+            tenant_id=tenant_id,
+            project_id=project_id,
+            doc_id=doc_id,
+            limit=limit,
+        )
