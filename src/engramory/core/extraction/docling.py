@@ -20,7 +20,7 @@ try:
     DOCLING_AVAILABLE = True
 except ImportError:
     DOCLING_AVAILABLE = False
-    DocumentConverter = None  # type: ignore[assignment, misc]
+    DocumentConverter = None  # type: ignore[assignment, misc]  # reason: optional dependency fallback
 
 
 class DoclingExtractor:

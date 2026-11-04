@@ -140,7 +140,7 @@ class BaseParser(ABC):
         try:
             content = file_path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
-            content = file_path.read_bytes()  # type: ignore[assignment]
+            content = file_path.read_bytes()  # type: ignore[assignment]  # reason: fallback binary content
         return self.parse(content, filename=filename)
 
     def can_parse(self, filename: str) -> bool:

@@ -93,7 +93,7 @@ class SmartExtractionRouter:
         try:
             content = file_path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
-            content = file_path.read_bytes()  # type: ignore[assignment]
+            content = file_path.read_bytes()  # type: ignore[assignment]  # reason: fallback binary content
 
         native_res = self.detector.parse(content, filename=filename)
         sections = native_res.sections
