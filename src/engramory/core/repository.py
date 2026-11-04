@@ -66,6 +66,8 @@ _MEMORY_COLUMNS = (
     "source_trust, valid_from, valid_to, supersedes"
 )  # explicit list: never drag embedding/ts_lex over the wire on reads
 
+_KB_SECTION_COLUMNS = "id, tenant_id, project_id, domain_id, scope, doc_id, citation, text, version"
+
 
 class StoreUnavailable(RuntimeError):
     """The canonical store cannot be reached; callers fail closed (EARS.01.03.c900).
@@ -456,6 +458,177 @@ class Repository:
                     "id": section_id,
                 },
             )
+
+    async def upsert_kb_sections_batch(self, sections: Sequence[KBSection]) -> list[str]:
+        """Insert or update a batch of knowledge sections in a single statement.
+        Keyed by (tenant_id, doc_id, citation, version)."""
+        if not sections:
+            return []
+
+        # Deduplicate within batch by (tenant_id, doc_id, citation, version) keeping latest
+        deduped: dict[tuple[str, str, str, int], KBSection] = {}
+        for s in sections:
+            deduped[(s.tenant_id, s.doc_id, s.citation, s.version)] = s
+        unique_sections = list(deduped.values())
+
+        chunk_size = 100
+        inserted_ids: list[str] = []
+
+        for i in range(0, len(unique_sections), chunk_size):
+            chunk = unique_sections[i : i + chunk_size]
+            values_clauses = []
+            params: dict[str, Any] = {}
+            for idx, sec in enumerate(chunk):
+                p = f"s{idx}_"
+                values_clauses.append(
+                    f"(%({p}tenant)s, %({p}project)s, %({p}domain)s, "
+                    f"%({p}scope)s, %({p}doc_id)s, %({p}citation)s, "
+                    f"%({p}text)s, %({p}version)s)"
+                )
+                params[f"{p}tenant"] = sec.tenant_id
+                params[f"{p}project"] = sec.project_id
+                params[f"{p}domain"] = sec.domain_id
+                params[f"{p}scope"] = sec.scope
+                params[f"{p}doc_id"] = sec.doc_id
+                params[f"{p}citation"] = sec.citation
+                params[f"{p}text"] = sec.text
+                params[f"{p}version"] = sec.version
+
+            sql = f"""
+                INSERT INTO kb_sections
+                    (tenant_id, project_id, domain_id, scope, doc_id, citation,
+                     text, version)
+                VALUES {", ".join(values_clauses)}
+                ON CONFLICT (tenant_id, doc_id, citation, version)
+                    DO UPDATE SET text = EXCLUDED.text
+                RETURNING id
+            """
+            async with self._conn() as conn:
+                rows = await (await conn.execute(sql, params)).fetchall()
+                inserted_ids.extend(str(row["id"]) for row in rows)
+
+        return inserted_ids
+
+    async def set_kb_sections_embedding_batch(
+        self,
+        updates: Sequence[tuple[str, Sequence[float]]],
+        *,
+        embedding_model: str = "bge-small-en-v1.5",
+    ) -> None:
+        """Store vector projections for multiple kb_sections."""
+        if not updates:
+            return
+        async with self._conn() as conn:
+            for section_id, embedding in updates:
+                await conn.execute(
+                    """
+                    UPDATE kb_sections
+                    SET embedding = %(vec)s::vector,
+                        embedding_model = %(model)s,
+                        embedding_dims = %(dims)s
+                    WHERE id = %(id)s
+                    """,
+                    {
+                        "vec": vector_literal(embedding),
+                        "model": embedding_model,
+                        "dims": len(embedding),
+                        "id": section_id,
+                    },
+                )
+
+    async def get_kb_section(self, section_id: str, *, tenant_id: str) -> KBSection | None:
+        """Fetch a knowledge section by ID; None when missing or cross-tenant."""
+        async with self._conn() as conn:
+            row = await (
+                await conn.execute(
+                    f"""
+                    SELECT {_KB_SECTION_COLUMNS} FROM kb_sections
+                    WHERE id = %(id)s AND tenant_id = %(tenant_id)s
+                    """,
+                    {"id": section_id, "tenant_id": tenant_id},
+                )
+            ).fetchone()
+            if row is None:
+                return None
+            return _hydrate_kb_section(row)
+
+    async def list_kb_sections(
+        self,
+        *,
+        tenant_id: str,
+        project_id: str | None = None,
+        doc_id: str | None = None,
+        limit: int = 50,
+    ) -> list[KBSection]:
+        """List knowledge sections matching tenant and optional project/doc_id."""
+        clauses = ["tenant_id = %(tenant_id)s"]
+        params: dict[str, Any] = {"tenant_id": tenant_id, "limit": limit}
+        if project_id is not None:
+            clauses.append("project_id = %(project_id)s")
+            params["project_id"] = project_id
+        if doc_id is not None:
+            clauses.append("doc_id = %(doc_id)s")
+            params["doc_id"] = doc_id
+        where = " AND ".join(clauses)
+        async with self._conn() as conn:
+            rows = await (
+                await conn.execute(
+                    f"""
+                    SELECT {_KB_SECTION_COLUMNS} FROM kb_sections
+                    WHERE {where}
+                    ORDER BY doc_id, version DESC, id
+                    LIMIT %(limit)s
+                    """,
+                    params,
+                )
+            ).fetchall()
+            return [_hydrate_kb_section(row) for row in rows]
+
+    async def search_kb_sections(
+        self,
+        query: str,
+        *,
+        tenant_id: str,
+        project_id: str | None = None,
+        query_vec: Sequence[float] | None = None,
+        scope: str | None = None,
+        limit: int = 5,
+    ) -> list[KBSection]:
+        """Search knowledge sections by vector similarity (if query_vec is provided)
+        or by text matching (ILIKE fallback). Guarded by tenant and optional project/scope."""
+        clauses = ["tenant_id = %(tenant_id)s"]
+        params: dict[str, Any] = {"tenant_id": tenant_id, "limit": limit}
+
+        if project_id is not None:
+            clauses.append("project_id = %(project_id)s")
+            params["project_id"] = project_id
+        if scope is not None:
+            clauses.append("scope = %(scope)s")
+            params["scope"] = scope
+
+        if query_vec is not None:
+            clauses.append("embedding IS NOT NULL")
+            order = "embedding <=> %(qv)s::vector"
+            params["qv"] = vector_literal(query_vec)
+        else:
+            clauses.append("text ILIKE %(pattern)s")
+            params["pattern"] = f"%{query}%"
+            order = "version DESC, id"
+
+        where = " AND ".join(clauses)
+        async with self._conn() as conn:
+            rows = await (
+                await conn.execute(
+                    f"""
+                    SELECT {_KB_SECTION_COLUMNS} FROM kb_sections
+                    WHERE {where}
+                    ORDER BY {order}
+                    LIMIT %(limit)s
+                    """,
+                    params,
+                )
+            ).fetchall()
+            return [_hydrate_kb_section(row) for row in rows]
 
     async def record_audit(
         self,
@@ -1023,4 +1196,18 @@ def _hydrate_memory(row: dict[str, Any]) -> Memory:
         valid_to=row["valid_to"],
         supersedes=str(row["supersedes"]) if row["supersedes"] is not None else None,
         id=str(row["id"]),
+    )
+
+
+def _hydrate_kb_section(row: dict[str, Any]) -> KBSection:
+    return KBSection(
+        id=str(row["id"]),
+        tenant_id=row["tenant_id"],
+        project_id=row["project_id"],
+        domain_id=row["domain_id"],
+        scope=row["scope"],
+        doc_id=row["doc_id"],
+        citation=row["citation"],
+        text=row["text"],
+        version=int(row["version"]),
     )

@@ -261,21 +261,164 @@ def _cmd_memory_distill(args: argparse.Namespace) -> int:
 
 
 def _cmd_knowledge_ingest(args: argparse.Namespace) -> int:
-    async def op(surface: AccessSurface, ctx: ActorContext) -> dict[str, Any]:
-        section_id = await surface.knowledge_ingest(
-            ctx,
-            doc_id=args.doc_id,
-            citation=args.citation,
-            text=args.text,
-            evidence_ref=args.evidence_ref,
-            scope=args.scope,
-            version=args.version,
-        )
-        return {"id": section_id, "doc_id": args.doc_id, "citation": args.citation}
+    if getattr(args, "text", None) is not None:
 
-    return _run_with_surface(
-        args, op, lambda p: f"ingested section {p['id']} ({p['doc_id']} {p['citation']})"
+        async def op(surface: AccessSurface, ctx: ActorContext) -> dict[str, Any]:
+            section_id = await surface.knowledge_ingest(
+                ctx,
+                doc_id=args.doc_id or "local",
+                citation=args.citation or "§content",
+                text=args.text,
+                evidence_ref=args.evidence_ref,
+                scope=args.scope,
+                version=args.version,
+            )
+            return {"id": section_id, "doc_id": args.doc_id, "citation": args.citation}
+
+        return _run_with_surface(
+            args, op, lambda p: f"ingested section {p['id']} ({p['doc_id']} {p['citation']})"
+        )
+
+    if not getattr(args, "path", None):
+        sys.stderr.write("knowledge ingest requires a path or --text\n")
+        return 2
+
+    config = _load_config(getattr(args, "config", None))
+    adapters = dev_adapters(config.dsn)
+    repo = Repository(config.dsn)
+
+    target_path = Path(args.path)
+    if not target_path.exists():
+        sys.stderr.write(f"Path does not exist: {target_path}\n")
+        return 2
+
+    files_to_ingest: list[Path] = []
+    if target_path.is_file():
+        files_to_ingest.append(target_path)
+    elif target_path.is_dir():
+        glob_pat = "**/*" if getattr(args, "recursive", False) else "*"
+        for f in sorted(target_path.glob(glob_pat)):
+            if f.is_file() and not f.name.startswith("."):
+                files_to_ingest.append(f)
+
+    if not files_to_ingest:
+        _emit(args.json, {"files": 0, "sections": 0}, "No files found to ingest")
+        return 0
+
+    from engramory.core.knowledge import KnowledgeCore
+
+    core = KnowledgeCore(repo, llm=adapters.llm)
+
+    async def run_batch() -> dict[str, Any]:
+        results = await core.ingest_documents_batch(
+            files_to_ingest,
+            tenant_id=config.ctx.tenant_id,
+            project_id=config.ctx.project_id,
+            scope=getattr(args, "scope", "project"),
+            evidence_ref=getattr(args, "evidence_ref", None),
+        )
+        total_sections = sum(len(ids) for ids in results.values())
+        return {
+            "files": len(results),
+            "sections": total_sections,
+            "details": results,
+        }
+
+    payload = asyncio.run(run_batch())
+    _emit(
+        args.json,
+        payload,
+        f"ingested {payload['files']} file(s), {payload['sections']} section(s)",
     )
+    return 0
+
+
+def _cmd_knowledge_sync_git(args: argparse.Namespace) -> int:
+    config = _load_config(getattr(args, "config", None))
+    adapters = dev_adapters(config.dsn)
+    repo = Repository(config.dsn)
+    repo_path = Path(getattr(args, "repo_path", "."))
+    base_sha = getattr(args, "base_sha", None)
+    head_sha = getattr(args, "head_sha", None)
+
+    from engramory.core.git_sync import GitSyncEngine
+
+    engine = GitSyncEngine()
+
+    async def run_sync() -> dict[str, Any]:
+        sync_result = await engine.sync(
+            repo,
+            repo_path=repo_path,
+            base_sha=base_sha,
+            head_sha=head_sha,
+            tenant_id=config.ctx.tenant_id,
+            project_id=config.ctx.project_id,
+            scope=getattr(args, "scope", "project"),
+            llm=adapters.llm,
+        )
+        return {
+            "success": sync_result.success,
+            "base_sha": sync_result.base_sha,
+            "head_sha": sync_result.head_sha,
+            "files_added": sync_result.files_added,
+            "files_modified": sync_result.files_modified,
+            "files_deleted": sync_result.files_deleted,
+            "files_skipped": sync_result.files_skipped,
+            "sections_created": sync_result.sections_created,
+            "duration_ms": sync_result.duration_ms,
+        }
+
+    payload = asyncio.run(run_sync())
+    _emit(
+        args.json,
+        payload,
+        f"git sync {'success' if payload['success'] else 'failed'}: "
+        f"{payload['sections_created']} sections, {payload['files_added']} added, "
+        f"{payload['files_modified']} modified, {payload['files_skipped']} skipped "
+        f"({payload['duration_ms']}ms)",
+    )
+    return 0
+
+
+def _cmd_knowledge_search(args: argparse.Namespace) -> int:
+    config = _load_config(getattr(args, "config", None))
+    adapters = dev_adapters(config.dsn)
+    repo = Repository(config.dsn)
+    from engramory.core.knowledge import KnowledgeCore
+
+    core = KnowledgeCore(repo, llm=adapters.llm)
+
+    async def run_search() -> dict[str, Any]:
+        sections = await core.search_sections(
+            args.query,
+            tenant_id=config.ctx.tenant_id,
+            project_id=config.ctx.project_id,
+            scope=getattr(args, "scope", None),
+            limit=getattr(args, "limit", 5),
+        )
+        return {
+            "query": args.query,
+            "count": len(sections),
+            "results": [
+                {
+                    "id": s.id,
+                    "doc_id": s.doc_id,
+                    "citation": s.citation,
+                    "scope": s.scope,
+                    "version": s.version,
+                    "text": s.text[:200] + ("..." if len(s.text) > 200 else ""),
+                }
+                for s in sections
+            ],
+        }
+
+    payload = asyncio.run(run_search())
+    _emit(
+        args.json,
+        payload,
+        f"found {payload['count']} section(s) for query: {args.query!r}",
+    )
+    return 0
 
 
 def _cmd_worker_start(args: argparse.Namespace) -> int:
@@ -573,14 +716,32 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_knowledge = sub.add_parser("knowledge", help="L0 knowledge tools")
     kb_sub = p_knowledge.add_subparsers(dest="knowledge_command", required=True)
-    p_kb_ingest = kb_sub.add_parser("ingest", help="governed knowledge section ingest")
-    p_kb_ingest.add_argument("--doc-id", required=True)
-    p_kb_ingest.add_argument("--citation", required=True)
-    p_kb_ingest.add_argument("--text", required=True)
-    p_kb_ingest.add_argument("--evidence-ref", required=True)
+    p_kb_ingest = kb_sub.add_parser("ingest", help="governed knowledge section/file ingest")
+    p_kb_ingest.add_argument("path", nargs="?", default=None, help="path to file or directory")
+    p_kb_ingest.add_argument("--doc-id", default=None)
+    p_kb_ingest.add_argument("--citation", default=None)
+    p_kb_ingest.add_argument("--text", default=None)
+    p_kb_ingest.add_argument("--evidence-ref", default=None)
     p_kb_ingest.add_argument("--scope", default="project")
     p_kb_ingest.add_argument("--version", type=int, default=1)
+    p_kb_ingest.add_argument(
+        "--recursive", "-r", action="store_true", help="recursively ingest directory"
+    )
+    p_kb_ingest.add_argument("--docling", action="store_true", help="enable Docling extraction")
     p_kb_ingest.set_defaults(func=_cmd_knowledge_ingest)
+
+    p_kb_sync = kb_sub.add_parser("sync-git", help="commit-differential incremental git sync")
+    p_kb_sync.add_argument("--repo-path", default=".", help="path to git repository")
+    p_kb_sync.add_argument("--base-sha", default=None, help="base commit SHA for diff")
+    p_kb_sync.add_argument("--head-sha", default=None, help="head commit SHA for diff")
+    p_kb_sync.add_argument("--scope", default="project")
+    p_kb_sync.set_defaults(func=_cmd_knowledge_sync_git)
+
+    p_kb_search = kb_sub.add_parser("search", help="search knowledge sections")
+    p_kb_search.add_argument("query", help="query string")
+    p_kb_search.add_argument("--limit", type=int, default=5, help="max results to return")
+    p_kb_search.add_argument("--scope", default=None, help="filter by scope")
+    p_kb_search.set_defaults(func=_cmd_knowledge_search)
 
     p_worker = sub.add_parser("worker", help="background worker daemon")
     w_sub = p_worker.add_subparsers(dest="worker_command", required=True)
