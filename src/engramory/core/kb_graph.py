@@ -142,7 +142,10 @@ def extract_adr_graph(
             dst_adr = dep.get("adr")
             if not dst_adr:
                 continue
-            rel_type = dep.get("relationship", "DEPENDS_ON").upper().replace(" ", "_")
+            raw_rel = dep.get("relationship", "DEPENDS_ON")
+            rel_type = (
+                re.sub(r"[^A-Za-z0-9_]+", "_", str(raw_rel)).strip("_").upper() or "DEPENDS_ON"
+            )
             rationale = dep.get("rationale", "")
             relations.append(
                 GraphRelation(
@@ -305,7 +308,11 @@ def extract_sdd_graph(
                 dst_adr = dep.get("adr")
                 for dst in extract_sdd_target_ids(dst_adr):
                     if dst != doc_id:
-                        rel_type = dep.get("relationship", "DEPENDS_ON").upper().replace(" ", "_")
+                        raw_rel = dep.get("relationship", "DEPENDS_ON")
+                        rel_type = (
+                            re.sub(r"[^A-Za-z0-9_]+", "_", str(raw_rel)).strip("_").upper()
+                            or "DEPENDS_ON"
+                        )
                         relations_map[(doc_id, dst, rel_type)] = dep.get("rationale", "")
 
             # 2. Free-text lineage tag matching (@kind: TARGET)

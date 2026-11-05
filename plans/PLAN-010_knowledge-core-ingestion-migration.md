@@ -1,5 +1,11 @@
 # PLAN-010: Knowledge Core Ingestion Migration (RAC to Engramory L0)
 
+> **Status:** Implemented  
+> **Date:** 2026-11-05  
+> **Target Environments:** Dev, Pre-Production Staging, Production  
+> **Owning Repo:** `aidoc-flow-engramory`  
+> **Tracking Issue:** #84  
+
 ## 1. Executive Summary & Goals
 
 Engramory's architecture (ADR-08) defines two bounded cores sharing a canonical PostgreSQL spine: the **Memory core** (L1-L3 experiential memory) and the **Knowledge core** (L0 curated documents, section retrieval, and citations). While the Memory core and schema are established, [`src/engramory/core/knowledge.py`](../src/engramory/core/knowledge.py) is currently a one-line placeholder, and document ingestion is limited to rudimentary markdown heading chunking in [`src/engramory/core/chunking.py`](../src/engramory/core/chunking.py).

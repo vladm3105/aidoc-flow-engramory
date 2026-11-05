@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from engramory.access.authz import ActorContext, AuthzDecision, TargetScope, authorize
+from engramory.access.poisoning_guard import MemoryPoisoningError, inspect_memory_write
 from engramory.core.models import AgentProfile, Episode, KBSection
 from engramory.core.repository import Repository
 from engramory.ports import GraphPort
@@ -311,9 +312,26 @@ class AccessSurface:
         if len(content.encode("utf-8")) > MAX_CONTENT_BYTES:
             raise ValueError(f"content exceeds {MAX_CONTENT_BYTES} bytes")
         await self._decide(ctx, "memory_add", TargetScope(tenant_id=ctx.tenant_id, scope="agent"))
+        try:
+            vetted_content = inspect_memory_write(
+                content,
+                tenant_id=ctx.tenant_id,
+                writer_agent_id=ctx.agent_id,
+                target="episodes",
+            )
+        except MemoryPoisoningError as exc:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="memory_add",
+                allowed=False,
+                reason=f"poisoning_rejected: {exc}",
+            )
+            raise GovernedWriteRejected(str(exc)) from exc
         episode = Episode(
             agent_id=ctx.agent_id,
-            content_raw=content,
+            content_raw=vetted_content,
             project_id=ctx.project_id,
             domain_id=domain_id,
             tenant_id=ctx.tenant_id,
@@ -378,10 +396,27 @@ class AccessSurface:
                 reason="missing_evidence_ref",
             )
             raise GovernedWriteRejected("knowledge_ingest requires evidence_ref")
+        try:
+            vetted_text = inspect_memory_write(
+                text,
+                tenant_id=ctx.tenant_id,
+                writer_agent_id=ctx.agent_id,
+                target=doc_id,
+            )
+        except MemoryPoisoningError as exc:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="knowledge_ingest",
+                allowed=False,
+                reason=f"poisoning_rejected: {exc}",
+            )
+            raise GovernedWriteRejected(str(exc)) from exc
         section = KBSection(
             doc_id=doc_id,
             citation=citation,
-            text=text,
+            text=vetted_text,
             project_id=ctx.project_id,
             tenant_id=ctx.tenant_id,
             scope=scope,
@@ -412,7 +447,45 @@ class AccessSurface:
                 reason="missing_evidence_ref",
             )
             raise GovernedWriteRejected("knowledge_ingest requires evidence_ref")
-        return await self._repo.upsert_kb_sections_batch(sections)
+
+        vetted_sections: list[KBSection] = []
+        for s in sections:
+            # Bound scope to authorized scope / caller's scopes
+            target_scope = s.scope if s.scope in ctx.scopes else scope
+            try:
+                vetted_text = inspect_memory_write(
+                    s.text,
+                    tenant_id=ctx.tenant_id,
+                    writer_agent_id=ctx.agent_id,
+                    target=s.doc_id,
+                )
+            except MemoryPoisoningError as exc:
+                await self._repo.record_audit(
+                    tenant_id=ctx.tenant_id,
+                    agent_id=ctx.agent_id,
+                    project_id=ctx.project_id,
+                    action="knowledge_ingest",
+                    allowed=False,
+                    reason=f"poisoning_rejected: {exc}",
+                )
+                raise GovernedWriteRejected(str(exc)) from exc
+
+            vetted_sections.append(
+                KBSection(
+                    doc_id=s.doc_id,
+                    citation=s.citation,
+                    text=vetted_text,
+                    project_id=ctx.project_id,
+                    tenant_id=ctx.tenant_id,
+                    scope=target_scope,
+                    version=s.version,
+                )
+            )
+
+        res = await self._repo.upsert_kb_sections_batch(vetted_sections)
+        if isinstance(res, dict):
+            return list(res.values())
+        return res
 
     async def knowledge_search(
         self,

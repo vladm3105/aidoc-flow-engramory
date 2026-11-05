@@ -303,6 +303,9 @@ class GitSyncEngine:
                 all_sections.extend(secs)
             elif cf.status in (FileChangeStatus.MODIFIED, FileChangeStatus.RENAMED):
                 files_modified.append(cf.rel_path)
+                if cf.status == FileChangeStatus.RENAMED and cf.old_path:
+                    old_doc_id = build_doc_id(project_id, cf.old_path)
+                    await repo.delete_kb_sections_for_doc(tenant_id, old_doc_id)
                 secs = self.extract_sync_sections(
                     repo_path,
                     cf,
@@ -315,20 +318,28 @@ class GitSyncEngine:
                 all_sections.extend(secs)
             elif cf.status == FileChangeStatus.DELETED:
                 files_deleted.append(cf.rel_path)
+                doc_id = build_doc_id(project_id, cf.rel_path)
+                await repo.delete_kb_sections_for_doc(tenant_id, doc_id)
             else:
                 files_skipped.append(cf.rel_path)
 
         if all_sections:
-            sec_ids = await repo.upsert_kb_sections_batch(all_sections)
+            deduped: dict[tuple[str, str, str, int], KBSection] = {}
+            for s in all_sections:
+                deduped[(s.tenant_id, s.doc_id, s.citation, s.version)] = s
+            unique_sections = list(deduped.values())
+
+            section_map = await repo.upsert_kb_sections_batch(unique_sections)
             if llm is not None:
                 try:
-                    texts = [s.text for s in all_sections]
+                    texts = [s.text for s in unique_sections]
                     embeddings = await llm.embed(texts=texts)
-                    valid_updates = [
-                        (s_id, vec)
-                        for s_id, vec in zip(sec_ids, embeddings, strict=False)
-                        if len(vec) == 1536
-                    ]
+                    valid_updates = []
+                    for sec, vec in zip(unique_sections, embeddings, strict=False):
+                        key = (sec.tenant_id, sec.doc_id, sec.citation, sec.version)
+                        s_id = section_map.get(key)
+                        if s_id and len(vec) == 1536:
+                            valid_updates.append((s_id, vec))
                     if valid_updates:
                         await repo.set_kb_sections_embedding_batch(valid_updates)
                 except Exception as e:

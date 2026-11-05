@@ -83,7 +83,7 @@ class KnowledgeCore:
     ) -> dict[str, list[str]]:
         """Ingest multiple documents into kb_sections with batch upsert and batch embedding."""
         all_sections: list[KBSection] = []
-        path_to_section_indices: dict[str, list[int]] = {}
+        path_to_sections: dict[str, list[KBSection]] = {}
 
         for p_raw in paths:
             p = Path(p_raw)
@@ -103,7 +103,7 @@ class KnowledgeCore:
             if self.chunker is not None:
                 extracted_sections = self.chunker.refine_sections(extracted_sections)
 
-            file_sec_indices: list[int] = []
+            file_secs: list[KBSection] = []
             for sec in extracted_sections:
                 l_start, l_end = calculate_line_numbers(full_text, sec.char_start, sec.char_end)
                 cit = format_local_citation(str(p), l_start, l_end, sec.citation or sec.section_id)
@@ -117,26 +117,34 @@ class KnowledgeCore:
                     text=sec.content,
                     version=version,
                 )
-                file_sec_indices.append(len(all_sections))
+                file_secs.append(kb_sec)
                 all_sections.append(kb_sec)
 
-            path_to_section_indices[str(p)] = file_sec_indices
+            path_to_sections[str(p)] = file_secs
 
         if not all_sections:
             return {}
 
-        inserted_ids = await self.repo.upsert_kb_sections_batch(all_sections)
+        # Deduplicate sections for upsert and embedding
+        deduped: dict[tuple[str, str, str, int], KBSection] = {}
+        for s in all_sections:
+            deduped[(s.tenant_id, s.doc_id, s.citation, s.version)] = s
+        unique_sections = list(deduped.values())
+
+        section_map = await self.repo.upsert_kb_sections_batch(unique_sections)
 
         # Batch embedding if requested and LLM port is available
         if embed and self.llm is not None:
             try:
-                texts = [s.text for s in all_sections]
+                texts = [s.text for s in unique_sections]
                 embeddings = await self.llm.embed(texts=texts)
                 valid_updates = []
-                for s_id, vec in zip(inserted_ids, embeddings, strict=False):
-                    if len(vec) == self.expected_embedding_dims:
+                for ksec, vec in zip(unique_sections, embeddings, strict=False):
+                    key = (ksec.tenant_id, ksec.doc_id, ksec.citation, ksec.version)
+                    s_id = section_map.get(key)
+                    if s_id and len(vec) == self.expected_embedding_dims:
                         valid_updates.append((s_id, vec))
-                    else:
+                    elif len(vec) != self.expected_embedding_dims:
                         logger.warning(
                             "Embedding dim mismatch: expected %d, got %d. Skipping projection.",
                             self.expected_embedding_dims,
@@ -149,8 +157,12 @@ class KnowledgeCore:
 
         # Map back to paths
         result: dict[str, list[str]] = {}
-        for p_str, indices in path_to_section_indices.items():
-            result[p_str] = [inserted_ids[idx] for idx in indices if idx < len(inserted_ids)]
+        for p_str, secs in path_to_sections.items():
+            result[p_str] = [
+                section_map[(s.tenant_id, s.doc_id, s.citation, s.version)]
+                for s in secs
+                if (s.tenant_id, s.doc_id, s.citation, s.version) in section_map
+            ]
 
         return result
 

@@ -4,7 +4,7 @@
 
 *Cycles follow the framework cadence: **MVP → PROD → new-feature MVP → new PROD**. Each cycle is anchored by a **BRD set** — a platform BRD plus its feature BRDs, linked by `@depends:` (see [HOW_TO_USE_THE_FRAMEWORK](../docs/HOW_TO_USE_THE_FRAMEWORK.md) §4). The current cycle's BRD set is authored at full depth (8 layers); future cycles are **draft BRD sketches** (business scope only) until their cycle begins.*
 
-*Last updated: 2026-07-09*
+*Last updated: 2026-11-05*
 
 ---
 
@@ -14,22 +14,15 @@ Engramory is the aidoc-flow ecosystem's shared memory & knowledge plane — per-
 
 **Guiding strategy** ([../docs/STRATEGY.md](../docs/STRATEGY.md)): build the plane (Postgres spine, ports, gateway, scope, governance); **adopt** a proven memory engine behind `MemoryPort` rather than hand-writing distillation; and lead with an evaluation + feedback loop. MVP-1 carries a vertical slice (one agent, one real workload) plus that eval harness; later cycles stay sketches until the slice proves value.
 
-## Current status (2026-07-09)
+## Current status (2026-11-05 — Release Cutoff)
 
-**Phase 0 — dev foundation.** Scaffold + full-depth MVP-1 SDD artifacts in place. As of 2026-07-11 (PLAN-002 / ADR-10): the SPEC-01 tool set is complete over AccessSurface, and agents reach it through the **`engramory` CLI dev/CI face** (SPEC-07) with install + agent-usage docs and a reference Skill; `make smoke` verifies the full memory loop on the compose store. The MCP gateway (production face) is still a stub.
+**Phase 1–2 (MVP-1) — Pre-production & Staging Deployment.** Core memory & knowledge plane is operational:
 
-**Architecture decisions locked** (`../sdd/05_ADR/`): ADR-05 own the canonical store · ADR-07 scope ladder (`agent/project/domain/space` + `tenant_id`) · ADR-08 single platform, two bounded cores · ADR-09 independent memory storage (the iplan ledger is integrated as an *episode source*, not a backend). Concept validated in [`../docs/research/MEMORY_CONCEPT_REVIEW.md`](../docs/research/MEMORY_CONCEPT_REVIEW.md); build direction in [`../docs/STRATEGY.md`](../docs/STRATEGY.md).
-
-**Next (MVP-1):** the vertical slice — Postgres memory repository (done) + one adopted `MemoryPort` engine (Mem0, replacing the interim reflect pass) + `memory_add`/`memory_search` over MCP (the production face; the CLI face already serves dev/CI per ADR-10) — with the evaluation harness (now scriptable via the CLI) and the retrieval→outcome feedback loop (recording shipped 2026-07-11; the SPEC-04 confidence rule consuming it is open) built in parallel. Then the learning-half work (confidence dynamics, contradiction handling, memory safety) and the ledger→episode ingestion adapter (ADR-09). The eval harness + feedback loop are MVP-1 exit criteria, not stretch goals.
-
-**Known issue (CI, operations-owned):** the shared `trust` gate fails on
-every PR here — `ai-review.yml@ci/v1.4.3` fetches the trust allowlist from
-the **private** `aidoc-flow-operations`, and this **public** repo's default
-token cannot read it. PRs currently require admin-merge. **Fix (decided
-2026-07-09, see `TODO.md` §1):** founder sets the `AI_REVIEW_TOKEN` repo
-secret (Option A). Moving the trust config to a public location is an
-upstream `aidoc-flow-ci` follow-up, not yet available in any tagged canon
-version.
+- **Canonical PostgreSQL Spine:** Vector embeddings pinned to 1536 dimensions with HNSW indexing and idempotency guards (`0005_pin_embeddings_hnsw.sql` and `0006_resize_embeddings_1536.sql`).
+- **MCP Gateway & Platform Identity:** FastMCP + SSE transport (`0.0.0.0:8000`), Authentik OIDC / JWT claim verification integrated with `platform-security` (JWKS caching, audience check, ActorContext propagation, scope enforcement).
+- **Knowledge Core & Graph Projection:** Router-based multi-format extractor, Git repository synchronization with deletion reconciliation, deduplicated batch upsert and embedding alignment, and Neo4j topological projections.
+- **Security & Governance:** Immutable security audit logging via Interlog spool (`/var/spool/interlog`), prompt poisoning detection with audit recording, tenant-scoped and project-scoped isolation.
+- **Pre-prod Remediation (PLAN-012):** Resolved all blockers across Security, Correctness, Portability, and Governance lenses. Ready for Staging cutoff.
 
 ## Engineering Phase view (Phase 0–3)
 

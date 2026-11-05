@@ -459,11 +459,15 @@ class Repository:
                 },
             )
 
-    async def upsert_kb_sections_batch(self, sections: Sequence[KBSection]) -> list[str]:
+    async def upsert_kb_sections_batch(
+        self, sections: Sequence[KBSection]
+    ) -> dict[tuple[str, str, str, int], str]:
         """Insert or update a batch of knowledge sections in a single statement.
-        Keyed by (tenant_id, doc_id, citation, version)."""
+        Keyed by (tenant_id, doc_id, citation, version).
+        Returns a mapping of (tenant_id, doc_id, citation, version) -> section_id.
+        """
         if not sections:
-            return []
+            return {}
 
         # Deduplicate within batch by (tenant_id, doc_id, citation, version) keeping latest
         deduped: dict[tuple[str, str, str, int], KBSection] = {}
@@ -472,7 +476,7 @@ class Repository:
         unique_sections = list(deduped.values())
 
         chunk_size = 100
-        inserted_ids: list[str] = []
+        section_id_map: dict[tuple[str, str, str, int], str] = {}
 
         for i in range(0, len(unique_sections), chunk_size):
             chunk = unique_sections[i : i + chunk_size]
@@ -501,13 +505,30 @@ class Repository:
                 VALUES {", ".join(values_clauses)}
                 ON CONFLICT (tenant_id, doc_id, citation, version)
                     DO UPDATE SET text = EXCLUDED.text
-                RETURNING id
+                RETURNING id, tenant_id, doc_id, citation, version
             """
             async with self._conn() as conn:
                 rows = await (await conn.execute(sql, params)).fetchall()
-                inserted_ids.extend(str(row["id"]) for row in rows)
+                for row in rows:
+                    key = (
+                        str(row["tenant_id"]),
+                        str(row["doc_id"]),
+                        str(row["citation"]),
+                        int(row["version"]),
+                    )
+                    section_id_map[key] = str(row["id"])
 
-        return inserted_ids
+        return section_id_map
+
+    async def delete_kb_sections_for_doc(self, tenant_id: str, doc_id: str) -> int:
+        """Delete all kb_sections for a document within a tenant."""
+        async with self._conn() as conn:
+            res = await conn.execute(
+                "DELETE FROM kb_sections WHERE tenant_id = %(t)s AND doc_id = %(d)s RETURNING id",
+                {"t": tenant_id, "d": doc_id},
+            )
+            rows = await res.fetchall()
+            return len(rows)
 
     async def set_kb_sections_embedding_batch(
         self,

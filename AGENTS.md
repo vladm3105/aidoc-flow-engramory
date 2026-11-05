@@ -171,7 +171,7 @@ commits, never force-push.
 |---|---|
 | Handoff | Not adopted — GitHub issues + `plans/NAME-PLAN.md` |
 | TODO / backlog | Not adopted — GitHub issues |
-| Decisions | docs/sdd/05_ADR/ |
+| Decisions | sdd/05_ADR/ |
 | Plans | plans/ |
-| Changelog | Not adopted — GitHub Releases + docs/sdd/09_CHG/archive/ |
+| Changelog | CHANGELOG.md + docs/sdd/09_CHG/archive/ |
 | Roadmap | Not adopted — GitHub Milestones / Issues + `plans/*-PLAN.md` |

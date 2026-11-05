@@ -619,7 +619,33 @@ def _cmd_mcp_serve(args: argparse.Namespace) -> int:
             reconcile=reconcile,
         )
 
-    server = McpServer(surface, config.ctx, ingest_fn=do_ingest)
+    auth_env = os.environ.get("AUTHENTIK_ENABLED", "").lower() in ("1", "true", "yes")
+    auth_enabled = bool(getattr(args, "auth", False) or auth_env)
+
+    token_validator = None
+    security_gate_url = os.environ.get("SECURITY_GATE_URL")
+    if auth_enabled:
+        from engramory.access.jwt_auth import JWKSValidator
+
+        jwks_url = os.environ.get(
+            "AUTHENTIK_JWKS_URL",
+            "https://auth-stage.aiops-flow.io/application/o/engramory/jwks/",
+        )
+        issuer = os.environ.get(
+            "AUTHENTIK_ISSUER",
+            "https://auth-stage.aiops-flow.io/application/o/engramory/",
+        )
+        audience = os.environ.get("AUTHENTIK_AUDIENCE", "engramory")
+        token_validator = JWKSValidator(jwks_url, issuer=issuer, audience=audience)
+
+    server = McpServer(
+        surface,
+        config.ctx,
+        ingest_fn=do_ingest,
+        token_validator=token_validator,
+        auth_enabled=auth_enabled,
+        security_gate_url=security_gate_url,
+    )
     transport = getattr(args, "transport", "stdio")
     if transport == "sse":
         host = getattr(args, "host", "127.0.0.1")
@@ -831,6 +857,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p_mcp.add_argument("--host", default="127.0.0.1", help="SSE host to bind (default: 127.0.0.1)")
     p_mcp.add_argument(
         "--port", type=int, default=8000, help="SSE port to listen on (default: 8000)"
+    )
+    p_mcp.add_argument(
+        "--auth", action="store_true", help="enable Authentik OIDC bearer token verification"
     )
     p_mcp.set_defaults(func=_cmd_mcp_serve)
 

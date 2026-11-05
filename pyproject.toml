@@ -9,8 +9,10 @@ authors = [{ name = "Engramory contributors" }]
 # The ports layer stays stdlib-only by design. psycopg is spine infrastructure
 # (ADR-01 / SPEC-06): the repository uses the Postgres driver directly.
 dependencies = [
+    "cryptography>=42.0.0",
     "neo4j>=5.26.0",
     "psycopg[binary]>=3.2",
+    "pyjwt[crypto]>=2.8.0",
     "pyyaml>=6.0.3",
 ]
 

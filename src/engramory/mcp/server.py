@@ -22,10 +22,17 @@ import http.server
 import json
 import logging
 import sys
+import urllib.parse
 from collections.abc import Callable, Coroutine, Mapping, Sequence
 from typing import Any
 
 from engramory.access.authz import ActorContext
+from engramory.access.jwt_auth import (
+    AuthenticationError,
+    JWKSValidator,
+    check_token_revocation,
+    claims_to_actor_context,
+)
 from engramory.access.surface import AccessSurface, AuthzError, GovernedWriteRejected
 from engramory.core.repository import StoreUnavailable
 
@@ -273,17 +280,31 @@ class McpServer:
         ctx: ActorContext,
         *,
         ingest_fn: Callable[..., Coroutine[Any, Any, tuple[int, int]]] | None = None,
+        token_validator: JWKSValidator | None = None,
+        auth_enabled: bool = False,
+        security_gate_url: str | None = None,
+        revoked_identifiers: set[str] | None = None,
     ) -> None:
         self._surface = surface
         self._ctx = ctx
         self._ingest_fn = ingest_fn
+        self._token_validator = token_validator
+        self._auth_enabled = auth_enabled
+        self._security_gate_url = security_gate_url
+        self._revoked_identifiers = revoked_identifiers
 
     def _resolve_call_ctx(
         self, arguments: dict[str, Any], ctx: ActorContext | None = None
     ) -> ActorContext:
         base = ctx or self._ctx
-        tenant_id = arguments.get("tenant_id") or base.tenant_id
-        project_id = arguments.get("project_id") or base.project_id
+        # In authenticated mode, tenant_id and project_id cannot be spoofed
+        # via client arguments (ADR-10)
+        if self._auth_enabled:
+            tenant_id = base.tenant_id
+            project_id = base.project_id
+        else:
+            tenant_id = arguments.get("tenant_id") or base.tenant_id
+            project_id = arguments.get("project_id") or base.project_id
         if tenant_id != base.tenant_id or project_id != base.project_id:
             return ActorContext(
                 agent_id=base.agent_id,
@@ -410,7 +431,11 @@ class McpServer:
                         "content": [{"type": "text", "text": "Ingest function not configured"}],
                     }
                 sdd_root = arguments.get("sdd_root", "sdd")
-                project_id = arguments.get("project_id", call_ctx.project_id)
+                project_id = (
+                    call_ctx.project_id
+                    if self._auth_enabled
+                    else arguments.get("project_id", call_ctx.project_id)
+                )
                 reconcile = arguments.get("reconcile", True)
                 num_ent, num_rel = await self._ingest_fn(
                     sdd_root=sdd_root,
@@ -494,7 +519,46 @@ class McpServer:
                 pass
 
             def do_GET(self) -> None:
-                if self.path in ("/sse", "/sse/"):
+                parsed = urllib.parse.urlparse(self.path)
+                if parsed.path in ("/sse", "/sse/"):
+                    if server_instance._auth_enabled:
+                        extracted_bearer = ""
+                        auth_hdr = self.headers.get("Authorization")
+                        if auth_hdr and auth_hdr.strip().startswith("Bearer "):
+                            extracted_bearer = auth_hdr.strip()[7:].strip()
+                        else:
+                            query_params = urllib.parse.parse_qs(parsed.query)
+                            token_vals = query_params.get("token")
+                            if token_vals:
+                                extracted_bearer = token_vals[0].strip()
+
+                        if not extracted_bearer:
+                            self.send_response(401)
+                            self.send_header("Content-Type", "application/json")
+                            self.end_headers()
+                            err_resp = {"error": "Unauthorized: Missing Bearer token"}
+                            self.wfile.write(json.dumps(err_resp).encode("utf-8"))
+                            return
+
+                        try:
+                            if server_instance._token_validator is None:
+                                raise AuthenticationError("Token validator not configured")
+                            claims = server_instance._token_validator.validate_token(
+                                extracted_bearer
+                            )
+                            check_token_revocation(
+                                claims,
+                                security_gate_url=server_instance._security_gate_url,
+                                revoked_identifiers=server_instance._revoked_identifiers,
+                            )
+                        except AuthenticationError as exc:
+                            self.send_response(401)
+                            self.send_header("Content-Type", "application/json")
+                            self.end_headers()
+                            err_resp = {"error": f"Unauthorized: {exc}"}
+                            self.wfile.write(json.dumps(err_resp).encode("utf-8"))
+                            return
+
                     self.send_response(200)
                     self.send_header("Content-Type", "text/event-stream")
                     self.send_header("Cache-Control", "no-cache")
@@ -520,16 +584,43 @@ class McpServer:
                 body = self.rfile.read(content_length).decode("utf-8")
                 try:
                     req = json.loads(body)
-                    req_ctx = server_instance._ctx
-                    tenant_hdr = self.headers.get("X-Tenant-ID")
-                    project_hdr = self.headers.get("X-Project-ID")
-                    if tenant_hdr or project_hdr:
-                        req_ctx = ActorContext(
-                            agent_id=req_ctx.agent_id,
-                            tenant_id=tenant_hdr or req_ctx.tenant_id,
-                            project_id=project_hdr or req_ctx.project_id,
-                            scopes=req_ctx.scopes,
+                    if server_instance._auth_enabled:
+                        auth_hdr = self.headers.get("Authorization")
+                        if not auth_hdr or not auth_hdr.strip().startswith("Bearer "):
+                            self.send_response(401)
+                            self.send_header("Content-Type", "application/json")
+                            self.end_headers()
+                            err = {
+                                "jsonrpc": "2.0",
+                                "error": {
+                                    "code": -32001,
+                                    "message": "Unauthorized: Missing Bearer token",
+                                },
+                            }
+                            self.wfile.write(json.dumps(err).encode("utf-8"))
+                            return
+
+                        if server_instance._token_validator is None:
+                            raise AuthenticationError("Token validator not configured")
+                        claims = server_instance._token_validator.validate_token(auth_hdr)
+                        check_token_revocation(
+                            claims,
+                            security_gate_url=server_instance._security_gate_url,
+                            revoked_identifiers=server_instance._revoked_identifiers,
                         )
+                        req_ctx = claims_to_actor_context(claims)
+                    else:
+                        req_ctx = server_instance._ctx
+                        tenant_hdr = self.headers.get("X-Tenant-ID")
+                        project_hdr = self.headers.get("X-Project-ID")
+                        if tenant_hdr or project_hdr:
+                            req_ctx = ActorContext(
+                                agent_id=req_ctx.agent_id,
+                                tenant_id=tenant_hdr or req_ctx.tenant_id,
+                                project_id=project_hdr or req_ctx.project_id,
+                                scopes=req_ctx.scopes,
+                            )
+
                     res = asyncio.run(server_instance.handle_request(req, ctx=req_ctx))
                     if res is None:
                         self.send_response(204)
@@ -539,6 +630,15 @@ class McpServer:
                         self.send_header("Content-Type", "application/json")
                         self.end_headers()
                         self.wfile.write(json.dumps(res).encode("utf-8"))
+                except AuthenticationError as auth_exc:
+                    self.send_response(401)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    err = {
+                        "jsonrpc": "2.0",
+                        "error": {"code": -32001, "message": f"Unauthorized: {auth_exc}"},
+                    }
+                    self.wfile.write(json.dumps(err).encode("utf-8"))
                 except Exception as exc:  # noqa: BLE001  # reason: HTTP server must return JSON-RPC error
                     self.send_response(500)
                     self.send_header("Content-Type", "application/json")

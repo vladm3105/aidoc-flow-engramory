@@ -60,14 +60,48 @@ echo "[*] Executing database schema migrations against stage-postgres18..."
 ${STAGE_SSH} "
     sudo -n -u ${PLATFORM_USER} env XDG_RUNTIME_DIR=/run/user/${PLATFORM_UID} sh -c '
         set -e
+        # Ensure schema_migrations tracking table exists
+        docker exec -i stage-postgres18 psql -U stage_bootstrap -d engramory -c \"
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version VARCHAR(255) PRIMARY KEY,
+                applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+        \"
+        # Bootstrap baseline: if memories table already exists and schema_migrations is empty,
+        # mark historical migrations 0001 through 0007 as applied so they are not re-executed
+        docker exec -i stage-postgres18 psql -U stage_bootstrap -d engramory -c \"
+            DO \\\$\$
+            BEGIN
+                IF to_regclass('public.memories') IS NOT NULL AND NOT EXISTS (SELECT 1 FROM schema_migrations) THEN
+                    INSERT INTO schema_migrations (version) VALUES
+                        ('0001_init_memory.sql'),
+                        ('0002_add_domain_scope.sql'),
+                        ('0003_reconcile_contracts.sql'),
+                        ('0004_ambient_gateway_view.sql'),
+                        ('0005_pin_embeddings_hnsw.sql'),
+                        ('0006_resize_embeddings_1536.sql'),
+                        ('0007_graph_entities_canonical.sql')
+                    ON CONFLICT DO NOTHING;
+                END IF;
+            END \\\$\$;
+        \"
         for sql in \$(ls ${STAGE_DIR}/db/migrations/*.sql | sort); do
-            echo \"Applying \$sql...\"
-            docker exec -i stage-postgres18 psql -U stage_bootstrap -d engramory < \"\$sql\"
+            fname=\$(basename \"\$sql\")
+            applied=\$(docker exec -i stage-postgres18 psql -U stage_bootstrap -d engramory -t -A -c \"SELECT count(*) FROM schema_migrations WHERE version = '\$fname'\")
+            if [ \"\$applied\" -eq 0 ]; then
+                echo \"Applying \$sql...\"
+                docker exec -i stage-postgres18 psql -U stage_bootstrap -d engramory -v ON_ERROR_STOP=1 < \"\$sql\"
+                docker exec -i stage-postgres18 psql -U stage_bootstrap -d engramory -c \"INSERT INTO schema_migrations (version) VALUES ('\$fname')\"
+            else
+                echo \"Skipping already applied migration: \$fname\"
+            fi
         done
         docker exec stage-postgres18 psql -U stage_bootstrap -d engramory -c \"
-            GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO engramory;
-            GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO engramory;
-            GRANT ALL PRIVILEGES ON SCHEMA public TO engramory;
+            GRANT USAGE ON SCHEMA public TO engramory;
+            GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO engramory;
+            GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO engramory;
+            ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO engramory;
+            ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO engramory;
         \"
     '
 "
