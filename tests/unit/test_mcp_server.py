@@ -239,3 +239,130 @@ async def test_mcp_call_sdd_blast_radius(
     mock_surface.blast_radius.assert_awaited_once_with(
         mock_ctx, doc_id="ADR-03", depth=4, scope="project"
     )
+
+
+def test_mcp_http_server_authenticated_endpoints(mock_surface: AccessSurface) -> None:
+    import http.client
+    import threading
+
+    from engramory.access.jwt_auth import AuthenticationError, JWKSValidator, TokenClaims
+
+    mock_validator = MagicMock(spec=JWKSValidator)
+
+    def fake_validate(token: str) -> TokenClaims:
+        clean = token.replace("Bearer ", "").strip()
+        if clean == "valid-token":
+            return TokenClaims(
+                sub="agent-auth-sub",
+                iss="https://auth-stage.aiops-flow.io/application/o/engramory/",
+                aud="engramory",
+                exp=9999999999,
+                raw_claims={
+                    "jti": "jti-clean-1",
+                    "agent_id": "agent-verified",
+                    "namespaces": ["aidoc"],
+                    "projects": ["aidoc-flow-iplanic"],
+                    "roles": ["developer"],
+                },
+            )
+        elif clean == "revoked-token":
+            return TokenClaims(
+                sub="agent-revoked-sub",
+                iss="https://auth-stage.aiops-flow.io/application/o/engramory/",
+                aud="engramory",
+                exp=9999999999,
+                raw_claims={
+                    "jti": "jti-revoked-99",
+                    "agent_id": "agent-revoked",
+                },
+            )
+        raise AuthenticationError("Invalid or expired token")
+
+    mock_validator.validate_token.side_effect = fake_validate
+
+    default_ctx = ActorContext(
+        agent_id="default-agent",
+        tenant_id="default",
+        project_id="core",
+        scopes=frozenset({"agent"}),
+    )
+
+    server = McpServer(
+        mock_surface,
+        default_ctx,
+        token_validator=mock_validator,
+        auth_enabled=True,
+        revoked_identifiers={"jti-revoked-99"},
+    )
+    httpd = server.create_http_server(host="127.0.0.1", port=0)
+    port = httpd.server_address[1]
+
+    t = threading.Thread(target=httpd.serve_forever, daemon=True)
+    t.start()
+    try:
+        # 1. Missing Authorization header on POST /messages -> 401
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        rpc_req = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+        conn.request(
+            "POST",
+            "/messages",
+            body=json.dumps(rpc_req),
+            headers={"Content-Type": "application/json"},
+        )
+        resp = conn.getresponse()
+        assert resp.status == 401
+        err_res = json.loads(resp.read().decode("utf-8"))
+        assert err_res["error"]["code"] == -32001
+        conn.close()
+
+        # 2. Invalid Bearer token on POST /messages -> 401
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        headers = {"Content-Type": "application/json", "Authorization": "Bearer bad-token"}
+        conn.request("POST", "/messages", body=json.dumps(rpc_req), headers=headers)
+        resp = conn.getresponse()
+        assert resp.status == 401
+        conn.close()
+
+        # 3. Revoked token on POST /messages -> 401
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        headers = {"Content-Type": "application/json", "Authorization": "Bearer revoked-token"}
+        conn.request("POST", "/messages", body=json.dumps(rpc_req), headers=headers)
+        resp = conn.getresponse()
+        assert resp.status == 401
+        assert "revoked by platform kill-switch" in resp.read().decode("utf-8")
+        conn.close()
+
+        # 4. Valid Bearer token on POST /messages -> 200 OK
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer valid-token",
+            "X-Tenant-ID": "spoofed-tenant",  # spoofing attempt
+        }
+        conn.request("POST", "/messages", body=json.dumps(rpc_req), headers=headers)
+        resp = conn.getresponse()
+        assert resp.status == 200
+        data = json.loads(resp.read().decode("utf-8"))
+        assert data["id"] == 1
+        tools = data["result"]["tools"]
+        assert any(t["name"] == "memory_search" for t in tools)
+        conn.close()
+
+        # 5. GET /sse without token -> 401
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/sse")
+        resp = conn.getresponse()
+        assert resp.status == 401
+        conn.close()
+
+        # 6. GET /sse with query param token -> 200
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/sse?token=valid-token")
+        resp = conn.getresponse()
+        assert resp.status == 200
+        line1 = resp.readline().decode("utf-8")
+        assert "event: endpoint" in line1
+        conn.close()
+    finally:
+        httpd.shutdown()
+        httpd.server_close()

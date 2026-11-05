@@ -32,6 +32,12 @@ services:
       - ENGRAMORY_PROFILE=dev
       - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
       - OTEL_SERVICE_NAME=engramory-mcp
+      - AUTHENTIK_ENABLED=${AUTHENTIK_ENABLED:-true}
+      - AUTHENTIK_JWKS_URL=${AUTHENTIK_JWKS_URL:-https://auth-stage.aiops-flow.io/application/o/engramory/jwks/}
+      - AUTHENTIK_ISSUER=${AUTHENTIK_ISSUER:-https://auth-stage.aiops-flow.io/application/o/engramory/}
+      - AUTHENTIK_AUDIENCE=${AUTHENTIK_AUDIENCE:-engramory}
+      - SECURITY_GATE_URL=${SECURITY_GATE_URL:-http://security-gate:8095}
+      - SECURITY_AUDIT_LOG_PATH=/var/spool/interlog/security-audit.jsonl
     volumes:
       - ${HOST_SPOKE_DEV_PATH:-/opt/data}:/workspace:ro
     networks:

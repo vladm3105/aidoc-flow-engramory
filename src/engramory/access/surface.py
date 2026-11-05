@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from engramory.access.authz import ActorContext, AuthzDecision, TargetScope, authorize
+from engramory.access.poisoning_guard import MemoryPoisoningError, inspect_memory_write
 from engramory.core.models import AgentProfile, Episode, KBSection
 from engramory.core.repository import Repository
 from engramory.ports import GraphPort
@@ -311,9 +312,18 @@ class AccessSurface:
         if len(content.encode("utf-8")) > MAX_CONTENT_BYTES:
             raise ValueError(f"content exceeds {MAX_CONTENT_BYTES} bytes")
         await self._decide(ctx, "memory_add", TargetScope(tenant_id=ctx.tenant_id, scope="agent"))
+        try:
+            vetted_content = inspect_memory_write(
+                content,
+                tenant_id=ctx.tenant_id,
+                writer_agent_id=ctx.agent_id,
+                target="episodes",
+            )
+        except MemoryPoisoningError as exc:
+            raise GovernedWriteRejected(str(exc)) from exc
         episode = Episode(
             agent_id=ctx.agent_id,
-            content_raw=content,
+            content_raw=vetted_content,
             project_id=ctx.project_id,
             domain_id=domain_id,
             tenant_id=ctx.tenant_id,
@@ -378,10 +388,19 @@ class AccessSurface:
                 reason="missing_evidence_ref",
             )
             raise GovernedWriteRejected("knowledge_ingest requires evidence_ref")
+        try:
+            vetted_text = inspect_memory_write(
+                text,
+                tenant_id=ctx.tenant_id,
+                writer_agent_id=ctx.agent_id,
+                target=doc_id,
+            )
+        except MemoryPoisoningError as exc:
+            raise GovernedWriteRejected(str(exc)) from exc
         section = KBSection(
             doc_id=doc_id,
             citation=citation,
-            text=text,
+            text=vetted_text,
             project_id=ctx.project_id,
             tenant_id=ctx.tenant_id,
             scope=scope,
@@ -412,7 +431,24 @@ class AccessSurface:
                 reason="missing_evidence_ref",
             )
             raise GovernedWriteRejected("knowledge_ingest requires evidence_ref")
-        return await self._repo.upsert_kb_sections_batch(sections)
+        vetted_sections = [
+            KBSection(
+                doc_id=s.doc_id,
+                citation=s.citation,
+                text=inspect_memory_write(
+                    s.text,
+                    tenant_id=ctx.tenant_id,
+                    writer_agent_id=ctx.agent_id,
+                    target=s.doc_id,
+                ),
+                project_id=s.project_id or ctx.project_id,
+                tenant_id=s.tenant_id or ctx.tenant_id,
+                scope=s.scope,
+                version=s.version,
+            )
+            for s in sections
+        ]
+        return await self._repo.upsert_kb_sections_batch(vetted_sections)
 
     async def knowledge_search(
         self,

@@ -154,7 +154,7 @@ def neo4j_adapter() -> Iterator[Any]:
             host = parts[0] or "127.0.0.1"
             port = int(parts[1].split("/")[0])
     if not _neo4j_reachable(host, port):
-        pytest.skip(
+        pytest.skip(  # reason: neo4j unavailable in offline integration test
             "integration: neo4j unavailable — reason: requires running neo4j container on bolt://localhost:7687"
         )
     adapter = Neo4jGraphAdapter(uri=uri, auth=auth)
