@@ -18,7 +18,7 @@ services:
     container_name: engramory-mcp
     entrypoint: ["engramory", "mcp", "--transport", "sse", "--host", "0.0.0.0", "--port", "8000"]
     ports:
-      - "${MCP_PORT:-8005}:8000"
+      - "127.0.0.1:${MCP_PORT:-8005}:8000"
     environment:
       - ENGRAMORY_DATABASE_URL=${ENGRAMORY_DATABASE_URL:-postgresql://engramory:change_me@stage-postgres18:5432/engramory}
       - ENGRAMORY_GRAPH_URL=${ENGRAMORY_GRAPH_URL:-bolt://stage-neo4j:7687}
@@ -37,9 +37,10 @@ services:
       - AUTHENTIK_ISSUER=${AUTHENTIK_ISSUER:-https://auth-stage.aiops-flow.io/application/o/engramory/}
       - AUTHENTIK_AUDIENCE=${AUTHENTIK_AUDIENCE:-engramory}
       - SECURITY_GATE_URL=${SECURITY_GATE_URL:-http://security-gate:8095}
-      - SECURITY_AUDIT_LOG_PATH=/var/spool/interlog/security-audit.jsonl
+      - SECURITY_AUDIT_LOG_PATH=${SECURITY_AUDIT_LOG_PATH:-/var/spool/interlog/security-audit.jsonl}
     volumes:
       - ${HOST_SPOKE_DEV_PATH:-/opt/data}:/workspace:ro
+      - ${SECURITY_AUDIT_SPOOL_DIR:-/tmp/interlog}:/var/spool/interlog
     networks:
       - platform-mesh
     healthcheck:
@@ -58,6 +59,12 @@ services:
     container_name: engramory-worker
     environment:
       - ENGRAMORY_DATABASE_URL=${ENGRAMORY_DATABASE_URL:-postgresql://engramory:change_me@stage-postgres18:5432/engramory}
+      - ENGRAMORY_GRAPH_URL=${ENGRAMORY_GRAPH_URL:-bolt://stage-neo4j:7687}
+      - ENGRAMORY_GRAPH_USER=${ENGRAMORY_GRAPH_USER:-neo4j}
+      - ENGRAMORY_GRAPH_PASSWORD=${ENGRAMORY_GRAPH_PASSWORD:-stage_graph_secret_2026}
+      - NEO4J_URI=${ENGRAMORY_GRAPH_URL:-bolt://stage-neo4j:7687}
+      - NEO4J_USER=${ENGRAMORY_GRAPH_USER:-neo4j}
+      - NEO4J_PASSWORD=${ENGRAMORY_GRAPH_PASSWORD:-stage_graph_secret_2026}
       - ENGRAMORY_PROFILE=dev
       - ENGRAMORY_REFLECT_INTERVAL_SEC=${ENGRAMORY_REFLECT_INTERVAL_SEC:-300}
       - LITELLM_BASE_URL=${LITELLM_BASE_URL:-http://aidoc-litellm-proxy:4000/v1}

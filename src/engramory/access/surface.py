@@ -320,6 +320,14 @@ class AccessSurface:
                 target="episodes",
             )
         except MemoryPoisoningError as exc:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="memory_add",
+                allowed=False,
+                reason=f"poisoning_rejected: {exc}",
+            )
             raise GovernedWriteRejected(str(exc)) from exc
         episode = Episode(
             agent_id=ctx.agent_id,
@@ -396,6 +404,14 @@ class AccessSurface:
                 target=doc_id,
             )
         except MemoryPoisoningError as exc:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="knowledge_ingest",
+                allowed=False,
+                reason=f"poisoning_rejected: {exc}",
+            )
             raise GovernedWriteRejected(str(exc)) from exc
         section = KBSection(
             doc_id=doc_id,
@@ -431,24 +447,45 @@ class AccessSurface:
                 reason="missing_evidence_ref",
             )
             raise GovernedWriteRejected("knowledge_ingest requires evidence_ref")
-        vetted_sections = [
-            KBSection(
-                doc_id=s.doc_id,
-                citation=s.citation,
-                text=inspect_memory_write(
+
+        vetted_sections: list[KBSection] = []
+        for s in sections:
+            # Bound scope to authorized scope / caller's scopes
+            target_scope = s.scope if s.scope in ctx.scopes else scope
+            try:
+                vetted_text = inspect_memory_write(
                     s.text,
                     tenant_id=ctx.tenant_id,
                     writer_agent_id=ctx.agent_id,
                     target=s.doc_id,
-                ),
-                project_id=s.project_id or ctx.project_id,
-                tenant_id=s.tenant_id or ctx.tenant_id,
-                scope=s.scope,
-                version=s.version,
+                )
+            except MemoryPoisoningError as exc:
+                await self._repo.record_audit(
+                    tenant_id=ctx.tenant_id,
+                    agent_id=ctx.agent_id,
+                    project_id=ctx.project_id,
+                    action="knowledge_ingest",
+                    allowed=False,
+                    reason=f"poisoning_rejected: {exc}",
+                )
+                raise GovernedWriteRejected(str(exc)) from exc
+
+            vetted_sections.append(
+                KBSection(
+                    doc_id=s.doc_id,
+                    citation=s.citation,
+                    text=vetted_text,
+                    project_id=ctx.project_id,
+                    tenant_id=ctx.tenant_id,
+                    scope=target_scope,
+                    version=s.version,
+                )
             )
-            for s in sections
-        ]
-        return await self._repo.upsert_kb_sections_batch(vetted_sections)
+
+        res = await self._repo.upsert_kb_sections_batch(vetted_sections)
+        if isinstance(res, dict):
+            return list(res.values())
+        return res
 
     async def knowledge_search(
         self,

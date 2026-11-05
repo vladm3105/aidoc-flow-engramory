@@ -21,12 +21,16 @@ ARG USER_ID=1004
 ARG GROUP_ID=1004
 
 RUN groupadd -g ${GROUP_ID} engramory && \
-    useradd -u ${USER_ID} -g engramory -m -s /bin/bash engramory
+    useradd -u ${USER_ID} -g engramory -m -s /bin/bash engramory && \
+    mkdir -p /var/spool/interlog && \
+    chown -R engramory:engramory /var/spool/interlog
 
 WORKDIR /app
 
 COPY --from=builder /install /usr/local
 COPY --from=builder /build/src /app/src
+
+RUN chown -R engramory:engramory /app
 
 USER engramory
 

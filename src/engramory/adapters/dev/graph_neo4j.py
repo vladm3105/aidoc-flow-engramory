@@ -310,8 +310,8 @@ class Neo4jGraphAdapter:
         query = f"""
         MATCH (n:Entity)
         WHERE {" AND ".join(where_clauses)}
-        WITH n, count(n) AS cnt
-        DETACH DELETE n
+        WITH collect(n) AS nodes, count(n) AS cnt
+        FOREACH (x IN nodes | DETACH DELETE x)
         RETURN cnt
         """
         async with self._driver.session() as session:

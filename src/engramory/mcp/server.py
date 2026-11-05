@@ -297,11 +297,14 @@ class McpServer:
         self, arguments: dict[str, Any], ctx: ActorContext | None = None
     ) -> ActorContext:
         base = ctx or self._ctx
-        # In authenticated mode, tenant_id cannot be spoofed via client arguments (ADR-10)
-        tenant_id = (
-            base.tenant_id if self._auth_enabled else (arguments.get("tenant_id") or base.tenant_id)
-        )
-        project_id = arguments.get("project_id") or base.project_id
+        # In authenticated mode, tenant_id and project_id cannot be spoofed
+        # via client arguments (ADR-10)
+        if self._auth_enabled:
+            tenant_id = base.tenant_id
+            project_id = base.project_id
+        else:
+            tenant_id = arguments.get("tenant_id") or base.tenant_id
+            project_id = arguments.get("project_id") or base.project_id
         if tenant_id != base.tenant_id or project_id != base.project_id:
             return ActorContext(
                 agent_id=base.agent_id,
@@ -428,7 +431,11 @@ class McpServer:
                         "content": [{"type": "text", "text": "Ingest function not configured"}],
                     }
                 sdd_root = arguments.get("sdd_root", "sdd")
-                project_id = arguments.get("project_id", call_ctx.project_id)
+                project_id = (
+                    call_ctx.project_id
+                    if self._auth_enabled
+                    else arguments.get("project_id", call_ctx.project_id)
+                )
                 reconcile = arguments.get("reconcile", True)
                 num_ent, num_rel = await self._ingest_fn(
                     sdd_root=sdd_root,

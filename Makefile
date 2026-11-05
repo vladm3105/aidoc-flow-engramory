@@ -30,9 +30,9 @@ migrate:       ## Apply all database migrations in order
 			-U $(POSTGRES_USER) -d $(POSTGRES_DB) -f /migrations/$$(basename $$f); \
 	done
 
-pull-models:   ## Pull local Ollama models used in dev
+pull-models:   ## Pull local Ollama models used in dev (bge-m3 or nomic-embed-text)
 	docker compose exec ollama ollama pull llama3.1
-	docker compose exec ollama ollama pull nomic-embed-text
+	docker compose exec ollama ollama pull bge-m3 || docker compose exec ollama ollama pull nomic-embed-text
 
 lint:          ## Lint
 	ruff check src

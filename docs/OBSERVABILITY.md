@@ -117,9 +117,6 @@ pg_isready -h localhost -p 5432 -U engramory
 
 # 3. Check Neo4j HTTP endpoint
 curl -s -I http://localhost:7474 | grep "HTTP"
-
-# 4. Check SeaweedFS S3 health
-curl -s -I http://localhost:9000/minio/health/live || curl -s -I http://localhost:9000/
 ```
 
 ### 4.2 Stage Telemetry Stack Status
@@ -129,7 +126,7 @@ The platform observability endpoints run on the Stage host (`100.98.134.10`):
 - **Coroot APM**: `http://100.98.134.10:18085/`
 - **ClickHouse HTTP**: `http://100.98.134.10:18123/ping`
 - **OTel Collector Health**: `http://100.98.134.10:13133/`
-- **Langfuse Web UI**: `http://100.98.134.10:3000/`
+- **Langfuse Web UI**: `http://100.98.134.10:13000/`
 
 ---
 

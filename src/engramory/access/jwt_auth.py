@@ -195,21 +195,24 @@ def claims_to_actor_context(claims: TokenClaims) -> ActorContext:
     raw_projects = claims.projects
     project_id = raw_projects[0] if raw_projects else "core"
 
-    # Evaluate scope ladder grants
-    granted_scopes: set[str] = {"agent", "project"}
+    # Evaluate role-authorized scopes
+    max_scopes: set[str] = {"agent", "project"}
+    roles = set(claims.groups)
+    if any(r in roles for r in ("domain-admin", "project-admin", "lead")):
+        max_scopes.add("domain")
+    if any(r in roles for r in ("platform-admin", "superuser")) or claims.raw_claims.get(
+        "is_superuser"
+    ):
+        max_scopes.update({"domain", "space"})
 
     if "memory_scopes" in claims.raw_claims:
         custom_scopes = claims.raw_claims["memory_scopes"]
         if isinstance(custom_scopes, list):
-            granted_scopes = {str(s).strip() for s in custom_scopes}
-
-    roles = set(claims.groups)
-    if any(r in roles for r in ("domain-admin", "project-admin", "lead")):
-        granted_scopes.add("domain")
-    if any(r in roles for r in ("platform-admin", "superuser")) or claims.raw_claims.get(
-        "is_superuser"
-    ):
-        granted_scopes.update({"domain", "space"})
+            granted_scopes = {str(s).strip() for s in custom_scopes} & max_scopes
+        else:
+            granted_scopes = max_scopes
+    else:
+        granted_scopes = max_scopes
 
     valid_scopes = frozenset(granted_scopes & SCOPES)
     return ActorContext(
