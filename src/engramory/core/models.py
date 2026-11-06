@@ -208,3 +208,91 @@ class GraphRelation:
         _require(bool(self.rel_type), "GraphRelation.rel_type is required")
         _require(bool(self.tenant_id), "GraphRelation.tenant_id is required")
         object.__setattr__(self, "properties", _frozen_mapping(self.properties))
+
+
+AUTONOMY_TIERS = frozenset({"green", "yellow", "red"})
+RUNBOOK_MODES = frozenset({"read-only", "mutating"})
+DOC_STATUSES = frozenset({"active", "draft", "deprecated", "archived"})
+
+
+@dataclass(frozen=True, slots=True)
+class KBDocument:
+    """Canonical L0 documentation & runbook metadata (migration 0008)."""
+
+    doc_id: str
+    repo_path: str
+    title: str
+    kind: str
+    namespace: str = "ns:platform"
+    status: str = "active"
+    autonomy_tier: str = "green"
+    frontmatter: Mapping[str, Any] = field(default_factory=dict)
+    watched_paths: tuple[str, ...] = ()
+    trigger_alerts: tuple[str, ...] = ()
+    last_verified: str = "2026-11-06"
+    review_ttl_days: int = 90
+    git_commit_sha: str = "local-head"
+    project_id: str | None = None
+    domain_id: str | None = None
+    tenant_id: str = "default"
+    scope: str = "project"
+
+    def __post_init__(self) -> None:
+        _require(bool(self.doc_id), "KBDocument.doc_id is required")
+        _require(bool(self.repo_path), "KBDocument.repo_path is required")
+        _require(bool(self.title), "KBDocument.title is required")
+        _require(bool(self.kind), "KBDocument.kind is required")
+        _require(bool(self.tenant_id), "KBDocument.tenant_id is required")
+        _require(self.scope in SCOPES, f"KBDocument.scope must be one of {sorted(SCOPES)}")
+        _require(
+            self.status in DOC_STATUSES,
+            f"KBDocument.status must be one of {sorted(DOC_STATUSES)}",
+        )
+        _require(
+            self.autonomy_tier in AUTONOMY_TIERS,
+            f"KBDocument.autonomy_tier must be one of {sorted(AUTONOMY_TIERS)}",
+        )
+        _require(self.review_ttl_days >= 1, "KBDocument.review_ttl_days must be >= 1")
+        object.__setattr__(self, "frontmatter", _frozen_mapping(self.frontmatter))
+        object.__setattr__(self, "watched_paths", tuple(self.watched_paths))
+        object.__setattr__(self, "trigger_alerts", tuple(self.trigger_alerts))
+
+
+@dataclass(frozen=True, slots=True)
+class KBRunbookStep:
+    """Annotated executable code block inside a runbook (migration 0008)."""
+
+    step_uid: str
+    doc_id: str
+    step_order: int
+    step_id: str
+    heading_path: str
+    tier: str
+    mode: str
+    command_body: str
+    prose_context: str = ""
+    expect_exit: int = 0
+    timeout_sec: int = 30
+    rollback_step: str | None = None
+    tenant_id: str = "default"
+
+    def __post_init__(self) -> None:
+        _require(bool(self.step_uid), "KBRunbookStep.step_uid is required")
+        _require(bool(self.doc_id), "KBRunbookStep.doc_id is required")
+        _require(bool(self.step_id), "KBRunbookStep.step_id is required")
+        _require(bool(self.heading_path), "KBRunbookStep.heading_path is required")
+        _require(bool(self.command_body.strip()), "KBRunbookStep.command_body is required")
+        _require(bool(self.tenant_id), "KBRunbookStep.tenant_id is required")
+        _require(
+            self.tier in AUTONOMY_TIERS,
+            f"KBRunbookStep.tier must be one of {sorted(AUTONOMY_TIERS)}",
+        )
+        _require(
+            self.mode in RUNBOOK_MODES,
+            f"KBRunbookStep.mode must be one of {sorted(RUNBOOK_MODES)}",
+        )
+        _require(
+            self.tier != "green" or self.mode == "read-only",
+            "INV-STEP-01: KBRunbookStep with tier='green' must have mode='read-only'",
+        )
+        _require(self.timeout_sec >= 1, "KBRunbookStep.timeout_sec must be >= 1")

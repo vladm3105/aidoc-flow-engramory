@@ -391,6 +391,7 @@ class McpServer:
                     id=arguments["id"],
                     rel=arguments.get("rel"),
                     depth=arguments.get("depth", 1),
+                    scope=arguments.get("scope", "project"),
                 )
                 return {
                     "content": [{"type": "text", "text": json.dumps(list(neighbors), indent=2)}]
@@ -425,6 +426,15 @@ class McpServer:
                 }
 
             elif name == "sdd_ingest":
+                from engramory.access.authz import TargetScope
+                from engramory.core.docs_tools import resolve_confined_repo_path
+
+                scope = str(arguments.get("scope", "project"))
+                await self._surface._decide(
+                    call_ctx,
+                    "sdd_ingest",
+                    TargetScope(tenant_id=call_ctx.tenant_id, scope=scope),
+                )
                 if not self._ingest_fn:
                     return {
                         "isError": True,
@@ -436,9 +446,15 @@ class McpServer:
                     if self._auth_enabled
                     else arguments.get("project_id", call_ctx.project_id)
                 )
+                enforce_project = self._auth_enabled and ("space" not in call_ctx.scopes)
+                confined_sdd = resolve_confined_repo_path(
+                    str(sdd_root),
+                    project_id=call_ctx.project_id,
+                    enforce_project_boundary=enforce_project,
+                )
                 reconcile = arguments.get("reconcile", True)
                 num_ent, num_rel = await self._ingest_fn(
-                    sdd_root=sdd_root,
+                    sdd_root=str(confined_sdd) if self._auth_enabled else sdd_root,
                     tenant_id=call_ctx.tenant_id,
                     project_id=project_id,
                     reconcile=reconcile,
@@ -447,6 +463,9 @@ class McpServer:
                     f"Ingested {num_ent} entities and {num_rel} relations for project {project_id}"
                 )
                 return {"content": [{"type": "text", "text": msg}]}
+
+            elif name.startswith("docs_"):
+                return await self._handle_docs_tool(name, arguments, call_ctx)
 
             else:
                 return {
@@ -687,3 +706,260 @@ class McpServer:
                 sys.stdout.flush()
             except Exception as exc:  # noqa: BLE001  # reason: stdio loop must survive client transport errors
                 logger.error("Error in stdio loop: %s", exc)
+
+    async def _handle_docs_tool(
+        self, name: str, arguments: dict[str, Any], call_ctx: ActorContext
+    ) -> dict[str, Any]:
+        """Dispatch AI-first documentation & executable runbook MCP tools."""
+        from engramory.access.authz import TargetScope
+        from engramory.core.docs_tools import (
+            check_repo_drift,
+            export_repo_llms,
+            lint_repo,
+            resolve_confined_repo_path,
+            slice_local_runbooks,
+            smoke_run_green_steps,
+        )
+
+        scope = str(arguments.get("scope", "project"))
+        enforce_project = self._auth_enabled and ("space" not in call_ctx.scopes)
+
+        if name == "docs_slice_runbook":
+            fmt = str(arguments.get("format", "json"))
+            token_budget = int(arguments.get("token_budget", 2000))
+            doc_id = arguments.get("doc_id")
+            alert_id = arguments.get("alert_id")
+            max_tier = arguments.get("max_tier")
+            repo_path_arg = arguments.get("repo_path")
+
+            res = await self._surface.docs_slice_runbook(
+                call_ctx,
+                doc_id=doc_id,
+                alert_id=alert_id,
+                max_tier=max_tier,
+                scope=scope,
+                include_memories=bool(arguments.get("include_memories", True)),
+                token_budget=token_budget,
+                format=fmt,
+            )
+            if not res.get("l0_steps") and repo_path_arg:
+                confined = resolve_confined_repo_path(
+                    str(repo_path_arg),
+                    project_id=call_ctx.project_id,
+                    enforce_project_boundary=enforce_project,
+                )
+                res = slice_local_runbooks(
+                    confined,
+                    doc_id=doc_id,
+                    alert_id=alert_id,
+                    max_tier=max_tier,
+                    token_budget=token_budget,
+                    output_format=fmt,
+                )
+            text_out = (
+                str(res["markdown"])
+                if fmt == "markdown" and "markdown" in res
+                else json.dumps(res, indent=2)
+            )
+            return {"content": [{"type": "text", "text": text_out}]}
+
+        elif name == "docs_validate":
+            await self._surface._decide(
+                call_ctx, "docs_validate", TargetScope(tenant_id=call_ctx.tenant_id, scope=scope)
+            )
+            target = resolve_confined_repo_path(
+                str(arguments.get("path", ".")),
+                project_id=call_ctx.project_id,
+                enforce_project_boundary=enforce_project,
+            )
+            report = lint_repo(target, strict=bool(arguments.get("strict", False)))
+            return {"content": [{"type": "text", "text": json.dumps(report, indent=2)}]}
+
+        elif name == "docs_check_drift":
+            await self._surface._decide(
+                call_ctx,
+                "docs_check_drift",
+                TargetScope(tenant_id=call_ctx.tenant_id, scope=scope),
+            )
+            target = resolve_confined_repo_path(
+                str(arguments.get("repo_path", ".")),
+                project_id=call_ctx.project_id,
+                enforce_project_boundary=enforce_project,
+            )
+            report = check_repo_drift(
+                target,
+                base_ref=str(arguments.get("base_ref", "HEAD~1")),
+                head_ref=str(arguments.get("head_ref", "HEAD")),
+            )
+            return {"content": [{"type": "text", "text": json.dumps(report, indent=2)}]}
+
+        elif name == "docs_export_llms":
+            await self._surface._decide(
+                call_ctx,
+                "docs_export_llms",
+                TargetScope(tenant_id=call_ctx.tenant_id, scope=scope),
+            )
+            target = resolve_confined_repo_path(
+                str(arguments.get("repo_path", ".")),
+                project_id=call_ctx.project_id,
+                enforce_project_boundary=enforce_project,
+            )
+            # Read-only MCP tool: block disk writes when remote auth is enabled
+            allow_write = False if self._auth_enabled else bool(arguments.get("write", False))
+            report = export_repo_llms(
+                target,
+                write_files=allow_write,
+                include_full=bool(arguments.get("full", False)),
+            )
+            return {"content": [{"type": "text", "text": json.dumps(report, indent=2)}]}
+
+        elif name == "docs_smoke_run":
+            await self._surface._decide(
+                call_ctx,
+                "docs_smoke_run",
+                TargetScope(tenant_id=call_ctx.tenant_id, scope=scope),
+            )
+            target = resolve_confined_repo_path(
+                str(arguments.get("repo_path", ".")),
+                project_id=call_ctx.project_id,
+                enforce_project_boundary=enforce_project,
+            )
+            # Enforce dry_run=True when remote auth is enabled; default to True otherwise
+            dry_run = True if self._auth_enabled else bool(arguments.get("dry_run", True))
+            report = smoke_run_green_steps(
+                target,
+                doc_id=arguments.get("doc_id"),
+                dry_run=dry_run,
+            )
+            return {"content": [{"type": "text", "text": json.dumps(report, indent=2)}]}
+
+        return {
+            "isError": True,
+            "content": [{"type": "text", "text": f"Unknown tool: {name}"}],
+        }
+
+
+DOCS_TOOLS_SCHEMA: list[dict[str, Any]] = [
+    {
+        "name": "docs_slice_runbook",
+        "description": (
+            "Slice L0 canonical executable runbook steps and L2 operational memories by "
+            "doc_id, alert_id, and max_tier (token-budgeted, L0-before-L2 ordered)."
+        ),
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "doc_id": {"type": "string", "description": "Target runbook document ID"},
+                "alert_id": {
+                    "type": "string",
+                    "description": "Alert trigger ID (e.g. ALT-DOC-004)",
+                },
+                "max_tier": {
+                    "type": "string",
+                    "enum": ["green", "yellow", "red"],
+                    "description": "Maximum autonomy tier to include",
+                },
+                "repo_path": {
+                    "type": "string",
+                    "description": "Optional confined local repo path fallback",
+                },
+                "scope": {"type": "string", "default": "project"},
+                "include_memories": {"type": "boolean", "default": True},
+                "token_budget": {
+                    "type": "integer",
+                    "default": 2000,
+                    "description": "Maximum token budget for returned context",
+                },
+                "format": {
+                    "type": "string",
+                    "enum": ["json", "markdown"],
+                    "default": "json",
+                },
+            },
+        },
+    },
+    {
+        "name": "docs_validate",
+        "description": (
+            "Validate Markdown frontmatter, executable runbook step AST invariants "
+            "(INV-STEP-01/02), chunk-independence prose rules, and referential integrity."
+        ),
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "default": "."},
+                "strict": {"type": "boolean", "default": False},
+            },
+        },
+    },
+    {
+        "name": "docs_check_drift",
+        "description": (
+            "Check git diff against watched_paths globs and last_verified TTL staleness."
+        ),
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "repo_path": {"type": "string", "default": "."},
+                "base_ref": {"type": "string", "default": "HEAD~1"},
+                "head_ref": {"type": "string", "default": "HEAD"},
+            },
+        },
+    },
+    {
+        "name": "docs_export_llms",
+        "description": (
+            "Generate deterministic, D14-scrubbed /llms.txt and /llms-full.txt manifests."
+        ),
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "repo_path": {"type": "string", "default": "."},
+                "write": {"type": "boolean", "default": False},
+                "full": {"type": "boolean", "default": False},
+            },
+        },
+    },
+    {
+        "name": "docs_smoke_run",
+        "description": (
+            "Verify and smoke-test tier='green' mode='read-only' runbook steps "
+            "(defaults to dry_run=true bash -n syntax check over MCP)."
+        ),
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "repo_path": {"type": "string", "default": "."},
+                "doc_id": {"type": "string"},
+                "dry_run": {"type": "boolean", "default": True},
+            },
+        },
+    },
+]
+
+TOOLS_SCHEMA.extend(DOCS_TOOLS_SCHEMA)

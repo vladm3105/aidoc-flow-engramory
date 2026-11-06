@@ -323,6 +323,10 @@ class GitSyncEngine:
             else:
                 files_skipped.append(cf.rel_path)
 
+        await self._sync_changed_doc_metadata(
+            repo, repo_path, changed_files, tenant_id, project_id, scope
+        )
+
         if all_sections:
             deduped: dict[tuple[str, str, str, int], KBSection] = {}
             for s in all_sections:
@@ -357,3 +361,105 @@ class GitSyncEngine:
             sections_created=len(all_sections),
             duration_ms=int(duration_ms),
         )
+
+    async def _sync_changed_doc_metadata(
+        self,
+        repo: Repository,
+        repo_path: Path,
+        changed_files: list[ChangedFile],
+        tenant_id: str,
+        project_id: str | None,
+        scope: str,
+    ) -> None:
+        """Sync kb_documents and kb_runbook_steps for changed .md files."""
+        import inspect
+
+        from engramory.access.poisoning_guard import inspect_memory_write
+        from engramory.core.docs_tools import parse_markdown_document
+
+        for cf in changed_files:
+            if (
+                cf.status == FileChangeStatus.RENAMED
+                and cf.old_path
+                and hasattr(repo, "delete_kb_document")
+            ):
+                old_doc_id = build_doc_id(project_id, cf.old_path)
+                maybe_coro = repo.delete_kb_document(
+                    tenant_id, old_doc_id, repo_path=cf.old_path, project_id=project_id
+                )
+                if inspect.isawaitable(maybe_coro):
+                    await maybe_coro
+            elif cf.status == FileChangeStatus.DELETED and hasattr(repo, "delete_kb_document"):
+                doc_id = build_doc_id(project_id, cf.rel_path)
+                maybe_coro = repo.delete_kb_document(
+                    tenant_id, doc_id, repo_path=cf.rel_path, project_id=project_id
+                )
+                if inspect.isawaitable(maybe_coro):
+                    await maybe_coro
+
+            if (
+                cf.status
+                in (
+                    FileChangeStatus.ADDED,
+                    FileChangeStatus.MODIFIED,
+                    FileChangeStatus.RENAMED,
+                )
+                and cf.rel_path.lower().endswith(".md")
+                and hasattr(repo, "upsert_kb_document")
+            ):
+                full_p = repo_path / cf.rel_path
+                if full_p.is_file():
+                    try:
+                        parsed = parse_markdown_document(
+                            full_p,
+                            repo_root=repo_path,
+                            tenant_id=tenant_id,
+                            project_id=project_id,
+                            scope=scope,
+                        )
+                        if parsed.has_frontmatter and parsed.kb_document is not None:
+                            inspect_memory_write(
+                                parsed.kb_document.title,
+                                tenant_id=tenant_id,
+                                writer_agent_id="git-sync",
+                                target=parsed.kb_document.doc_id,
+                            )
+                            for st in parsed.steps:
+                                inspect_memory_write(
+                                    st.heading_path,
+                                    tenant_id=tenant_id,
+                                    writer_agent_id="git-sync",
+                                    target=parsed.kb_document.doc_id,
+                                )
+                                if st.prose_context:
+                                    inspect_memory_write(
+                                        st.prose_context,
+                                        tenant_id=tenant_id,
+                                        writer_agent_id="git-sync",
+                                        target=parsed.kb_document.doc_id,
+                                    )
+                                inspect_memory_write(
+                                    st.command_body,
+                                    tenant_id=tenant_id,
+                                    writer_agent_id="git-sync",
+                                    target=parsed.kb_document.doc_id,
+                                )
+                            c1 = repo.upsert_kb_document(parsed.kb_document)
+                            if inspect.isawaitable(c1):
+                                await c1
+                            c2 = repo.upsert_kb_runbook_steps(
+                                tenant_id, parsed.kb_document.doc_id, parsed.steps
+                            )
+                            if inspect.isawaitable(c2):
+                                await c2
+                        elif cf.status == FileChangeStatus.MODIFIED and hasattr(
+                            repo, "delete_kb_document"
+                        ):
+                            stale_id = build_doc_id(project_id, cf.rel_path)
+                            c_del = repo.delete_kb_document(
+                                tenant_id, stale_id, repo_path=cf.rel_path, project_id=project_id
+                            )
+                            if inspect.isawaitable(c_del):
+                                await c_del
+                    except Exception as exc:
+                        logger.debug("Skipping kb_documents sync for %s: %s", cf.rel_path, exc)

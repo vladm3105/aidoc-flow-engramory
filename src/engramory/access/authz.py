@@ -24,6 +24,13 @@ KNOWN_ACTIONS = frozenset(
         "graph_neighbors",
         "context_slice",
         "blast_radius",
+        "docs_ingest_runbook",
+        "docs_slice_runbook",
+        "docs_validate",
+        "docs_check_drift",
+        "docs_export_llms",
+        "docs_smoke_run",
+        "sdd_ingest",
     }
 )
 

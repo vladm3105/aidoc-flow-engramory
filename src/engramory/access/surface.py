@@ -30,7 +30,14 @@ from typing import Any
 
 from engramory.access.authz import ActorContext, AuthzDecision, TargetScope, authorize
 from engramory.access.poisoning_guard import MemoryPoisoningError, inspect_memory_write
-from engramory.core.models import AgentProfile, Episode, KBSection
+from engramory.core.models import (
+    AgentProfile,
+    Episode,
+    KBDocument,
+    KBRunbookStep,
+    KBSection,
+    ValidationError,
+)
 from engramory.core.repository import Repository
 from engramory.ports import GraphPort
 
@@ -98,7 +105,7 @@ LAYER_ORDER: dict[str, int] = {
 
 
 def _extract_layer_prefix(node: Mapping[str, Any]) -> str:
-    nid = str(node.get("id", ""))
+    nid = str(node.get("id", "")).split(":", 1)[-1]
     if "-" in nid:
         return nid.split("-")[0].upper()
     labels = node.get("labels", [])
@@ -178,7 +185,12 @@ class AccessSurface:
             prov = dict(memory.provenance)
             if expand_graph and self._graph is not None:
                 try:
-                    neighbors = await self._graph.neighbors(id=memory.id, depth=1)
+                    neighbors = await self._graph.neighbors(
+                        id=memory.id,
+                        depth=1,
+                        tenant_id=target.tenant_id,
+                        project_id=ctx.project_id,
+                    )
                     if neighbors:
                         prov["related_entities"] = [n.get("id") for n in neighbors]
                 except Exception:  # noqa: BLE001  # reason: graph traversal failure must not abort primary memory retrieval
@@ -216,10 +228,15 @@ class AccessSurface:
         """Retrieve connected graph neighbors for an entity (ADR-03 / GraphPort)."""
         target = TargetScope(tenant_id=ctx.tenant_id, scope=scope)
         await self._decide(ctx, "graph_neighbors", target)
+        eff_project_id = ctx.project_id if scope in ("agent", "project") else None
         if self._graph is not None:
             try:
                 return await self._graph.neighbors(
-                    id=id, rel=rel, depth=depth, tenant_id=ctx.tenant_id
+                    id=id,
+                    rel=rel,
+                    depth=depth,
+                    tenant_id=ctx.tenant_id,
+                    project_id=eff_project_id,
                 )
             except Exception:
                 logger.debug("Graph adapter neighbors query failed")
@@ -238,14 +255,25 @@ class AccessSurface:
         """Retrieve upstream contract closure (ancestors) for an SDD task node."""
         target = TargetScope(tenant_id=ctx.tenant_id, scope=scope)
         await self._decide(ctx, "context_slice", target)
+        eff_project_id = ctx.project_id if scope in ("agent", "project") else None
         hits: Sequence[Mapping[str, Any]] = []
         if self._graph is not None:
             try:
-                hits = await self._graph.ancestors(id=task_id, depth=depth, tenant_id=ctx.tenant_id)
+                hits = await self._graph.ancestors(
+                    id=task_id,
+                    depth=depth,
+                    tenant_id=ctx.tenant_id,
+                    project_id=eff_project_id,
+                )
             except Exception:
                 logger.debug("Graph adapter ancestors query failed, falling back to PostgreSQL CTE")
         if not hits:
-            hits = await self._repo.find_ancestors(id=task_id, tenant_id=ctx.tenant_id, depth=depth)
+            hits = await self._repo.find_ancestors(
+                id=task_id,
+                tenant_id=ctx.tenant_id,
+                depth=depth,
+                project_id=eff_project_id,
+            )
 
         # 1. Filter by requested layers if specified
         if layers:
@@ -286,10 +314,14 @@ class AccessSurface:
         """Retrieve downstream dependent nodes (descendants) affected by a change."""
         target = TargetScope(tenant_id=ctx.tenant_id, scope=scope)
         await self._decide(ctx, "blast_radius", target)
+        eff_project_id = ctx.project_id if scope in ("agent", "project") else None
         if self._graph is not None:
             try:
                 hits = await self._graph.descendants(
-                    id=doc_id, depth=depth, tenant_id=ctx.tenant_id
+                    id=doc_id,
+                    depth=depth,
+                    tenant_id=ctx.tenant_id,
+                    project_id=eff_project_id,
                 )
                 if hits:
                     return hits
@@ -297,7 +329,12 @@ class AccessSurface:
                 logger.debug(
                     "Graph adapter descendants query failed, falling back to PostgreSQL CTE"
                 )
-        return await self._repo.find_descendants(id=doc_id, tenant_id=ctx.tenant_id, depth=depth)
+        return await self._repo.find_descendants(
+            id=doc_id,
+            tenant_id=ctx.tenant_id,
+            depth=depth,
+            project_id=eff_project_id,
+        )
 
     async def memory_add(
         self,
@@ -422,7 +459,18 @@ class AccessSurface:
             scope=scope,
             version=version,
         )
-        return await self._repo.upsert_kb_section(section)
+        try:
+            return await self._repo.upsert_kb_section(section)
+        except ValidationError as exc:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="knowledge_ingest",
+                allowed=False,
+                reason=f"cross_project_collision: {exc}",
+            )
+            raise GovernedWriteRejected(str(exc)) from exc
 
     async def knowledge_ingest_batch(
         self,
@@ -482,7 +530,18 @@ class AccessSurface:
                 )
             )
 
-        res = await self._repo.upsert_kb_sections_batch(vetted_sections)
+        try:
+            res = await self._repo.upsert_kb_sections_batch(vetted_sections)
+        except ValidationError as exc:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="knowledge_ingest",
+                allowed=False,
+                reason=f"cross_project_collision: {exc}",
+            )
+            raise GovernedWriteRejected(str(exc)) from exc
         if isinstance(res, dict):
             return list(res.values())
         return res
@@ -492,6 +551,7 @@ class AccessSurface:
         ctx: ActorContext,
         query: str,
         *,
+        domain_id: str | None = None,
         query_vec: Sequence[float] | None = None,
         scope: str | None = None,
         limit: int = 5,
@@ -504,7 +564,200 @@ class AccessSurface:
             query,
             tenant_id=ctx.tenant_id,
             project_id=ctx.project_id,
+            domain_id=domain_id,
             query_vec=query_vec,
             scope=scope,
             limit=limit,
+        )
+
+    async def docs_ingest_runbook(
+        self,
+        ctx: ActorContext,
+        *,
+        doc: KBDocument,
+        steps: Sequence[KBRunbookStep],
+        evidence_ref: str | None,
+        scope: str = "project",
+    ) -> dict[str, Any]:
+        """Governed write of L0 kb_documents and kb_runbook_steps (ADR-06)."""
+        await self._decide(
+            ctx, "docs_ingest_runbook", TargetScope(tenant_id=ctx.tenant_id, scope=scope)
+        )
+        if not evidence_ref:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="docs_ingest_runbook",
+                allowed=False,
+                reason="missing_evidence_ref",
+            )
+            raise GovernedWriteRejected("docs_ingest_runbook requires evidence_ref")
+
+        try:
+            vetted_title = inspect_memory_write(
+                doc.title,
+                tenant_id=ctx.tenant_id,
+                writer_agent_id=ctx.agent_id,
+                target=doc.doc_id,
+            )
+        except MemoryPoisoningError as exc:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="docs_ingest_runbook",
+                allowed=False,
+                reason=f"poisoning_rejected: {exc}",
+            )
+            raise GovernedWriteRejected(str(exc)) from exc
+
+        vetted_steps: list[KBRunbookStep] = []
+        for st in steps:
+            try:
+                vetted_heading = inspect_memory_write(
+                    st.heading_path,
+                    tenant_id=ctx.tenant_id,
+                    writer_agent_id=ctx.agent_id,
+                    target=doc.doc_id,
+                )
+                vetted_prose = (
+                    inspect_memory_write(
+                        st.prose_context,
+                        tenant_id=ctx.tenant_id,
+                        writer_agent_id=ctx.agent_id,
+                        target=doc.doc_id,
+                    )
+                    if st.prose_context
+                    else ""
+                )
+                vetted_cmd = inspect_memory_write(
+                    st.command_body,
+                    tenant_id=ctx.tenant_id,
+                    writer_agent_id=ctx.agent_id,
+                    target=doc.doc_id,
+                )
+            except MemoryPoisoningError as exc:
+                await self._repo.record_audit(
+                    tenant_id=ctx.tenant_id,
+                    agent_id=ctx.agent_id,
+                    project_id=ctx.project_id,
+                    action="docs_ingest_runbook",
+                    allowed=False,
+                    reason=f"poisoning_rejected: {exc}",
+                )
+                raise GovernedWriteRejected(str(exc)) from exc
+            vetted_steps.append(
+                KBRunbookStep(
+                    step_uid=st.step_uid,
+                    doc_id=doc.doc_id,
+                    step_order=st.step_order,
+                    step_id=st.step_id,
+                    heading_path=vetted_heading,
+                    tier=st.tier,
+                    mode=st.mode,
+                    command_body=vetted_cmd,
+                    prose_context=vetted_prose,
+                    expect_exit=st.expect_exit,
+                    timeout_sec=st.timeout_sec,
+                    rollback_step=st.rollback_step,
+                    tenant_id=ctx.tenant_id,
+                )
+            )
+
+        locked_doc = KBDocument(
+            doc_id=doc.doc_id,
+            repo_path=doc.repo_path,
+            title=vetted_title,
+            kind=doc.kind,
+            namespace=doc.namespace,
+            status=doc.status,
+            autonomy_tier=doc.autonomy_tier,
+            frontmatter=doc.frontmatter,
+            watched_paths=doc.watched_paths,
+            trigger_alerts=doc.trigger_alerts,
+            last_verified=doc.last_verified,
+            review_ttl_days=doc.review_ttl_days,
+            git_commit_sha=evidence_ref,
+            project_id=ctx.project_id,
+            domain_id=doc.domain_id,
+            tenant_id=ctx.tenant_id,
+            scope=scope if scope in ctx.scopes else "project",
+        )
+        try:
+            await self._repo.upsert_kb_document(locked_doc)
+        except ValidationError as exc:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="docs_ingest_runbook",
+                allowed=False,
+                reason=f"cross_project_collision: {exc}",
+            )
+            raise GovernedWriteRejected(str(exc)) from exc
+        step_count = await self._repo.upsert_kb_runbook_steps(
+            ctx.tenant_id, locked_doc.doc_id, vetted_steps
+        )
+        return {
+            "status": "ok",
+            "doc_id": locked_doc.doc_id,
+            "step_count": step_count,
+        }
+
+    async def docs_slice_runbook(
+        self,
+        ctx: ActorContext,
+        *,
+        doc_id: str | None = None,
+        alert_id: str | None = None,
+        max_tier: str | None = None,
+        scope: str = "project",
+        domain_id: str | None = None,
+        include_memories: bool = True,
+        token_budget: int = DEFAULT_TOKEN_BUDGET,
+        format: str = "json",
+    ) -> dict[str, Any]:
+        """Governed read of L0 runbook steps + optional L2 distilled memories."""
+        from engramory.core.docs_tools import format_runbook_slice
+
+        await self._decide(
+            ctx, "docs_slice_runbook", TargetScope(tenant_id=ctx.tenant_id, scope=scope)
+        )
+        l0_steps = await self._repo.slice_runbook(
+            tenant_id=ctx.tenant_id,
+            project_id=ctx.project_id,
+            domain_id=domain_id,
+            scope=scope,
+            doc_id=doc_id,
+            alert_id=alert_id,
+            max_tier=max_tier,
+        )
+        l2_memories: list[dict[str, Any]] = []
+        if include_memories and (alert_id or doc_id):
+            query_str = alert_id or doc_id or "runbook"
+            try:
+                hits = await self.memory_search(
+                    ctx,
+                    query_str,
+                    k=4,
+                    token_budget=max(250, token_budget // 4),
+                )
+                l2_memories = [
+                    {
+                        "id": h.memory_id,
+                        "content": h.summary,
+                        "score": h.score,
+                        "token_count": h.token_count,
+                    }
+                    for h in hits
+                ]
+            except Exception:
+                l2_memories = []
+
+        return format_runbook_slice(
+            l0_steps,
+            memories=l2_memories,
+            token_budget=token_budget,
+            output_format=format,
         )

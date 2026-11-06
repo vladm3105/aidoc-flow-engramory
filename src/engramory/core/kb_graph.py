@@ -166,15 +166,29 @@ def extract_sdd_graph(
     tenant_id: str = "default",
     project_id: str = "core",
     domain_id: str = "core",
+    namespace_by_project: bool = False,
 ) -> tuple[list[GraphEntity], list[GraphRelation]]:
     """Parse entire SDD corpus across all 10 layers and extract entities & lineage relations."""
     root_dir = Path(sdd_root)
+    resolved_root = root_dir.resolve()
     entities_map: dict[str, GraphEntity] = {}
     relations_map: dict[tuple[str, str, str], str] = {}  # (src, dst, rel_type) -> rationale
 
     if not root_dir.exists():
         logger.warning("SDD root directory %s does not exist", root_dir)
         return [], []
+
+    use_prefix = bool(
+        namespace_by_project
+        and project_id
+        and project_id.strip()
+        and project_id.strip() not in ("default", "core")
+    )
+
+    def _qualify_id(raw_sdd_id: str) -> str:
+        if use_prefix and not raw_sdd_id.startswith(f"{project_id}:"):
+            return f"{project_id}:{raw_sdd_id}"
+        return raw_sdd_id
 
     # Find candidate directories: either subdirectories or the root itself
     layer_dirs = [d for d in sorted(root_dir.iterdir()) if d.is_dir()]
@@ -189,6 +203,8 @@ def extract_sdd_graph(
             raw_type = "SDD"
 
         for file_path in sorted(layer_dir.glob("*.yaml")) + sorted(layer_dir.glob("*.md")):
+            if not file_path.resolve().is_relative_to(resolved_root):
+                continue
             if file_path.name.endswith(".TEMPLATE.yaml") or file_path.name.endswith(
                 "-TEMPLATE.yaml"
             ):
@@ -245,9 +261,10 @@ def extract_sdd_graph(
             title = data.get("title") or dc.get("title") or file_path.stem
             status = dc.get("status") or data.get("status") or "Active"
             author = dc.get("author") or "Framework"
+            qualified_doc_id = _qualify_id(doc_id)
 
             entity = GraphEntity(
-                id=doc_id,
+                id=qualified_doc_id,
                 entity_type=entity_type,
                 name=str(title),
                 tenant_id=tenant_id,
@@ -256,18 +273,21 @@ def extract_sdd_graph(
                     "status": str(status),
                     "author": str(author),
                     "project_id": project_id,
+                    "sdd_id": doc_id,
                     "layer_folder": layer_folder,
                     "source_file": file_path.name,
                 },
             )
-            entities_map[doc_id] = entity
+            entities_map[qualified_doc_id] = entity
 
             # 1. Structural schema fields in YAML
             # source_spec in IPLAN
             spec_val = dc.get("source_spec") or data.get("source_spec")
             for dst in extract_sdd_target_ids(spec_val):
                 if dst != doc_id:
-                    relations_map[(doc_id, dst, "IMPLEMENTS")] = "source_spec"
+                    relations_map[(qualified_doc_id, _qualify_id(dst), "IMPLEMENTS")] = (
+                        "source_spec"
+                    )
 
             # source_document in BDD / EARS / SPEC
             src_doc = data.get("source_document") or dc.get("source_document")
@@ -280,7 +300,9 @@ def extract_sdd_graph(
                         if doc_id.startswith("BDD")
                         else "ORIGINATES_FROM"
                     )
-                    relations_map[(doc_id, dst, rel_type)] = "source_document"
+                    relations_map[(qualified_doc_id, _qualify_id(dst), rel_type)] = (
+                        "source_document"
+                    )
 
             # architecture_decision in SPEC
             arch_dec = data.get("architecture_decision") or data.get("component_overview", {}).get(
@@ -288,19 +310,25 @@ def extract_sdd_graph(
             )
             for dst in extract_sdd_target_ids(arch_dec):
                 if dst != doc_id:
-                    relations_map[(doc_id, dst, "CONSTRAINED_BY")] = "architecture_decision"
+                    relations_map[(qualified_doc_id, _qualify_id(dst), "CONSTRAINED_BY")] = (
+                        "architecture_decision"
+                    )
 
             # brd_reference in PRD
             brd_ref = data.get("brd_reference")
             for dst in extract_sdd_target_ids(brd_ref):
                 if dst != doc_id:
-                    relations_map[(doc_id, dst, "FULFILLS")] = "brd_reference"
+                    relations_map[(qualified_doc_id, _qualify_id(dst), "FULFILLS")] = (
+                        "brd_reference"
+                    )
 
             # authoring_chg in IPLAN / document_control
             auth_chg = dc.get("authoring_chg") or data.get("chg_id")
             for dst in extract_sdd_target_ids(auth_chg):
                 if dst != doc_id:
-                    relations_map[(dst, doc_id, "MODIFIES")] = "authoring_chg"
+                    relations_map[(_qualify_id(dst), qualified_doc_id, "MODIFIES")] = (
+                        "authoring_chg"
+                    )
 
             # related_decisions.dependencies in ADR
             adr_deps = data.get("related_decisions", {}).get("dependencies", [])
@@ -313,7 +341,9 @@ def extract_sdd_graph(
                             re.sub(r"[^A-Za-z0-9_]+", "_", str(raw_rel)).strip("_").upper()
                             or "DEPENDS_ON"
                         )
-                        relations_map[(doc_id, dst, rel_type)] = dep.get("rationale", "")
+                        relations_map[(qualified_doc_id, _qualify_id(dst), rel_type)] = dep.get(
+                            "rationale", ""
+                        )
 
             # 2. Free-text lineage tag matching (@kind: TARGET)
             for m in TAG_RE.finditer(content):
@@ -343,14 +373,15 @@ def extract_sdd_graph(
                     else:
                         rel = "REFERENCES"
 
-                    key = (doc_id, target_id, rel)
+                    key = (qualified_doc_id, _qualify_id(target_id), rel)
                     if key not in relations_map:
                         relations_map[key] = f"lineage_tag_@{kind}"
 
     # 3. Ensure referential integrity by auto-creating stubs for unresolved relation targets
     for _src, dst, _rel in sorted(relations_map.keys()):
         if dst not in entities_map:
-            prefix = dst.split("-")[0].upper() if "-" in dst else "SDD"
+            unprefixed_dst = dst.split(":", 1)[-1]
+            prefix = unprefixed_dst.split("-")[0].upper() if "-" in unprefixed_dst else "SDD"
             entity_type = (
                 prefix
                 if prefix
@@ -371,13 +402,14 @@ def extract_sdd_graph(
             entities_map[dst] = GraphEntity(
                 id=dst,
                 entity_type=entity_type,
-                name=f"Stub: {dst}",
+                name=f"Stub: {unprefixed_dst}",
                 tenant_id=tenant_id,
                 domain_id=domain_id,
                 properties={
                     "status": "stub",
                     "stub": True,
                     "project_id": project_id,
+                    "sdd_id": unprefixed_dst,
                 },
             )
 
@@ -535,6 +567,21 @@ async def ingest_sdd_knowledge_graph(
         project_id=project_id,
         domain_id=domain_id,
     )
+    sdd_path = Path(sdd_root)
+    repo_candidate = sdd_path.parent if sdd_path.name == "sdd" else sdd_path
+    if (repo_candidate / "docs").is_dir():
+        doc_entities, doc_relations = extract_docs_graph(
+            repo_candidate,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            domain_id=domain_id,
+        )
+        seen_ent = {e.id for e in entities}
+        for de in doc_entities:
+            if de.id not in seen_ent:
+                entities.append(de)
+                seen_ent.add(de.id)
+        relations.extend(doc_relations)
 
     # 1. Canonical PostgreSQL persistence (ADR-01)
     await repo.bulk_upsert_graph_entities(entities)
@@ -645,3 +692,143 @@ async def get_sdd_blast_radius(
     clean_doc = normalize_sdd_id(doc_id)
     descendants = await graph.descendants(id=clean_doc, depth=depth)
     return [dict(d) for d in descendants]
+
+
+def extract_docs_graph(
+    repo_path: Path | str,
+    *,
+    tenant_id: str = "default",
+    project_id: str | None = None,
+    domain_id: str = "default",
+) -> tuple[list[GraphEntity], list[GraphRelation]]:
+    """Extract RUNBOOK, RUNBOOK_STEP, and ALERT entities and relations from docs/**/*.md."""
+    from engramory.core.docs_tools import parse_markdown_document
+
+    root = Path(repo_path).resolve()
+    bound_root = root if root.is_dir() else root.parent
+    eff_project = project_id or root.name
+    docs_dir = root / "docs"
+    raw_files = (
+        [root]
+        if root.is_file()
+        else sorted(docs_dir.rglob("*.md"))
+        if docs_dir.is_dir()
+        else sorted(root.glob("*.md"))
+    )
+    md_files = [f for f in raw_files if f.resolve().is_relative_to(bound_root.resolve())]
+
+    entities: dict[str, GraphEntity] = {}
+    relations: list[GraphRelation] = []
+
+    for f in md_files:
+        parsed = parse_markdown_document(
+            f,
+            repo_root=root if root.is_dir() else root.parent,
+            tenant_id=tenant_id,
+            project_id=eff_project,
+            domain_id=domain_id,
+        )
+        if not parsed.has_frontmatter or parsed.kb_document is None:
+            continue
+        doc = parsed.kb_document
+        if doc.status in {"deprecated", "archived"}:
+            continue
+
+        ent_type = (
+            "RUNBOOK"
+            if doc.kind == "runbook" or parsed.steps
+            else re.sub(r"[^A-Za-z0-9_]", "_", doc.kind.upper())
+        )
+        entities[doc.doc_id] = GraphEntity(
+            id=doc.doc_id,
+            entity_type=ent_type,
+            name=doc.title,
+            tenant_id=tenant_id,
+            domain_id=doc.domain_id or domain_id,
+            properties={
+                "project_id": eff_project,
+                "repo_path": doc.repo_path,
+                "kind": doc.kind,
+                "autonomy_tier": doc.autonomy_tier,
+                "namespace": doc.namespace,
+                "status": doc.status,
+            },
+        )
+
+        # Extract ALERT entities and MITIGATES_ALERT relations
+        for alert_id in doc.trigger_alerts:
+            if alert_id not in entities:
+                entities[alert_id] = GraphEntity(
+                    id=alert_id,
+                    entity_type="ALERT",
+                    name=alert_id,
+                    tenant_id=tenant_id,
+                    domain_id=doc.domain_id or domain_id,
+                    properties={"project_id": eff_project},
+                )
+            relations.append(
+                GraphRelation(
+                    src_id=doc.doc_id,
+                    dst_id=alert_id,
+                    rel_type="MITIGATES_ALERT",
+                    tenant_id=tenant_id,
+                    properties={"project_id": eff_project},
+                )
+            )
+
+        # Extract RUNBOOK_STEP entities and CONTAINS_STEP relations
+        for st in parsed.steps:
+            entities[st.step_uid] = GraphEntity(
+                id=st.step_uid,
+                entity_type="RUNBOOK_STEP",
+                name=f"{st.step_id} ({st.tier}/{st.mode})",
+                tenant_id=tenant_id,
+                domain_id=doc.domain_id or domain_id,
+                properties={
+                    "project_id": eff_project,
+                    "doc_id": doc.doc_id,
+                    "step_id": st.step_id,
+                    "step_order": st.step_order,
+                    "tier": st.tier,
+                    "mode": st.mode,
+                    "heading_path": st.heading_path,
+                },
+            )
+            relations.append(
+                GraphRelation(
+                    src_id=doc.doc_id,
+                    dst_id=st.step_uid,
+                    rel_type="CONTAINS_STEP",
+                    tenant_id=tenant_id,
+                    properties={"step_order": st.step_order},
+                )
+            )
+
+        # Extract DEPENDS_ON relations from frontmatter consumers / dependencies
+        for dep_key in ("dependencies", "consumers"):
+            dep_list = parsed.frontmatter.get(dep_key)
+            if isinstance(dep_list, list):
+                for dep in dep_list:
+                    dep_id = str(dep).strip()
+                    if dep_id:
+                        if dep_id not in entities:
+                            entities[dep_id] = GraphEntity(
+                                id=dep_id,
+                                entity_type="SERVICE",
+                                name=dep_id,
+                                tenant_id=tenant_id,
+                                domain_id=doc.domain_id or domain_id,
+                                properties={"project_id": eff_project},
+                            )
+                        rel_t = "DEPENDS_ON" if dep_key == "dependencies" else "CONSUMED_BY"
+                        relations.append(
+                            GraphRelation(
+                                src_id=doc.doc_id,
+                                dst_id=dep_id,
+                                rel_type=rel_t,
+                                tenant_id=tenant_id,
+                                properties={"project_id": eff_project},
+                            )
+                        )
+
+    return list(entities.values()), relations
