@@ -1,0 +1,8 @@
+extends: substitution
+message: "Retired tool '%s' referenced; use canonical stack component '%s' per $TECHNOLOGY_STACK_ROOT."
+level: error
+ignorecase: true
+swap:
+  seaweedfs: MinIO / RustFS
+  bytebase: Atlas CLI
+  pre-commit: lefthook

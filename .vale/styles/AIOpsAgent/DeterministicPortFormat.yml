@@ -1,0 +1,6 @@
+extends: existence
+message: "Avoid ambiguous localhost port '%s'; use explicit 127.0.0.1:<port> or 10.250.0.1:<port> binding."
+level: warning
+ignorecase: true
+tokens:
+  - 'http://localhost:\d+'

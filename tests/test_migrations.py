@@ -18,6 +18,7 @@ def test_migrations_exist_and_ordered() -> None:
         "0005_pin_embeddings_hnsw.sql",
         "0006_resize_embeddings_1536.sql",
         "0007_graph_entities_canonical.sql",
+        "0008_runbooks_and_doc_governance.sql",
     ]
 
 
@@ -94,3 +95,14 @@ def test_migration_0007_graph_entities_canonical() -> None:
     assert "PRIMARY KEY (tenant_id, id)" in sql
     assert "uq_graph_relations UNIQUE (tenant_id, src_id, dst_id, rel_type)" in sql
     assert "ON DELETE CASCADE" in sql
+
+
+def test_migration_0008_runbooks_and_doc_governance() -> None:
+    """0008 creates kb_documents and kb_runbook_steps with composite tenant_id PKs."""
+    sql = (MIGRATIONS / "0008_runbooks_and_doc_governance.sql").read_text()
+    assert "CREATE TABLE IF NOT EXISTS kb_documents" in sql
+    assert "CREATE TABLE IF NOT EXISTS kb_runbook_steps" in sql
+    assert "PRIMARY KEY (tenant_id, doc_id)" in sql
+    assert "PRIMARY KEY (tenant_id, step_uid)" in sql
+    assert "CONSTRAINT chk_green_readonly" in sql
+    assert "DROP TRIGGER IF EXISTS trg_kb_documents_updated_at" in sql

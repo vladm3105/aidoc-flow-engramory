@@ -1,8 +1,8 @@
-# aidoc-flow-engramory
+# platform-engramory (aidoc-flow-engramory)
 
-## Engramory — the memory & knowledge plane of the aidoc-flow ecosystem
+## Platform Engramory — Shared Memory, Knowledge & Documentation Operating System
 
-**Shared agent knowledge & memory core.** Engramory is the persistent, distilled "brain" that the aidoc-flow ecosystem and your AI projects build on — it gives agents long-term memory (knowledge, skills, and experience) that survives across sessions, projects, and platforms.
+**Shared agent knowledge, memory & executable documentation core.** Engramory is the persistent, distilled "brain" and L0 documentation/runbook engine that the platform (`platform-*`), `aiops-*`, and `aidoc-*` ecosystem builds on — giving agents long-term memory (knowledge, skills, and experience) plus verified operational playbooks and drift governance across sessions, projects, and platforms.
 
 > *Engramory* = **engram** (a stored memory trace) + **memory**. One brain, many projects.
 
@@ -76,6 +76,7 @@ gateway is the authenticated production face and arrives in a later cycle.
 | Doc | Purpose |
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Target architecture, portability matrix, build roadmap |
+| [docs/doc-tools/00_INDEX.md](docs/doc-tools/00_INDEX.md) | AI-first documentation, executable runbooks, drift & `llms.txt` toolchain (`engramory docs`) |
 | [docs/CORES.md](docs/CORES.md) | The two bounded cores (Memory & Knowledge), their boundary, and the shared spine |
 | [docs/STRATEGY.md](docs/STRATEGY.md) | Build strategy & recommendation (build the plane, adopt the engine, lead with evaluation) |
 | [docs/MEMORY_DESIGN.md](docs/MEMORY_DESIGN.md) | Layered memory (L0–L3), distillation loop, schema, portability |

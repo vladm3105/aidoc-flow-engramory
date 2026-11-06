@@ -121,6 +121,57 @@ class KnowledgeCore:
                 all_sections.append(kb_sec)
 
             path_to_sections[str(p)] = file_secs
+            if p.suffix.lower() == ".md" and hasattr(self.repo, "upsert_kb_document"):
+                try:
+                    from engramory.access.poisoning_guard import inspect_memory_write
+                    from engramory.core.docs_tools import parse_markdown_document
+
+                    inferred_root = p.resolve().parent
+                    for anc in [inferred_root, *inferred_root.parents]:
+                        if (anc / ".git").exists() or (anc / "pyproject.toml").exists():
+                            inferred_root = anc
+                            break
+
+                    parsed = parse_markdown_document(
+                        p,
+                        repo_root=inferred_root,
+                        tenant_id=tenant_id,
+                        project_id=project_id,
+                        scope=scope,
+                    )
+                    if parsed.has_frontmatter and parsed.kb_document is not None:
+                        inspect_memory_write(
+                            parsed.kb_document.title,
+                            tenant_id=tenant_id,
+                            writer_agent_id="knowledge-core",
+                            target=parsed.kb_document.doc_id,
+                        )
+                        for st in parsed.steps:
+                            inspect_memory_write(
+                                st.heading_path,
+                                tenant_id=tenant_id,
+                                writer_agent_id="knowledge-core",
+                                target=parsed.kb_document.doc_id,
+                            )
+                            if st.prose_context:
+                                inspect_memory_write(
+                                    st.prose_context,
+                                    tenant_id=tenant_id,
+                                    writer_agent_id="knowledge-core",
+                                    target=parsed.kb_document.doc_id,
+                                )
+                            inspect_memory_write(
+                                st.command_body,
+                                tenant_id=tenant_id,
+                                writer_agent_id="knowledge-core",
+                                target=parsed.kb_document.doc_id,
+                            )
+                        await self.repo.upsert_kb_document(parsed.kb_document)
+                        await self.repo.upsert_kb_runbook_steps(
+                            tenant_id, parsed.kb_document.doc_id, parsed.steps
+                        )
+                except Exception as exc:
+                    logger.debug("Skipping kb_documents extraction for %s: %s", p, exc)
 
         if not all_sections:
             return {}

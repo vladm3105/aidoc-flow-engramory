@@ -865,7 +865,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_status = sub.add_parser("status", help="ops: store reachability + counts")
     p_status.set_defaults(func=_cmd_status)
-
+    _register_docs_subcommands(sub)
     return parser
 
 
@@ -897,3 +897,196 @@ def main(argv: list[str] | None = None) -> int:
     except StoreUnavailable as exc:
         print(f"engramory: store unavailable (retryable): {exc}", file=sys.stderr)
         return 3
+
+
+def _register_docs_subcommands(sub: Any) -> None:
+    p_docs = sub.add_parser("docs", help="AI-first documentation, runbook & drift tools")
+    docs_sub = p_docs.add_subparsers(dest="docs_command", required=True)
+
+    p_lint = docs_sub.add_parser(
+        "lint", help="validate frontmatter, executable code blocks & prose"
+    )
+    p_lint.add_argument("path", nargs="?", default=".", help="file or directory to lint")
+    p_lint.add_argument("--strict", action="store_true", help="treat warnings as errors")
+    p_lint.set_defaults(func=_cmd_docs_lint)
+
+    p_drift = docs_sub.add_parser(
+        "check-drift", help="detect watched_paths git drift & TTL staleness"
+    )
+    p_drift.add_argument("--repo-path", default=".", help="repository path (default: .)")
+    p_drift.add_argument("--base-ref", default="HEAD~1", help="git base ref (default: HEAD~1)")
+    p_drift.add_argument("--head-ref", default="HEAD", help="git head ref (default: HEAD)")
+    p_drift.set_defaults(func=_cmd_docs_check_drift)
+
+    p_llms = docs_sub.add_parser(
+        "export-llms", help="generate deterministic /llms.txt and /llms-full.txt"
+    )
+    p_llms.add_argument("--repo-path", default=".", help="repository path (default: .)")
+    p_llms.add_argument(
+        "--write", action="store_true", help="write llms.txt (and llms-full.txt) to disk"
+    )
+    p_llms.add_argument(
+        "--full", action="store_true", help="include full markdown corpus in output"
+    )
+    p_llms.set_defaults(func=_cmd_docs_export_llms)
+
+    p_slice = docs_sub.add_parser(
+        "slice-runbook", help="slice executable runbook steps by doc_id or alert_id"
+    )
+    p_slice.add_argument(
+        "--repo-path", default=None, help="optional local repository path for offline slicing"
+    )
+    p_slice.add_argument("--doc-id", default=None, help="filter by runbook document id")
+    p_slice.add_argument(
+        "--alert-id", default=None, help="filter by trigger alert id (e.g. ALT-DOC-004)"
+    )
+    p_slice.add_argument("--max-tier", choices=["green", "yellow", "red"], default=None)
+    p_slice.add_argument(
+        "--token-budget", type=int, default=2000, help="token budget (default: 2000)"
+    )
+    p_slice.add_argument("--format", choices=["json", "markdown"], default="json")
+    p_slice.set_defaults(func=_cmd_docs_slice_runbook)
+
+    p_smoke = docs_sub.add_parser(
+        "smoke-run", help="verify and run tier='green' read-only runbook probes"
+    )
+    p_smoke.add_argument("--repo-path", default=".", help="repository or file path (default: .)")
+    p_smoke.add_argument("--doc-id", default=None, help="optional document id filter")
+    p_smoke.add_argument(
+        "--dry-run", action="store_true", help="run bash -n syntax check without executing"
+    )
+    p_smoke.set_defaults(func=_cmd_docs_smoke_run)
+
+    p_ingest = docs_sub.add_parser(
+        "ingest", help="ingest governed docs and runbook steps into Postgres"
+    )
+    p_ingest.add_argument("--repo-path", default=".", help="repository or file path (default: .)")
+    p_ingest.add_argument("--project-id", default=None, help="override project id")
+    p_ingest.set_defaults(func=_cmd_docs_ingest)
+
+
+def _cmd_docs_lint(args: argparse.Namespace) -> int:
+    from engramory.core.docs_tools import lint_repo, resolve_confined_repo_path
+
+    target = resolve_confined_repo_path(args.path)
+    report = lint_repo(target, strict=bool(args.strict))
+    summary = (
+        f"status={report['status']} files={report['files_checked']} errors={report['error_count']}"
+    )
+    _emit(args.json, report, summary)
+    return 0 if report["status"] == "ok" else 1
+
+
+def _cmd_docs_check_drift(args: argparse.Namespace) -> int:
+    from engramory.core.docs_tools import check_repo_drift, resolve_confined_repo_path
+
+    target = resolve_confined_repo_path(args.repo_path)
+    report = check_repo_drift(target, base_ref=args.base_ref, head_ref=args.head_ref)
+    _emit(args.json, report, f"status={report['status']} findings={report['finding_count']}")
+    return 0 if report["status"] == "ok" else 1
+
+
+def _cmd_docs_export_llms(args: argparse.Namespace) -> int:
+    from engramory.core.docs_tools import export_repo_llms, resolve_confined_repo_path
+
+    target = resolve_confined_repo_path(args.repo_path)
+    report = export_repo_llms(target, write_files=bool(args.write), include_full=bool(args.full))
+    _emit(args.json, report, str(report["llms_txt"]).rstrip())
+    return 0
+
+
+def _cmd_docs_slice_runbook(args: argparse.Namespace) -> int:
+    from engramory.core.docs_tools import resolve_confined_repo_path, slice_local_runbooks
+
+    def _fmt_human(p: dict[str, Any]) -> str:
+        return str(p.get("markdown")) if args.format == "markdown" else f"steps={p['step_count']}"
+
+    if args.repo_path is not None:
+        target = resolve_confined_repo_path(args.repo_path)
+        res = slice_local_runbooks(
+            target,
+            doc_id=args.doc_id,
+            alert_id=args.alert_id,
+            max_tier=args.max_tier,
+            token_budget=int(args.token_budget),
+            output_format=args.format,
+        )
+        _emit(args.json, res, _fmt_human(res))
+        return 0
+
+    try:
+
+        async def _op(surface: AccessSurface, actor: ActorContext) -> dict[str, Any]:
+            return await surface.docs_slice_runbook(
+                actor,
+                doc_id=args.doc_id,
+                alert_id=args.alert_id,
+                max_tier=args.max_tier,
+                token_budget=int(args.token_budget),
+                format=args.format,
+            )
+
+        return _run_with_surface(args, _op, _fmt_human)
+    except (ConfigError, StoreUnavailable):
+        target = resolve_confined_repo_path(".")
+        res = slice_local_runbooks(
+            target,
+            doc_id=args.doc_id,
+            alert_id=args.alert_id,
+            max_tier=args.max_tier,
+            token_budget=int(args.token_budget),
+            output_format=args.format,
+        )
+        _emit(args.json, res, _fmt_human(res))
+        return 0
+
+
+def _cmd_docs_smoke_run(args: argparse.Namespace) -> int:
+    from engramory.core.docs_tools import resolve_confined_repo_path, smoke_run_green_steps
+
+    target = resolve_confined_repo_path(args.repo_path)
+    report = smoke_run_green_steps(target, doc_id=args.doc_id, dry_run=bool(args.dry_run))
+    summary = f"status={report['status']} passed={report['passed']} failed={report['failed']}"
+    _emit(args.json, report, summary)
+    return 0 if report["status"] == "ok" else 1
+
+
+def _cmd_docs_ingest(args: argparse.Namespace) -> int:
+    from engramory.core.docs_tools import parse_markdown_document, resolve_confined_repo_path
+
+    target = resolve_confined_repo_path(args.repo_path)
+    md_files = (
+        [target]
+        if target.is_file()
+        else sorted((target / "docs").rglob("*.md"))
+        if (target / "docs").is_dir()
+        else sorted(target.glob("*.md"))
+    )
+
+    async def _op(surface: AccessSurface, actor: ActorContext) -> dict[str, Any]:
+        docs_ingested = 0
+        steps_ingested = 0
+        for f in md_files:
+            parsed = parse_markdown_document(
+                f,
+                repo_root=target if target.is_dir() else target.parent,
+                tenant_id=actor.tenant_id,
+                project_id=args.project_id or actor.project_id,
+            )
+            if not parsed.has_frontmatter or parsed.kb_document is None:
+                continue
+            r = await surface.docs_ingest_runbook(
+                actor,
+                doc=parsed.kb_document,
+                steps=parsed.steps,
+                evidence_ref=parsed.kb_document.git_commit_sha or "local-head",
+            )
+            docs_ingested += 1
+            steps_ingested += int(r.get("step_count", 0))
+        return {"status": "ok", "docs_ingested": docs_ingested, "steps_ingested": steps_ingested}
+
+    return _run_with_surface(
+        args,
+        _op,
+        lambda p: f"docs_ingested={p['docs_ingested']} steps_ingested={p['steps_ingested']}",
+    )

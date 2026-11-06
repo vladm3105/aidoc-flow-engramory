@@ -98,14 +98,25 @@ class Neo4jGraphAdapter:
             if label != "Entity":
                 label_str += f":`{label}`"
 
+        project_id = clean_props.get("project_id")
         query = f"""
         MERGE (n:Entity {{uid: $uid}})
-        SET n.id = $id, n.tenant_id = $tenant_id, n{label_str}, n += $props
+        ON CREATE SET n.id = $id, n.tenant_id = $tenant_id, n{label_str}, n += $props
+        ON MATCH SET n{label_str}, n += CASE
+            WHEN n.project_id IS NULL OR n.project_id = $project_id THEN $props
+            ELSE {{}}
+        END
         """
         async with self._driver.session() as session:
             await session.run(
                 query,
-                {"uid": node_uid, "id": id, "tenant_id": tenant_id, "props": clean_props},
+                {
+                    "uid": node_uid,
+                    "id": id,
+                    "tenant_id": tenant_id,
+                    "project_id": project_id,
+                    "props": clean_props,
+                },
             )
 
     async def upsert_edge(
@@ -151,6 +162,7 @@ class Neo4jGraphAdapter:
         rel: str | None = None,
         depth: int = 1,
         tenant_id: str = "default",
+        project_id: str | None = None,
     ) -> Sequence[Mapping[str, Any]]:
         """Return nodes reachable from `id` within `depth` hops (bounded traversal)."""
         safe_depth = max(1, min(depth, 5))
@@ -161,18 +173,43 @@ class Neo4jGraphAdapter:
             rel_pattern = f"*1..{safe_depth}"
 
         node_uid = f"{tenant_id}:{id}"
+        prefixed_id = (
+            f"{project_id}:{id}" if project_id and not id.startswith(f"{project_id}:") else id
+        )
+        prefixed_uid = f"{tenant_id}:{prefixed_id}"
         query = f"""
         MATCH (n:Entity)
         WHERE (
             n.uid = $uid
-            OR (n.id = $id AND ($tenant_id = 'default' OR n.tenant_id = $tenant_id))
+            OR n.uid = $prefixed_uid
+            OR (
+                (n.id = $id OR n.id = $prefixed_id)
+                AND ($tenant_id = 'default' OR n.tenant_id = $tenant_id)
+            )
         )
         MATCH (n)-[{rel_pattern}]-(m:Entity)
         WHERE (m.tenant_id = n.tenant_id) AND m <> n
+          AND (
+              $project_id IS NULL
+              OR (
+                  (n.project_id IS NULL OR n.project_id = $project_id)
+                  AND (m.project_id IS NULL OR m.project_id = $project_id)
+              )
+          )
         RETURN DISTINCT m.id AS id, labels(m) AS labels, properties(m) AS properties
         """
         async with self._driver.session() as session:
-            result = await session.run(query, {"uid": node_uid, "id": id, "tenant_id": tenant_id})
+            result = await session.run(
+                query,
+                {
+                    "uid": node_uid,
+                    "prefixed_uid": prefixed_uid,
+                    "id": id,
+                    "prefixed_id": prefixed_id,
+                    "tenant_id": tenant_id,
+                    "project_id": project_id,
+                },
+            )
             records = await result.data()
             return [
                 {
@@ -190,6 +227,7 @@ class Neo4jGraphAdapter:
         rel: str | None = None,
         depth: int = 6,
         tenant_id: str = "default",
+        project_id: str | None = None,
     ) -> Sequence[Mapping[str, Any]]:
         """Return upstream ancestor nodes reachable from `id` (directed out-edges)."""
         safe_depth = max(1, min(depth, 10))
@@ -200,18 +238,43 @@ class Neo4jGraphAdapter:
             rel_pattern = f"*1..{safe_depth}"
 
         src_uid = f"{tenant_id}:{id}"
+        prefixed_id = (
+            f"{project_id}:{id}" if project_id and not id.startswith(f"{project_id}:") else id
+        )
+        prefixed_uid = f"{tenant_id}:{prefixed_id}"
         query = f"""
         MATCH (n:Entity)
         WHERE (
             n.uid = $uid
-            OR (n.id = $id AND ($tenant_id = 'default' OR n.tenant_id = $tenant_id))
+            OR n.uid = $prefixed_uid
+            OR (
+                (n.id = $id OR n.id = $prefixed_id)
+                AND ($tenant_id = 'default' OR n.tenant_id = $tenant_id)
+            )
         )
         MATCH (n)-[{rel_pattern}]->(m:Entity)
         WHERE (m.tenant_id = n.tenant_id) AND m <> n
+          AND (
+              $project_id IS NULL
+              OR (
+                  (n.project_id IS NULL OR n.project_id = $project_id)
+                  AND (m.project_id IS NULL OR m.project_id = $project_id)
+              )
+          )
         RETURN DISTINCT m.id AS id, labels(m) AS labels, properties(m) AS properties
         """
         async with self._driver.session() as session:
-            result = await session.run(query, {"uid": src_uid, "id": id, "tenant_id": tenant_id})
+            result = await session.run(
+                query,
+                {
+                    "uid": src_uid,
+                    "prefixed_uid": prefixed_uid,
+                    "id": id,
+                    "prefixed_id": prefixed_id,
+                    "tenant_id": tenant_id,
+                    "project_id": project_id,
+                },
+            )
             records = await result.data()
             return [
                 {
@@ -229,6 +292,7 @@ class Neo4jGraphAdapter:
         rel: str | None = None,
         depth: int = 6,
         tenant_id: str = "default",
+        project_id: str | None = None,
     ) -> Sequence[Mapping[str, Any]]:
         """Return downstream descendant nodes reachable from `id` (directed in-edges)."""
         safe_depth = max(1, min(depth, 10))
@@ -239,18 +303,43 @@ class Neo4jGraphAdapter:
             rel_pattern = f"*1..{safe_depth}"
 
         dst_uid = f"{tenant_id}:{id}"
+        prefixed_id = (
+            f"{project_id}:{id}" if project_id and not id.startswith(f"{project_id}:") else id
+        )
+        prefixed_uid = f"{tenant_id}:{prefixed_id}"
         query = f"""
         MATCH (n:Entity)
         WHERE (
             n.uid = $uid
-            OR (n.id = $id AND ($tenant_id = 'default' OR n.tenant_id = $tenant_id))
+            OR n.uid = $prefixed_uid
+            OR (
+                (n.id = $id OR n.id = $prefixed_id)
+                AND ($tenant_id = 'default' OR n.tenant_id = $tenant_id)
+            )
         )
         MATCH (m:Entity)-[{rel_pattern}]->(n)
         WHERE (m.tenant_id = n.tenant_id) AND m <> n
+          AND (
+              $project_id IS NULL
+              OR (
+                  (n.project_id IS NULL OR n.project_id = $project_id)
+                  AND (m.project_id IS NULL OR m.project_id = $project_id)
+              )
+          )
         RETURN DISTINCT m.id AS id, labels(m) AS labels, properties(m) AS properties
         """
         async with self._driver.session() as session:
-            result = await session.run(query, {"uid": dst_uid, "id": id, "tenant_id": tenant_id})
+            result = await session.run(
+                query,
+                {
+                    "uid": dst_uid,
+                    "prefixed_uid": prefixed_uid,
+                    "id": id,
+                    "prefixed_id": prefixed_id,
+                    "tenant_id": tenant_id,
+                    "project_id": project_id,
+                },
+            )
             records = await result.data()
             return [
                 {
