@@ -316,6 +316,7 @@ def _cmd_knowledge_ingest(args: argparse.Namespace) -> int:
             project_id=config.ctx.project_id,
             scope=getattr(args, "scope", "project"),
             evidence_ref=getattr(args, "evidence_ref", None),
+            repo_root=target_path if target_path.is_dir() else None,
         )
         total_sections = sum(len(ids) for ids in results.values())
         return {
@@ -1052,41 +1053,89 @@ def _cmd_docs_smoke_run(args: argparse.Namespace) -> int:
 
 
 def _cmd_docs_ingest(args: argparse.Namespace) -> int:
-    from engramory.core.docs_tools import parse_markdown_document, resolve_confined_repo_path
+    import dataclasses
+
+    from engramory.core.chunking import chunk_markdown
+    from engramory.core.docs_tools import (
+        _is_within_root,
+        parse_markdown_document,
+        resolve_confined_repo_path,
+    )
+    from engramory.core.models import KBSection
 
     target = resolve_confined_repo_path(args.repo_path)
-    md_files = (
+    bound_root = target if target.is_dir() else target.parent
+    raw_files = (
         [target]
         if target.is_file()
         else sorted((target / "docs").rglob("*.md"))
         if (target / "docs").is_dir()
         else sorted(target.glob("*.md"))
     )
+    md_files = [f for f in raw_files if _is_within_root(f, bound_root)]
 
     async def _op(surface: AccessSurface, actor: ActorContext) -> dict[str, Any]:
+        eff_actor = (
+            dataclasses.replace(actor, project_id=args.project_id) if args.project_id else actor
+        )
         docs_ingested = 0
         steps_ingested = 0
+        sections_ingested = 0
         for f in md_files:
             parsed = parse_markdown_document(
                 f,
-                repo_root=target if target.is_dir() else target.parent,
-                tenant_id=actor.tenant_id,
-                project_id=args.project_id or actor.project_id,
+                repo_root=bound_root,
+                tenant_id=eff_actor.tenant_id,
+                project_id=eff_actor.project_id,
             )
             if not parsed.has_frontmatter or parsed.kb_document is None:
                 continue
+            doc = parsed.kb_document
+            ev_ref = doc.git_commit_sha or "local-head"
+            raw_text = f.read_text(encoding="utf-8", errors="replace")
+            chunks = chunk_markdown(raw_text, doc.doc_id)
+            if chunks:
+                kb_secs = [
+                    KBSection(
+                        doc_id=doc.doc_id,
+                        citation=cit,
+                        text=txt,
+                        tenant_id=eff_actor.tenant_id,
+                        project_id=eff_actor.project_id,
+                        domain_id=doc.domain_id,
+                        scope=doc.scope,
+                        version=1,
+                    )
+                    for cit, txt in chunks
+                ]
+                await surface.knowledge_ingest_batch(
+                    eff_actor,
+                    sections=kb_secs,
+                    evidence_ref=ev_ref,
+                    scope=doc.scope,
+                )
+                sections_ingested += len(kb_secs)
             r = await surface.docs_ingest_runbook(
-                actor,
-                doc=parsed.kb_document,
+                eff_actor,
+                doc=doc,
                 steps=parsed.steps,
-                evidence_ref=parsed.kb_document.git_commit_sha or "local-head",
+                evidence_ref=ev_ref,
             )
             docs_ingested += 1
             steps_ingested += int(r.get("step_count", 0))
-        return {"status": "ok", "docs_ingested": docs_ingested, "steps_ingested": steps_ingested}
+        return {
+            "status": "ok",
+            "docs_ingested": docs_ingested,
+            "steps_ingested": steps_ingested,
+            "sections_ingested": sections_ingested,
+        }
 
     return _run_with_surface(
         args,
         _op,
-        lambda p: f"docs_ingested={p['docs_ingested']} steps_ingested={p['steps_ingested']}",
+        lambda p: (
+            f"docs_ingested={p['docs_ingested']} "
+            f"steps_ingested={p['steps_ingested']} "
+            f"sections_ingested={p['sections_ingested']}"
+        ),
     )

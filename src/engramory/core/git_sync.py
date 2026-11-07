@@ -220,7 +220,7 @@ class GitSyncEngine:
     ) -> list[KBSection]:
         """Extract sections from an added or modified file and construct KBSection records."""
         full_path = repo_path / changed_file.rel_path
-        if not full_path.exists():
+        if not full_path.exists() or not full_path.resolve().is_relative_to(repo_path.resolve()):
             return []
 
         doc_id = build_doc_id(project_id, changed_file.rel_path)
@@ -251,11 +251,17 @@ class GitSyncEngine:
 
             # Combine citation URL and section slug
             full_citation = f"{cit_url}{sec.citation or ''}"
+            sec_domain = (
+                str(sec.metadata["domain"]).strip()
+                if sec.metadata and sec.metadata.get("domain")
+                else None
+            )
 
             sections.append(
                 KBSection(
                     tenant_id=tenant_id,
                     project_id=project_id,
+                    domain_id=sec_domain,
                     doc_id=doc_id,
                     citation=full_citation,
                     text=sec.content,
@@ -276,8 +282,11 @@ class GitSyncEngine:
         project_id: str | None = None,
         scope: str = "project",
         llm: LLMPort | None = None,
+        expected_embedding_dims: int = 1536,
     ) -> SyncResult:
         """Perform commit-differential sync and batch persist changes to Repository."""
+        from engramory.access.poisoning_guard import inspect_memory_write
+
         start_t = time.perf_counter()
         target_head = head_sha or self.get_git_head_sha(repo_path)
         changed_files = self.get_changed_files(repo_path, base_sha, target_head)
@@ -287,10 +296,12 @@ class GitSyncEngine:
         files_deleted: list[str] = []
         files_skipped: list[str] = []
         all_sections: list[KBSection] = []
+        doc_ids_to_delete: list[str] = []
 
         for cf in changed_files:
             if cf.status == FileChangeStatus.ADDED:
                 files_added.append(cf.rel_path)
+                doc_ids_to_delete.append(build_doc_id(project_id, cf.rel_path))
                 secs = self.extract_sync_sections(
                     repo_path,
                     cf,
@@ -304,8 +315,8 @@ class GitSyncEngine:
             elif cf.status in (FileChangeStatus.MODIFIED, FileChangeStatus.RENAMED):
                 files_modified.append(cf.rel_path)
                 if cf.status == FileChangeStatus.RENAMED and cf.old_path:
-                    old_doc_id = build_doc_id(project_id, cf.old_path)
-                    await repo.delete_kb_sections_for_doc(tenant_id, old_doc_id)
+                    doc_ids_to_delete.append(build_doc_id(project_id, cf.old_path))
+                doc_ids_to_delete.append(build_doc_id(project_id, cf.rel_path))
                 secs = self.extract_sync_sections(
                     repo_path,
                     cf,
@@ -318,21 +329,36 @@ class GitSyncEngine:
                 all_sections.extend(secs)
             elif cf.status == FileChangeStatus.DELETED:
                 files_deleted.append(cf.rel_path)
-                doc_id = build_doc_id(project_id, cf.rel_path)
-                await repo.delete_kb_sections_for_doc(tenant_id, doc_id)
+                doc_ids_to_delete.append(build_doc_id(project_id, cf.rel_path))
             else:
                 files_skipped.append(cf.rel_path)
 
-        await self._sync_changed_doc_metadata(
-            repo, repo_path, changed_files, tenant_id, project_id, scope
-        )
-
+        unique_sections: list[KBSection] = []
         if all_sections:
             deduped: dict[tuple[str, str, str, int], KBSection] = {}
             for s in all_sections:
                 deduped[(s.tenant_id, s.doc_id, s.citation, s.version)] = s
             unique_sections = list(deduped.values())
+            for s in unique_sections:
+                inspect_memory_write(
+                    s.text,
+                    tenant_id=tenant_id,
+                    writer_agent_id=f"git_sync:{project_id or 'default'}",
+                    target=s.doc_id,
+                )
 
+        await self._sync_changed_doc_metadata(
+            repo, repo_path, changed_files, tenant_id, project_id, scope
+        )
+
+        if hasattr(repo, "delete_kb_sections_for_doc"):
+            seen_del: set[str] = set()
+            for del_doc_id in doc_ids_to_delete:
+                if del_doc_id not in seen_del:
+                    seen_del.add(del_doc_id)
+                    await repo.delete_kb_sections_for_doc(tenant_id, del_doc_id)
+
+        if unique_sections:
             section_map = await repo.upsert_kb_sections_batch(unique_sections)
             if llm is not None:
                 try:
@@ -342,10 +368,14 @@ class GitSyncEngine:
                     for sec, vec in zip(unique_sections, embeddings, strict=False):
                         key = (sec.tenant_id, sec.doc_id, sec.citation, sec.version)
                         s_id = section_map.get(key)
-                        if s_id and len(vec) == 1536:
+                        if s_id and len(vec) == expected_embedding_dims:
                             valid_updates.append((s_id, vec))
                     if valid_updates:
-                        await repo.set_kb_sections_embedding_batch(valid_updates)
+                        embed_model = getattr(llm, "_embed_model", "text-embedding-3-small")
+                        await repo.set_kb_sections_embedding_batch(
+                            valid_updates,
+                            embedding_model=embed_model,
+                        )
                 except Exception as e:
                     logger.warning("Failed to embed sections during git sync: %s", e)
 
@@ -374,8 +404,12 @@ class GitSyncEngine:
         """Sync kb_documents and kb_runbook_steps for changed .md files."""
         import inspect
 
-        from engramory.access.poisoning_guard import inspect_memory_write
+        from engramory.access.poisoning_guard import MemoryPoisoningError, inspect_memory_write
         from engramory.core.docs_tools import parse_markdown_document
+        from engramory.core.models import ValidationError
+
+        pending_deletes: list[tuple[str, str]] = []
+        pending_upserts: list[tuple[Any, Any]] = []
 
         for cf in changed_files:
             if (
@@ -384,18 +418,10 @@ class GitSyncEngine:
                 and hasattr(repo, "delete_kb_document")
             ):
                 old_doc_id = build_doc_id(project_id, cf.old_path)
-                maybe_coro = repo.delete_kb_document(
-                    tenant_id, old_doc_id, repo_path=cf.old_path, project_id=project_id
-                )
-                if inspect.isawaitable(maybe_coro):
-                    await maybe_coro
+                pending_deletes.append((old_doc_id, cf.old_path))
             elif cf.status == FileChangeStatus.DELETED and hasattr(repo, "delete_kb_document"):
                 doc_id = build_doc_id(project_id, cf.rel_path)
-                maybe_coro = repo.delete_kb_document(
-                    tenant_id, doc_id, repo_path=cf.rel_path, project_id=project_id
-                )
-                if inspect.isawaitable(maybe_coro):
-                    await maybe_coro
+                pending_deletes.append((doc_id, cf.rel_path))
 
             if (
                 cf.status
@@ -444,22 +470,28 @@ class GitSyncEngine:
                                     writer_agent_id="git-sync",
                                     target=parsed.kb_document.doc_id,
                                 )
-                            c1 = repo.upsert_kb_document(parsed.kb_document)
-                            if inspect.isawaitable(c1):
-                                await c1
-                            c2 = repo.upsert_kb_runbook_steps(
-                                tenant_id, parsed.kb_document.doc_id, parsed.steps
-                            )
-                            if inspect.isawaitable(c2):
-                                await c2
+                            pending_upserts.append((parsed.kb_document, parsed.steps))
                         elif cf.status == FileChangeStatus.MODIFIED and hasattr(
                             repo, "delete_kb_document"
                         ):
                             stale_id = build_doc_id(project_id, cf.rel_path)
-                            c_del = repo.delete_kb_document(
-                                tenant_id, stale_id, repo_path=cf.rel_path, project_id=project_id
-                            )
-                            if inspect.isawaitable(c_del):
-                                await c_del
+                            pending_deletes.append((stale_id, cf.rel_path))
+                    except (MemoryPoisoningError, ValidationError):
+                        raise
                     except Exception as exc:
                         logger.debug("Skipping kb_documents sync for %s: %s", cf.rel_path, exc)
+
+        for del_id, del_rel in pending_deletes:
+            maybe_coro = repo.delete_kb_document(
+                tenant_id, del_id, repo_path=del_rel, project_id=project_id
+            )
+            if inspect.isawaitable(maybe_coro):
+                await maybe_coro
+
+        for kb_doc, kb_steps in pending_upserts:
+            c1 = repo.upsert_kb_document(kb_doc)
+            if inspect.isawaitable(c1):
+                await c1
+            c2 = repo.upsert_kb_runbook_steps(tenant_id, kb_doc.doc_id, kb_steps)
+            if inspect.isawaitable(c2):
+                await c2

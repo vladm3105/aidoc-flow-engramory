@@ -454,7 +454,7 @@ class Repository:
         section_id: str,
         *,
         embedding: Sequence[float],
-        embedding_model: str = "bge-small-en-v1.5",
+        embedding_model: str = "text-embedding-3-small",
     ) -> None:
         """Store vector projection for a kb_section (rebuildable projection per ADR-05)."""
         async with self._conn() as conn:
@@ -560,7 +560,7 @@ class Repository:
         self,
         updates: Sequence[tuple[str, Sequence[float]]],
         *,
-        embedding_model: str = "bge-small-en-v1.5",
+        embedding_model: str = "text-embedding-3-small",
     ) -> None:
         """Store vector projections for multiple kb_sections."""
         if not updates:
