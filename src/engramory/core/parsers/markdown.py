@@ -25,6 +25,8 @@ class MarkdownParser(BaseParser):
 
     # ATX headers (# Header)
     HEADER_PATTERN = re.compile(r"^(#{1,6})\s+(.+?)(?:\s+#*)?$", re.MULTILINE)
+    # Fenced code block opener (excludes backticks/tildes in info string)
+    _FENCE_OPEN_RE = re.compile(r"^(`{3,}|~{3,})([^\n`~]*)$")
     # Frontmatter block
     FRONTMATTER_PATTERN = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n", re.DOTALL)
 
@@ -74,9 +76,10 @@ class MarkdownParser(BaseParser):
                 source_tag="none",
                 metadata=dict(doc_metadata),
             )
+            chunks = self._subchunk_section(sec, start_order=1) if body.strip() else [sec]
             title = doc_metadata.get("title") or filename
             return ParseResult(
-                sections=[sec],
+                sections=chunks,
                 doc_type=self.doc_type,
                 title=title,
                 metadata=doc_metadata,
@@ -112,19 +115,41 @@ class MarkdownParser(BaseParser):
 
     def _find_headers(self, body: str, base_offset: int) -> list[dict[str, Any]]:
         headers: list[dict[str, Any]] = []
-        for match in self.HEADER_PATTERN.finditer(body):
-            hashes = match.group(1)
-            level = len(hashes)
-            name = match.group(2).strip()
-            headers.append(
-                {
-                    "level": level,
-                    "name": name,
-                    "start": base_offset + match.start(),
-                    "end": base_offset + match.end(),
-                    "source_tag": hashes,
-                }
-            )
+        in_fence = False
+        fence_marker = ""
+        cur_offset = 0
+
+        for line in body.splitlines(keepends=True):
+            line_no_nl = line.rstrip("\r\n")
+            stripped = line_no_nl.strip()
+            if not in_fence:
+                m_fence = self._FENCE_OPEN_RE.match(stripped)
+                if m_fence:
+                    in_fence = True
+                    fence_marker = m_fence.group(1)
+                    cur_offset += len(line)
+                    continue
+                match = self.HEADER_PATTERN.match(line_no_nl)
+                if match:
+                    hashes = match.group(1)
+                    level = len(hashes)
+                    name = match.group(2).strip()
+                    headers.append(
+                        {
+                            "level": level,
+                            "name": name,
+                            "start": base_offset + cur_offset,
+                            "end": base_offset + cur_offset + len(line_no_nl),
+                            "source_tag": hashes,
+                        }
+                    )
+            else:
+                if stripped.startswith(fence_marker) and stripped == fence_marker[0] * len(
+                    stripped
+                ):
+                    in_fence = False
+                    fence_marker = ""
+            cur_offset += len(line)
         return headers
 
     def _build_sections(
@@ -181,19 +206,42 @@ class MarkdownParser(BaseParser):
 
     def _subchunk_section(self, section: Section, start_order: int) -> list[Section]:
         """Split section if word count exceeds max_words_per_chunk."""
+        ctx_header = ""
+        meta = section.metadata or {}
+        if meta.get("id"):
+            doc_id = str(meta.get("id")).strip()
+            title = str(meta.get("title") or doc_id).strip()
+            kind = str(meta.get("kind") or "doc").strip()
+            domain = str(meta.get("domain") or "general").strip()
+            tier = str(meta.get("tier") or meta.get("autonomy_tier") or "2").strip()
+            ctx_header = (
+                f"[Doc: {doc_id} | Title: {title} | Kind: {kind} "
+                f"| Domain: {domain} | Tier: {tier} | Section: {section.name}]\n"
+            )
+
+        header_words = len(ctx_header.split()) if ctx_header else 0
+        eff_max = max(1, self.max_words_per_chunk - header_words)
+
         words = section.content.split()
-        if len(words) <= self.max_words_per_chunk:
+        if len(words) <= eff_max:
             section.order = start_order
+            if ctx_header and not section.content.startswith("[Doc: "):
+                section.content = f"{ctx_header}{section.content}"
             return [section]
 
         sub_chunks: list[Section] = []
         base_citation = section.citation or "§section"
         cur_order = start_order
 
-        for i in range(0, len(words), self.max_words_per_chunk):
-            part_idx = (i // self.max_words_per_chunk) + 1
-            chunk_words = words[i : i + self.max_words_per_chunk]
-            chunk_content = " ".join(chunk_words)
+        for i in range(0, len(words), eff_max):
+            part_idx = (i // eff_max) + 1
+            chunk_words = words[i : i + eff_max]
+            chunk_body = " ".join(chunk_words)
+            chunk_content = (
+                f"{ctx_header}{chunk_body}"
+                if ctx_header and not chunk_body.startswith("[Doc: ")
+                else chunk_body
+            )
 
             sub_citation = f"{base_citation}-p{part_idx}" if part_idx > 1 else base_citation
             sub_chunks.append(

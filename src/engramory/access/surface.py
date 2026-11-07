@@ -525,6 +525,7 @@ class AccessSurface:
                     text=vetted_text,
                     project_id=ctx.project_id,
                     tenant_id=ctx.tenant_id,
+                    domain_id=s.domain_id,
                     scope=target_scope,
                     version=s.version,
                 )

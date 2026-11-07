@@ -53,6 +53,7 @@ class KnowledgeCore:
         evidence_ref: str | None = None,
         version: int = 1,
         embed: bool = True,
+        repo_root: Path | None = None,
     ) -> list[str]:
         """Ingest a single document into kb_sections."""
         p = Path(path)
@@ -67,6 +68,7 @@ class KnowledgeCore:
             evidence_ref=evidence_ref,
             version=version,
             embed=embed,
+            repo_root=repo_root,
         )
         return batch_result.get(str(p), [])
 
@@ -80,10 +82,18 @@ class KnowledgeCore:
         evidence_ref: str | None = None,
         version: int = 1,
         embed: bool = True,
+        repo_root: Path | None = None,
     ) -> dict[str, list[str]]:
         """Ingest multiple documents into kb_sections with batch upsert and batch embedding."""
+        from typing import Any
+
+        from engramory.access.poisoning_guard import MemoryPoisoningError, inspect_memory_write
+        from engramory.core.models import ValidationError
+
         all_sections: list[KBSection] = []
         path_to_sections: dict[str, list[KBSection]] = {}
+        pending_doc_upserts: list[tuple[Any, Sequence[Any]]] = []
+        resolved_root = repo_root.resolve() if repo_root is not None else None
 
         for p_raw in paths:
             p = Path(p_raw)
@@ -91,12 +101,21 @@ class KnowledgeCore:
                 logger.warning("Skipping non-existent file in batch: %s", p)
                 continue
 
+            p_res = p.resolve()
+            if resolved_root is not None:
+                if not p_res.is_relative_to(resolved_root):
+                    logger.warning("Skipping file outside repo_root (%s): %s", resolved_root, p)
+                    continue
+                rel_key = p_res.relative_to(resolved_root).as_posix()
+            else:
+                rel_key = p.name
+
             try:
                 full_text = p.read_text(encoding="utf-8")
             except UnicodeDecodeError:
                 full_text = ""
 
-            doc_id = build_doc_id(project_id, p.name)
+            doc_id = build_doc_id(project_id, rel_key)
             extract_res = self.router.extract_document(p)
             extracted_sections = extract_res.sections
 
@@ -107,15 +126,27 @@ class KnowledgeCore:
             for sec in extracted_sections:
                 l_start, l_end = calculate_line_numbers(full_text, sec.char_start, sec.char_end)
                 cit = format_local_citation(str(p), l_start, l_end, sec.citation or sec.section_id)
+                sec_domain = (
+                    str(sec.metadata["domain"]).strip()
+                    if sec.metadata and sec.metadata.get("domain")
+                    else None
+                )
 
                 kb_sec = KBSection(
                     tenant_id=tenant_id,
                     project_id=project_id,
+                    domain_id=sec_domain,
                     scope=scope,
                     doc_id=doc_id,
                     citation=cit,
                     text=sec.content,
                     version=version,
+                )
+                inspect_memory_write(
+                    kb_sec.text,
+                    tenant_id=tenant_id,
+                    writer_agent_id="knowledge-core",
+                    target=kb_sec.doc_id,
                 )
                 file_secs.append(kb_sec)
                 all_sections.append(kb_sec)
@@ -123,14 +154,16 @@ class KnowledgeCore:
             path_to_sections[str(p)] = file_secs
             if p.suffix.lower() == ".md" and hasattr(self.repo, "upsert_kb_document"):
                 try:
-                    from engramory.access.poisoning_guard import inspect_memory_write
                     from engramory.core.docs_tools import parse_markdown_document
 
-                    inferred_root = p.resolve().parent
-                    for anc in [inferred_root, *inferred_root.parents]:
-                        if (anc / ".git").exists() or (anc / "pyproject.toml").exists():
-                            inferred_root = anc
-                            break
+                    if resolved_root is not None:
+                        inferred_root = resolved_root
+                    else:
+                        inferred_root = p_res.parent
+                        for anc in [inferred_root, *inferred_root.parents]:
+                            if (anc / ".git").exists() or (anc / "pyproject.toml").exists():
+                                inferred_root = anc
+                                break
 
                     parsed = parse_markdown_document(
                         p,
@@ -166,12 +199,15 @@ class KnowledgeCore:
                                 writer_agent_id="knowledge-core",
                                 target=parsed.kb_document.doc_id,
                             )
-                        await self.repo.upsert_kb_document(parsed.kb_document)
-                        await self.repo.upsert_kb_runbook_steps(
-                            tenant_id, parsed.kb_document.doc_id, parsed.steps
-                        )
+                        pending_doc_upserts.append((parsed.kb_document, parsed.steps))
+                except (MemoryPoisoningError, ValidationError):
+                    raise
                 except Exception as exc:
                     logger.debug("Skipping kb_documents extraction for %s: %s", p, exc)
+
+        for kb_doc, kb_steps in pending_doc_upserts:
+            await self.repo.upsert_kb_document(kb_doc)
+            await self.repo.upsert_kb_runbook_steps(tenant_id, kb_doc.doc_id, kb_steps)
 
         if not all_sections:
             return {}
@@ -202,7 +238,11 @@ class KnowledgeCore:
                             len(vec),
                         )
                 if valid_updates:
-                    await self.repo.set_kb_sections_embedding_batch(valid_updates)
+                    embed_model = getattr(self.llm, "_embed_model", "text-embedding-3-small")
+                    await self.repo.set_kb_sections_embedding_batch(
+                        valid_updates,
+                        embedding_model=embed_model,
+                    )
             except Exception as e:
                 logger.warning("Failed to compute embeddings for knowledge batch: %s", e)
 

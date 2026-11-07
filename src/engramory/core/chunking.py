@@ -216,9 +216,17 @@ async def ingest_file(
             try:
                 embeddings = await adapters.llm.embed(texts=[text])
                 if embeddings:
-                    await repo.set_kb_section_embedding(sec_id, embedding=embeddings[0])
-            except Exception:
-                pass
+                    embed_model = getattr(adapters.llm, "_embed_model", "text-embedding-3-small")
+                    await repo.set_kb_sections_embedding_batch(
+                        [(sec_id, embeddings[0])],
+                        embedding_model=embed_model,
+                    )
+            except Exception as exc:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "Failed to embed section %s in ingest_file: %s", sec_id, exc
+                )
         count += 1
 
     return count

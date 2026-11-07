@@ -60,6 +60,8 @@ class SemanticChunker:
             if (
                 len(words) < self.min_words
                 and merged_sections
+                and not s.content.startswith("[Doc: ")
+                and not merged_sections[-1].content.startswith("[Doc: ")
                 and (len(merged_sections[-1].content.split()) + len(words)) <= self.max_words
             ):
                 # Merge into previous section
