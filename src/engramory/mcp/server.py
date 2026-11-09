@@ -174,9 +174,20 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 },
                 "format": {
                     "type": "string",
-                    "enum": ["markdown", "json"],
+                    "enum": ["markdown", "json", "digest"],
                     "default": "json",
-                    "description": "Output format ('markdown' with file links or 'json')",
+                    "description": (
+                        "Output format ('markdown' with file links, 'digest' compacted, or 'json')"
+                    ),
+                },
+                "offline": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Force local workspace DAG traversal without querying DB/Neo4j",
+                },
+                "workspace_dir": {
+                    "type": "string",
+                    "description": "Optional confined workspace root for local/offline DAG slicing",
                 },
                 "tenant_id": {
                     "type": "string",
@@ -209,6 +220,17 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     "default": 6,
                 },
                 "scope": {"type": "string", "default": "project"},
+                "offline": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Force local workspace DAG traversal without querying DB/Neo4j",
+                },
+                "workspace_dir": {
+                    "type": "string",
+                    "description": (
+                        "Optional confined workspace root for local/offline blast radius"
+                    ),
+                },
             },
             "required": ["doc_id"],
         },
@@ -398,15 +420,78 @@ class McpServer:
                 }
 
             elif name == "sdd_context_slice":
-                ancestors = await self._surface.context_slice(
-                    call_ctx,
-                    task_id=arguments["task_id"],
-                    depth=arguments.get("depth", 6),
-                    scope=arguments.get("scope", "project"),
-                    layers=arguments.get("layers"),
-                    max_tokens=arguments.get("max_tokens", 2000),
-                )
-                fmt = arguments.get("format", "json")
+                from engramory.access.authz import TargetScope
+                from engramory.core.context_tools import slice_local_context
+                from engramory.core.docs_tools import resolve_confined_repo_path
+
+                scope = str(arguments.get("scope", "project"))
+                depth = int(arguments.get("depth", 6))
+                layers = arguments.get("layers")
+                max_tokens = int(arguments.get("max_tokens", 2000))
+                fmt = str(arguments.get("format", "json"))
+                offline = bool(arguments.get("offline", False))
+                ws_dir = arguments.get("workspace_dir")
+                enforce_project = self._auth_enabled and ("space" not in call_ctx.scopes)
+
+                if offline or fmt == "digest":
+                    await self._surface._decide(
+                        call_ctx,
+                        "context_slice",
+                        TargetScope(tenant_id=call_ctx.tenant_id, scope=scope),
+                    )
+                    confined_ws = resolve_confined_repo_path(
+                        str(ws_dir or "."),
+                        project_id=call_ctx.project_id,
+                        enforce_project_boundary=enforce_project,
+                    )
+                    local_res = slice_local_context(
+                        confined_ws,
+                        task_id=arguments["task_id"],
+                        depth=depth,
+                        layers=layers,
+                        max_tokens=max_tokens,
+                        output_format=fmt,
+                        allow_sibling_lookup=not enforce_project,
+                    )
+                    if fmt == "digest":
+                        return {"content": [{"type": "text", "text": str(local_res["digest"])}]}
+                    ancestors: Sequence[Mapping[str, Any]] = local_res["ancestors"]
+                else:
+                    try:
+                        ancestors = await self._surface.context_slice(
+                            call_ctx,
+                            task_id=arguments["task_id"],
+                            depth=depth,
+                            scope=scope,
+                            layers=layers,
+                            max_tokens=max_tokens,
+                        )
+                    except StoreUnavailable:
+                        if not ws_dir:
+                            raise
+                        await self._surface._decide(
+                            call_ctx,
+                            "context_slice",
+                            TargetScope(tenant_id=call_ctx.tenant_id, scope=scope),
+                        )
+                        ancestors = []
+                    if not ancestors and (ws_dir or not self._auth_enabled):
+                        confined_ws = resolve_confined_repo_path(
+                            str(ws_dir or "."),
+                            project_id=call_ctx.project_id,
+                            enforce_project_boundary=enforce_project,
+                        )
+                        local_res = slice_local_context(
+                            confined_ws,
+                            task_id=arguments["task_id"],
+                            depth=depth,
+                            layers=layers,
+                            max_tokens=max_tokens,
+                            output_format=fmt,
+                            allow_sibling_lookup=not enforce_project,
+                        )
+                        ancestors = local_res["ancestors"]
+
                 if fmt == "markdown":
                     md_text = format_context_slice_markdown(arguments["task_id"], ancestors)
                     return {"content": [{"type": "text", "text": md_text}]}
@@ -415,15 +500,70 @@ class McpServer:
                 }
 
             elif name == "sdd_blast_radius":
-                descendants = await self._surface.blast_radius(
-                    call_ctx,
-                    doc_id=arguments["doc_id"],
-                    depth=arguments.get("depth", 6),
-                    scope=arguments.get("scope", "project"),
-                )
+                from engramory.access.authz import TargetScope
+                from engramory.core.context_tools import local_blast_radius
+                from engramory.core.docs_tools import resolve_confined_repo_path
+
+                scope = str(arguments.get("scope", "project"))
+                depth = int(arguments.get("depth", 6))
+                offline = bool(arguments.get("offline", False))
+                ws_dir = arguments.get("workspace_dir")
+                enforce_project = self._auth_enabled and ("space" not in call_ctx.scopes)
+
+                if offline:
+                    await self._surface._decide(
+                        call_ctx,
+                        "blast_radius",
+                        TargetScope(tenant_id=call_ctx.tenant_id, scope=scope),
+                    )
+                    confined_ws = resolve_confined_repo_path(
+                        str(ws_dir or "."),
+                        project_id=call_ctx.project_id,
+                        enforce_project_boundary=enforce_project,
+                    )
+                    local_blast = local_blast_radius(
+                        confined_ws,
+                        doc_id=arguments["doc_id"],
+                        depth=depth,
+                        allow_sibling_lookup=not enforce_project,
+                    )
+                    descendants: Sequence[Mapping[str, Any]] = local_blast["descendants"]
+                else:
+                    try:
+                        descendants = await self._surface.blast_radius(
+                            call_ctx,
+                            doc_id=arguments["doc_id"],
+                            depth=depth,
+                            scope=scope,
+                        )
+                    except StoreUnavailable:
+                        if not ws_dir:
+                            raise
+                        await self._surface._decide(
+                            call_ctx,
+                            "blast_radius",
+                            TargetScope(tenant_id=call_ctx.tenant_id, scope=scope),
+                        )
+                        descendants = []
+                    if not descendants and (ws_dir or not self._auth_enabled):
+                        confined_ws = resolve_confined_repo_path(
+                            str(ws_dir or "."),
+                            project_id=call_ctx.project_id,
+                            enforce_project_boundary=enforce_project,
+                        )
+                        local_blast = local_blast_radius(
+                            confined_ws,
+                            doc_id=arguments["doc_id"],
+                            depth=depth,
+                            allow_sibling_lookup=not enforce_project,
+                        )
+                        descendants = local_blast["descendants"]
                 return {
                     "content": [{"type": "text", "text": json.dumps(list(descendants), indent=2)}]
                 }
+
+            elif name in ("sdd_validate_graph", "sdd_check_invariants", "sdd_lint_policy"):
+                return await self._handle_sdd_context_tool(name, arguments, call_ctx)
 
             elif name == "sdd_ingest":
                 from engramory.access.authz import TargetScope
@@ -838,6 +978,91 @@ class McpServer:
             "content": [{"type": "text", "text": f"Unknown tool: {name}"}],
         }
 
+    async def _handle_sdd_context_tool(
+        self, name: str, arguments: dict[str, Any], call_ctx: ActorContext
+    ) -> dict[str, Any]:
+        """Dispatch built-in SDD DAG validation, invariant, and stack-policy MCP tools."""
+        from engramory.access.authz import TargetScope
+        from engramory.core.context_tools import (
+            check_sdd_invariants,
+            lint_stack_policy,
+            validate_sdd_graph,
+        )
+        from engramory.core.docs_tools import resolve_confined_repo_path
+
+        scope = str(arguments.get("scope", "project"))
+        enforce_project = self._auth_enabled and ("space" not in call_ctx.scopes)
+        ws_arg = str(arguments.get("workspace_dir", "."))
+
+        if name == "sdd_validate_graph":
+            await self._surface._decide(
+                call_ctx,
+                "sdd_validate_graph",
+                TargetScope(tenant_id=call_ctx.tenant_id, scope=scope),
+            )
+            target = resolve_confined_repo_path(
+                ws_arg,
+                project_id=call_ctx.project_id,
+                enforce_project_boundary=enforce_project,
+            )
+            report = validate_sdd_graph(
+                target,
+                check_invariants=bool(arguments.get("invariants", False)),
+                allow_sibling_lookup=not enforce_project,
+            )
+            return {
+                "isError": not bool(report["passed"]),
+                "content": [{"type": "text", "text": json.dumps(report, indent=2)}],
+            }
+
+        elif name == "sdd_check_invariants":
+            await self._surface._decide(
+                call_ctx,
+                "sdd_check_invariants",
+                TargetScope(tenant_id=call_ctx.tenant_id, scope=scope),
+            )
+            target = resolve_confined_repo_path(
+                ws_arg,
+                project_id=call_ctx.project_id,
+                enforce_project_boundary=enforce_project,
+            )
+            report = check_sdd_invariants(
+                target,
+                base_ref=str(arguments.get("base_ref", "origin/dev")),
+                chg_type=str(arguments.get("change_type", "CODE2C")),
+                include_blast_warnings=not bool(arguments.get("offline", False)),
+                allow_sibling_lookup=not enforce_project,
+            )
+            return {
+                "isError": not bool(report["passed"]),
+                "content": [{"type": "text", "text": json.dumps(report, indent=2)}],
+            }
+
+        elif name == "sdd_lint_policy":
+            await self._surface._decide(
+                call_ctx,
+                "sdd_lint_policy",
+                TargetScope(tenant_id=call_ctx.tenant_id, scope=scope),
+            )
+            target = resolve_confined_repo_path(
+                ws_arg,
+                project_id=call_ctx.project_id,
+                enforce_project_boundary=enforce_project,
+            )
+            report = lint_stack_policy(
+                target,
+                policy_path=arguments.get("policy_path"),
+            )
+            return {
+                "isError": not bool(report["passed"]),
+                "content": [{"type": "text", "text": json.dumps(report, indent=2)}],
+            }
+
+        return {
+            "isError": True,
+            "content": [{"type": "text", "text": f"Unknown tool: {name}"}],
+        }
+
 
 DOCS_TOOLS_SCHEMA: list[dict[str, Any]] = [
     {
@@ -963,3 +1188,101 @@ DOCS_TOOLS_SCHEMA: list[dict[str, Any]] = [
 ]
 
 TOOLS_SCHEMA.extend(DOCS_TOOLS_SCHEMA)
+
+SDD_CONTEXT_TOOLS_SCHEMA: list[dict[str, Any]] = [
+    {
+        "name": "sdd_validate_graph",
+        "description": (
+            "Validate SDD dependency graph acyclicity (DAG) and optional SDD-GRAPH v2.0 "
+            "semantic cardinality and oracle trace invariants (GRAPH-CARD-001..003)."
+        ),
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "workspace_dir": {
+                    "type": "string",
+                    "default": ".",
+                    "description": "Confined workspace root directory to scan",
+                },
+                "invariants": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Enforce SDD-GRAPH v2.0 semantic cardinality invariants",
+                },
+                "scope": {"type": "string", "default": "project"},
+            },
+        },
+    },
+    {
+        "name": "sdd_check_invariants",
+        "description": (
+            "Pre-merge contract erosion guard preventing fast-path changes (CODE2C, DIR2C, "
+            "HOTFIX) from mutating protected contracts and emitting blast-radius advisories."
+        ),
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "workspace_dir": {
+                    "type": "string",
+                    "default": ".",
+                    "description": "Confined workspace root directory",
+                },
+                "base_ref": {
+                    "type": "string",
+                    "default": "origin/dev",
+                    "description": "Base git reference for diff analysis",
+                },
+                "change_type": {
+                    "type": "string",
+                    "default": "CODE2C",
+                    "description": "Change classification (CODE2C, DIR2C, SEED2C, SDD2C, HOTFIX)",
+                },
+                "offline": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Skip downstream blast-radius advisory check",
+                },
+                "scope": {"type": "string", "default": "project"},
+            },
+        },
+    },
+    {
+        "name": "sdd_lint_policy",
+        "description": (
+            "Validate codebase banned patterns and dependency lockfiles (pyproject.toml, "
+            "uv.lock, requirements.txt, poetry.lock) against .aidoc/stack-policy.yaml."
+        ),
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "workspace_dir": {
+                    "type": "string",
+                    "default": ".",
+                    "description": "Confined workspace root directory",
+                },
+                "policy_path": {
+                    "type": "string",
+                    "description": "Optional confined path to stack-policy.yaml",
+                },
+                "scope": {"type": "string", "default": "project"},
+            },
+        },
+    },
+]
+
+TOOLS_SCHEMA.extend(SDD_CONTEXT_TOOLS_SCHEMA)

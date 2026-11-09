@@ -530,24 +530,13 @@ def _cmd_sdd_slice(args: argparse.Namespace) -> int:
     layers = [x.strip() for x in raw_layers.split(",") if x.strip()] if raw_layers else None
     max_tokens = getattr(args, "max_tokens", 2000)
     as_markdown = getattr(args, "markdown", False)
-
-    async def op(surface: AccessSurface, ctx: ActorContext) -> dict[str, Any]:
-        ancestors = await surface.context_slice(
-            ctx,
-            task_id=args.task,
-            depth=args.depth,
-            scope=scope,
-            layers=layers,
-            max_tokens=max_tokens,
-        )
-        return {
-            "task_id": args.task,
-            "depth": args.depth,
-            "ancestor_count": len(ancestors),
-            "ancestors": list(ancestors),
-        }
+    as_digest = getattr(args, "digest", False)
+    offline = getattr(args, "offline", False)
+    root_arg = getattr(args, "root", None)
 
     def format_slice(p: dict[str, Any]) -> str:
+        if as_digest and "digest" in p:
+            return str(p["digest"])
         ancestors = p["ancestors"]
         if as_markdown:
             from engramory.mcp.server import format_context_slice_markdown
@@ -562,26 +551,79 @@ def _cmd_sdd_slice(args: argparse.Namespace) -> int:
             lines.append(f"  - [{labels}] {a.get('id')}: {title}")
         return "\n".join(lines)
 
-    return _run_with_surface(args, op, format_slice)
+    if offline or root_arg is not None or as_digest:
+        from engramory.core.context_tools import slice_local_context
+        from engramory.core.docs_tools import resolve_confined_repo_path
+
+        target_root = resolve_confined_repo_path(root_arg or ".")
+        out_fmt = "digest" if as_digest else ("markdown" if as_markdown else "json")
+        res = slice_local_context(
+            target_root,
+            task_id=args.task,
+            depth=args.depth,
+            layers=layers,
+            max_tokens=max_tokens,
+            output_format=out_fmt,
+        )
+        _emit(args.json, res, format_slice(res))
+        return 0
+
+    try:
+
+        async def op(surface: AccessSurface, ctx: ActorContext) -> dict[str, Any]:
+            ancestors = await surface.context_slice(
+                ctx,
+                task_id=args.task,
+                depth=args.depth,
+                scope=scope,
+                layers=layers,
+                max_tokens=max_tokens,
+            )
+            if not ancestors:
+                from engramory.core.context_tools import slice_local_context
+                from engramory.core.docs_tools import resolve_confined_repo_path
+
+                target_root = resolve_confined_repo_path(".")
+                local_res = slice_local_context(
+                    target_root,
+                    task_id=args.task,
+                    depth=args.depth,
+                    layers=layers,
+                    max_tokens=max_tokens,
+                    output_format="markdown" if as_markdown else "json",
+                )
+                if local_res["ancestors"]:
+                    return local_res
+            return {
+                "task_id": args.task,
+                "depth": args.depth,
+                "ancestor_count": len(ancestors),
+                "ancestors": list(ancestors),
+            }
+
+        return _run_with_surface(args, op, format_slice)
+    except (ConfigError, StoreUnavailable):
+        from engramory.core.context_tools import slice_local_context
+        from engramory.core.docs_tools import resolve_confined_repo_path
+
+        target_root = resolve_confined_repo_path(".")
+        res = slice_local_context(
+            target_root,
+            task_id=args.task,
+            depth=args.depth,
+            layers=layers,
+            max_tokens=max_tokens,
+            output_format="markdown" if as_markdown else "json",
+        )
+        _emit(args.json, res, format_slice(res))
+        return 0
 
 
 def _cmd_sdd_blast_radius(args: argparse.Namespace) -> int:
     """Compute downstream descendant impact of modifying a document."""
     scope = getattr(args, "scope", "project")
-
-    async def op(surface: AccessSurface, ctx: ActorContext) -> dict[str, Any]:
-        descendants = await surface.blast_radius(
-            ctx,
-            doc_id=args.doc,
-            depth=args.depth,
-            scope=scope,
-        )
-        return {
-            "doc_id": args.doc,
-            "depth": args.depth,
-            "impact_count": len(descendants),
-            "descendants": list(descendants),
-        }
+    offline = getattr(args, "offline", False)
+    root_arg = getattr(args, "root", None)
 
     def format_blast(p: dict[str, Any]) -> str:
         descendants = p["descendants"]
@@ -596,7 +638,96 @@ def _cmd_sdd_blast_radius(args: argparse.Namespace) -> int:
             lines.append(f"  - [{labels}] {d.get('id')}: {title}")
         return "\n".join(lines)
 
-    return _run_with_surface(args, op, format_blast)
+    if offline or root_arg is not None:
+        from engramory.core.context_tools import local_blast_radius
+        from engramory.core.docs_tools import resolve_confined_repo_path
+
+        target_root = resolve_confined_repo_path(root_arg or ".")
+        res = local_blast_radius(target_root, doc_id=args.doc, depth=args.depth)
+        _emit(args.json, res, format_blast(res))
+        return 0
+
+    try:
+
+        async def op(surface: AccessSurface, ctx: ActorContext) -> dict[str, Any]:
+            descendants = await surface.blast_radius(
+                ctx,
+                doc_id=args.doc,
+                depth=args.depth,
+                scope=scope,
+            )
+            if not descendants:
+                from engramory.core.context_tools import local_blast_radius
+                from engramory.core.docs_tools import resolve_confined_repo_path
+
+                target_root = resolve_confined_repo_path(".")
+                local_res = local_blast_radius(target_root, doc_id=args.doc, depth=args.depth)
+                if local_res["descendants"]:
+                    return local_res
+            return {
+                "doc_id": args.doc,
+                "depth": args.depth,
+                "impact_count": len(descendants),
+                "descendants": list(descendants),
+            }
+
+        return _run_with_surface(args, op, format_blast)
+    except (ConfigError, StoreUnavailable):
+        from engramory.core.context_tools import local_blast_radius
+        from engramory.core.docs_tools import resolve_confined_repo_path
+
+        target_root = resolve_confined_repo_path(".")
+        res = local_blast_radius(target_root, doc_id=args.doc, depth=args.depth)
+        _emit(args.json, res, format_blast(res))
+        return 0
+
+
+def _cmd_sdd_validate_graph(args: argparse.Namespace) -> int:
+    """Validate SDD dependency graph acyclicity and semantic cardinality invariants."""
+    from engramory.core.context_tools import validate_sdd_graph
+    from engramory.core.docs_tools import resolve_confined_repo_path
+
+    target = resolve_confined_repo_path(getattr(args, "root", "."))
+    report = validate_sdd_graph(target, check_invariants=bool(getattr(args, "invariants", False)))
+    summary = (
+        f"status={report['status']} nodes={report['nodes_scanned']} "
+        f"cycles={len(report['cycles'])} violations={len(report['violations'])}"
+    )
+    _emit(args.json, report, summary)
+    return 0 if report["passed"] else 1
+
+
+def _cmd_sdd_check_invariants(args: argparse.Namespace) -> int:
+    """Run pre-merge contract erosion guard and optional downstream blast-radius advisories."""
+    from engramory.core.context_tools import check_sdd_invariants
+    from engramory.core.docs_tools import resolve_confined_repo_path
+
+    target = resolve_confined_repo_path(getattr(args, "root", "."))
+    include_warnings = not bool(getattr(args, "offline", False))
+    report = check_sdd_invariants(
+        target,
+        base_ref=getattr(args, "base", "origin/dev"),
+        chg_type=getattr(args, "type", "CODE2C"),
+        include_blast_warnings=include_warnings,
+    )
+    summary = (
+        f"status={report['status']} changed={report['changed_files_count']} "
+        f"violations={len(report['violations'])} warnings={len(report['warnings'])}"
+    )
+    _emit(args.json, report, summary)
+    return 0 if report["passed"] else 1
+
+
+def _cmd_sdd_lint_policy(args: argparse.Namespace) -> int:
+    """Validate repository source tree and lockfiles against .aidoc/stack-policy.yaml."""
+    from engramory.core.context_tools import lint_stack_policy
+    from engramory.core.docs_tools import resolve_confined_repo_path
+
+    target = resolve_confined_repo_path(getattr(args, "root", "."))
+    report = lint_stack_policy(target, policy_path=getattr(args, "policy", None))
+    summary = f"status={report['status']} violations={len(report['violations'])}"
+    _emit(args.json, report, summary)
+    return 0 if report["passed"] else 1
 
 
 def _cmd_mcp_serve(args: argparse.Namespace) -> int:
@@ -834,6 +965,21 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="format output as structured markdown with links",
     )
+    p_sdd_slice.add_argument(
+        "--digest",
+        action="store_true",
+        help="format output as a Tier 0/1/2 token-compacted prompt digest",
+    )
+    p_sdd_slice.add_argument(
+        "--offline",
+        action="store_true",
+        help="force local workspace DAG traversal without querying Postgres/Neo4j",
+    )
+    p_sdd_slice.add_argument(
+        "--root",
+        default=None,
+        help="local workspace root directory for offline/hybrid DAG slicing",
+    )
     p_sdd_slice.set_defaults(func=_cmd_sdd_slice)
 
     p_sdd_blast = sdd_sub.add_parser(
@@ -846,7 +992,52 @@ def _build_parser() -> argparse.ArgumentParser:
     p_sdd_blast.add_argument(
         "--scope", default="project", help="visibility scope (default: project)"
     )
+    p_sdd_blast.add_argument(
+        "--offline",
+        action="store_true",
+        help="force local workspace DAG traversal without querying Postgres/Neo4j",
+    )
+    p_sdd_blast.add_argument(
+        "--root",
+        default=None,
+        help="local workspace root directory for offline/hybrid blast radius",
+    )
     p_sdd_blast.set_defaults(func=_cmd_sdd_blast_radius)
+
+    p_sdd_val = sdd_sub.add_parser(
+        "validate-graph", help="validate SDD DAG acyclicity and semantic cardinality invariants"
+    )
+    p_sdd_val.add_argument("--root", default=".", help="workspace root directory (default: .)")
+    p_sdd_val.add_argument(
+        "--invariants",
+        action="store_true",
+        help="enforce SDD-GRAPH v2.0 semantic cardinality and oracle trace rules",
+    )
+    p_sdd_val.set_defaults(func=_cmd_sdd_validate_graph)
+
+    p_sdd_inv = sdd_sub.add_parser(
+        "check-invariants", help="pre-merge contract erosion guard and blast-radius advisories"
+    )
+    p_sdd_inv.add_argument("--root", default=".", help="workspace root directory (default: .)")
+    p_sdd_inv.add_argument("--base", default="origin/dev", help="base git reference")
+    p_sdd_inv.add_argument(
+        "--type", default="CODE2C", help="change classification (e.g. CODE2C, DIR2C, SEED2C)"
+    )
+    p_sdd_inv.add_argument(
+        "--offline", action="store_true", help="skip blast-radius advisory check"
+    )
+    p_sdd_inv.set_defaults(func=_cmd_sdd_check_invariants)
+
+    p_sdd_pol = sdd_sub.add_parser(
+        "lint-policy", help="validate codebase and lockfiles against .aidoc/stack-policy.yaml"
+    )
+    p_sdd_pol.add_argument("--root", default=".", help="workspace root directory (default: .)")
+    p_sdd_pol.add_argument(
+        "--policy",
+        default=None,
+        help="path to stack-policy.yaml (default: .aidoc/stack-policy.yaml)",
+    )
+    p_sdd_pol.set_defaults(func=_cmd_sdd_lint_policy)
 
     p_mcp = sub.add_parser("mcp", help="run MCP gateway server (stdio or SSE)")
     p_mcp.add_argument(
