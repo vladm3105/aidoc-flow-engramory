@@ -39,7 +39,7 @@ from engramory.core.models import (
     ValidationError,
 )
 from engramory.core.repository import Repository
-from engramory.ports import GraphPort
+from engramory.ports import GraphPort, LLMPort
 
 logger = logging.getLogger(__name__)
 
@@ -119,9 +119,16 @@ def _extract_layer_prefix(node: Mapping[str, Any]) -> str:
 class AccessSurface:
     """Authorized, scoped, audited read/write interface for all agents."""
 
-    def __init__(self, repository: Repository, *, graph: GraphPort | None = None) -> None:
+    def __init__(
+        self,
+        repository: Repository,
+        *,
+        graph: GraphPort | None = None,
+        llm: LLMPort | None = None,
+    ) -> None:
         self._repo = repository
         self._graph = graph
+        self._llm = llm
 
     async def _decide(
         self, ctx: ActorContext, action: str, target: TargetScope, note: str | None = None
@@ -165,12 +172,22 @@ class AccessSurface:
         target = TargetScope(tenant_id=tenant_id or ctx.tenant_id, scope=scope)
         await self._decide(ctx, "memory_search", target)
         levels = _granted_levels(scope, ctx.scopes)
+        query_vec: Sequence[float] | None = None
+        if self._llm is not None and query and query.strip():
+            try:
+                vecs = await self._llm.embed(texts=[query])
+                if vecs and len(vecs[0]) == 1536:
+                    query_vec = vecs[0]
+            except Exception:  # noqa: BLE001  # reason: embedding failure must fall back to lexical/recency retrieval
+                query_vec = None
         memories = await self._repo.get_memories(
             tenant_id=target.tenant_id,
             agent_id=ctx.agent_id,
             project_id=ctx.project_id,
             domain_id=None,  # domain membership lands on ActorContext with BRD-04
             k=max(1, min(k, MAX_K)),
+            query=query,
+            query_vec=query_vec,
             scopes=levels,
         )
         kept: list[tuple[str, str, float, Mapping[str, Any], int]] = []
@@ -181,7 +198,8 @@ class AccessSurface:
                 if tokens > budget:
                     break
                 budget -= tokens
-            assert memory.id is not None  # hydrated rows always carry id
+            if memory.id is None:
+                raise RuntimeError("hydrated memory missing id")
             prov = dict(memory.provenance)
             if expand_graph and self._graph is not None:
                 try:
@@ -193,8 +211,8 @@ class AccessSurface:
                     )
                     if neighbors:
                         prov["related_entities"] = [n.get("id") for n in neighbors]
-                except Exception:  # noqa: BLE001  # reason: graph traversal failure must not abort primary memory retrieval
-                    pass
+                except Exception as exc:  # noqa: BLE001  # reason: graph traversal failure must not abort primary memory retrieval
+                    logger.debug("Graph traversal failed for memory %s: %s", memory.id, exc)
             kept.append((memory.id, memory.summary, memory.confidence, prov, tokens))
         retrieval_ids = await self._repo.log_retrievals(
             memory_ids=[m[0] for m in kept],
@@ -544,8 +562,34 @@ class AccessSurface:
             )
             raise GovernedWriteRejected(str(exc)) from exc
         if isinstance(res, dict):
-            return list(res.values())
-        return res
+            ids = list(res.values())
+        else:
+            ids = list(res)
+
+        if self._llm is not None and vetted_sections and ids:
+            try:
+                embeddings = await self._llm.embed(texts=[s.text for s in vetted_sections])
+                model_name = next(
+                    (
+                        val
+                        for attr in ("embed_model", "_embed_model", "_default_embed_model")
+                        if isinstance((val := getattr(self._llm, attr, None)), str) and val.strip()
+                    ),
+                    "text-embedding-3-small",
+                )
+                updates = [
+                    (sec_id, vec)
+                    for sec_id, vec in zip(ids, embeddings, strict=False)
+                    if vec and len(vec) == 1536
+                ]
+                if updates and hasattr(self._repo, "set_kb_sections_embedding_batch"):
+                    await self._repo.set_kb_sections_embedding_batch(
+                        updates, embedding_model=model_name
+                    )
+            except Exception as exc:  # noqa: BLE001  # reason: offline/degraded LLM must not fail canonical section ingestion
+                logger.debug("Skipping section embedding in knowledge_ingest_batch: %s", exc)
+
+        return ids
 
     async def knowledge_search(
         self,
@@ -561,12 +605,20 @@ class AccessSurface:
         await self._decide(
             ctx, "knowledge_search", TargetScope(tenant_id=ctx.tenant_id, scope=scope or "project")
         )
+        eff_vec = query_vec
+        if eff_vec is None and self._llm is not None and query and query.strip():
+            try:
+                vecs = await self._llm.embed(texts=[query])
+                if vecs and len(vecs[0]) == 1536:
+                    eff_vec = vecs[0]
+            except Exception:  # noqa: BLE001  # reason: fallback to lexical search when embedding endpoint is unreachable
+                eff_vec = None
         return await self._repo.search_kb_sections(
             query,
             tenant_id=ctx.tenant_id,
             project_id=ctx.project_id,
             domain_id=domain_id,
-            query_vec=query_vec,
+            query_vec=eff_vec,
             scope=scope,
             limit=limit,
         )

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
-import subprocess
+import subprocess  # nosec B404 # reason: read-only git remote origin lookup for project_id auto-detection
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -509,8 +509,8 @@ def resolve_sdd_project_id(
                         return str(data["project_name"]).strip()
                     if data.get("name"):
                         return str(data["name"]).strip()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to parse profile.yaml at %s: %s", profile_path, exc)
 
         # 2. Check pyproject.toml
         pyproject_path = d / "pyproject.toml"
@@ -520,13 +520,13 @@ def resolve_sdd_project_id(
                 proj_name = data_toml.get("project", {}).get("name")
                 if proj_name:
                     return str(proj_name).strip()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to parse pyproject.toml at %s: %s", pyproject_path, exc)
 
         # 3. Check git remote origin
         if (d / ".git").exists() or (d.parent / ".git").exists():
             try:
-                out = subprocess.run(
+                out = subprocess.run(  # nosec B603 B607 # reason: fixed git config read call
                     ["git", "config", "--get", "remote.origin.url"],
                     cwd=str(d),
                     capture_output=True,
@@ -540,8 +540,8 @@ def resolve_sdd_project_id(
                     name = url.split("/")[-1].split(":")[-1]
                     if name:
                         return name.strip()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to read git origin in %s: %s", d, exc)
 
     if config_id and config_id not in ("p1", "default", "core"):
         return config_id
@@ -588,7 +588,7 @@ async def ingest_sdd_knowledge_graph(
     await repo.bulk_upsert_graph_relations(relations)
 
     # 2. Reconcile deleted / renamed files by purging stale database entities
-    if reconcile and entities:
+    if reconcile and sdd_path.exists():
         active_ids = [e.id for e in entities]
         purged = await repo.purge_stale_graph_entities(
             tenant_id=tenant_id,
@@ -608,7 +608,7 @@ async def ingest_sdd_knowledge_graph(
         if hasattr(graph, "init_schema"):
             await graph.init_schema()
 
-        if reconcile and entities and hasattr(graph, "purge_stale_nodes"):
+        if reconcile and sdd_path.exists() and hasattr(graph, "purge_stale_nodes"):
             await graph.purge_stale_nodes(
                 tenant_id=tenant_id,
                 active_ids=[e.id for e in entities],
@@ -652,6 +652,8 @@ async def expand_graph_context(
     seed_ids: list[str],
     *,
     depth: int = 1,
+    tenant_id: str = "default",
+    project_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Retrieve connected topological neighborhood for given seed nodes."""
     all_neighbors: dict[str, dict[str, Any]] = {}
@@ -659,7 +661,12 @@ async def expand_graph_context(
     for seed_id in seed_ids:
         clean_seed = normalize_sdd_id(seed_id)
         try:
-            hits = await graph.neighbors(id=clean_seed, depth=depth)
+            hits = await graph.neighbors(
+                id=clean_seed,
+                depth=depth,
+                tenant_id=tenant_id,
+                project_id=project_id,
+            )
             for hit in hits:
                 nid = hit.get("id")
                 if nid and nid not in all_neighbors:
@@ -675,10 +682,17 @@ async def get_sdd_context_slice(
     task_id: str,
     *,
     depth: int = 6,
+    tenant_id: str = "default",
+    project_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Retrieve upstream specification contract closure (ancestors) for an IPLAN task."""
     clean_task = normalize_sdd_id(task_id)
-    ancestors = await graph.ancestors(id=clean_task, depth=depth)
+    ancestors = await graph.ancestors(
+        id=clean_task,
+        depth=depth,
+        tenant_id=tenant_id,
+        project_id=project_id,
+    )
     return [dict(a) for a in ancestors]
 
 
@@ -687,10 +701,17 @@ async def get_sdd_blast_radius(
     doc_id: str,
     *,
     depth: int = 6,
+    tenant_id: str = "default",
+    project_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Retrieve downstream dependent specifications, tasks, and tests affected by a change."""
     clean_doc = normalize_sdd_id(doc_id)
-    descendants = await graph.descendants(id=clean_doc, depth=depth)
+    descendants = await graph.descendants(
+        id=clean_doc,
+        depth=depth,
+        tenant_id=tenant_id,
+        project_id=project_id,
+    )
     return [dict(d) for d in descendants]
 
 

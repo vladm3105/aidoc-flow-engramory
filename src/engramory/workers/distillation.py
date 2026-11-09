@@ -17,7 +17,8 @@ logger = logging.getLogger(__name__)
 
 # Fallback when LLMPort is not supplied or fails
 INTERIM_EMBEDDING_MODEL = "none/interim-reflect"
-DEFAULT_EMBED_MODEL = "bge-small-en-v1.5"
+DEFAULT_EMBED_MODEL = "text-embedding-3-small"
+EXPECTED_EMBED_DIMS = 1536
 
 
 async def reflect(
@@ -47,7 +48,14 @@ async def reflect(
         texts = [ep.content_raw for ep in batch]
 
         embeddings: Sequence[Sequence[float]] | None = None
-        model_name = getattr(llm, "_default_embed_model", DEFAULT_EMBED_MODEL)
+        model_name = next(
+            (
+                val
+                for attr in ("embed_model", "_embed_model", "_default_embed_model")
+                if isinstance((val := getattr(llm, attr, None)), str) and val.strip()
+            ),
+            DEFAULT_EMBED_MODEL,
+        )
         if llm is not None and vector is not None:
             try:
                 embeddings = await llm.embed(texts=texts, model=model_name)
@@ -58,8 +66,20 @@ async def reflect(
                 embeddings = None
 
         for idx, episode in enumerate(batch):
-            assert episode.id is not None  # hydrated rows always carry id
-            has_vector = embeddings is not None and idx < len(embeddings)
+            if episode.id is None:
+                raise RuntimeError("hydrated episode missing id")
+            vec_candidate = (
+                embeddings[idx] if (embeddings is not None and idx < len(embeddings)) else None
+            )
+            if vec_candidate and len(vec_candidate) != EXPECTED_EMBED_DIMS:
+                logger.warning(
+                    "Distillation embedding dim mismatch (expected %d, got %d); "
+                    "skipping vector projection.",
+                    EXPECTED_EMBED_DIMS,
+                    len(vec_candidate),
+                )
+                vec_candidate = None
+            has_vector = bool(vec_candidate) and len(vec_candidate or ()) == EXPECTED_EMBED_DIMS
             emb_model = model_name if has_vector else INTERIM_EMBEDDING_MODEL
 
             memory = Memory(
@@ -67,8 +87,8 @@ async def reflect(
                 summary=episode.content_raw,
                 type="episodic",
                 embedding_model=emb_model,
-                embedding_dims=len(embeddings[idx])
-                if (has_vector and embeddings is not None)
+                embedding_dims=len(vec_candidate)
+                if (has_vector and vec_candidate is not None)
                 else None,
                 provenance={"episode_id": episode.id, "distiller": "reflect-v1"},
                 agent_id=episode.agent_id,
@@ -78,8 +98,12 @@ async def reflect(
                 scope="agent",
             )
             memory_id = await repo.upsert_memory(memory)
-            if has_vector and vector is not None and embeddings is not None:
-                await vector.upsert(id=memory_id, embedding=embeddings[idx])
+            if has_vector and vector is not None and vec_candidate is not None:
+                await vector.upsert(
+                    id=memory_id,
+                    embedding=vec_candidate,
+                    metadata={"tenant_id": episode.tenant_id},
+                )
 
             created += 1
 

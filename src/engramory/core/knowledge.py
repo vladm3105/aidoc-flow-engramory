@@ -119,13 +119,36 @@ class KnowledgeCore:
             extract_res = self.router.extract_document(p)
             extracted_sections = extract_res.sections
 
-            if self.chunker is not None:
+            if self.chunker is not None and self.chunker is not getattr(
+                self.router, "chunker", None
+            ):
                 extracted_sections = self.chunker.refine_sections(extracted_sections)
 
+            line_spans = [
+                calculate_line_numbers(full_text, sec.char_start, sec.char_end)
+                for sec in extracted_sections
+            ]
+            span_counts: dict[tuple[int, int], int] = {}
+            for span in line_spans:
+                span_counts[span] = span_counts.get(span, 0) + 1
+
+            seen_citations: set[str] = set()
             file_secs: list[KBSection] = []
-            for sec in extracted_sections:
-                l_start, l_end = calculate_line_numbers(full_text, sec.char_start, sec.char_end)
-                cit = format_local_citation(str(p), l_start, l_end, sec.citation or sec.section_id)
+            for idx, (sec, (l_start, l_end)) in enumerate(
+                zip(extracted_sections, line_spans, strict=False), 1
+            ):
+                slug = (sec.citation or sec.section_id or f"sec-{idx}").lstrip("#§")
+                if not full_text:
+                    cit = format_local_citation(str(p), None, None, slug)
+                else:
+                    cit = format_local_citation(
+                        str(p), l_start, l_end, sec.citation or sec.section_id
+                    )
+                    if span_counts[(l_start, l_end)] > 1:
+                        cit = f"{cit}#{slug}"
+                if cit in seen_citations:
+                    cit = f"{cit}-{idx}"
+                seen_citations.add(cit)
                 sec_domain = (
                     str(sec.metadata["domain"]).strip()
                     if sec.metadata and sec.metadata.get("domain")
@@ -238,7 +261,15 @@ class KnowledgeCore:
                             len(vec),
                         )
                 if valid_updates:
-                    embed_model = getattr(self.llm, "_embed_model", "text-embedding-3-small")
+                    embed_model = next(
+                        (
+                            val
+                            for attr in ("embed_model", "_embed_model", "_default_embed_model")
+                            if isinstance((val := getattr(self.llm, attr, None)), str)
+                            and val.strip()
+                        ),
+                        "text-embedding-3-small",
+                    )
                     await self.repo.set_kb_sections_embedding_batch(
                         valid_updates,
                         embedding_model=embed_model,

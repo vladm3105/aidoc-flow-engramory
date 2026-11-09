@@ -153,8 +153,10 @@ async def test_mcp_call_sdd_ingest(mock_surface: AccessSurface, mock_ctx: ActorC
     assert resp is not None
     assert resp["id"] == 11
     assert "Ingested 15 entities and 20 relations" in resp["result"]["content"][0]["text"]
+    from pathlib import Path
+
     mock_ingest.assert_awaited_once_with(
-        sdd_root="sdd",
+        sdd_root=str(Path("sdd").resolve()),
         tenant_id="test-tenant",
         project_id="my-project",
         reconcile=True,

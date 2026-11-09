@@ -170,8 +170,9 @@ class HTMLParser(BaseParser):
         extractor = _SimpleHTMLTextExtractor()
         try:
             extractor.feed(text)
-        except Exception:
-            pass
+        except Exception as exc:
+            extractor.close()
+            _ = exc
 
         full_text = "".join(extractor.text_parts)
         headers = extractor.headers

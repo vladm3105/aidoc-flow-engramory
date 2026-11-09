@@ -288,7 +288,7 @@ kb_sections(
   text TEXT NOT NULL,           -- Authoritative section content
   version INTEGER NOT NULL,     -- Immutable versioning (new versions append)
   embedding VECTOR(1536),       -- Regenerable dense embedding (pgvector HNSW)
-  embedding_model TEXT,         -- Default: 'openrouter/qwen/qwen3-embedding-8b'
+  embedding_model TEXT,         -- Default: 'text-embedding-3-small'
   embedding_dims INTEGER        -- Default: 1536
 )
 ```
@@ -296,7 +296,7 @@ kb_sections(
 ### Standard Vector Dimensions & Default Embedding Model (Migration 0006)
 
 - **Standard Dimensionality (`vector(1536)`):** Engramory standardizes its `pgvector` HNSW indexes on **1,536 dimensions**. This provides near-lossless semantic fidelity while fitting within PostgreSQL HNSW limits (< 2,000 dimensions) and keeping RAM consumption predictable (~6.1 GB for 1M vectors).
-- **Default Embedding Model:** `openrouter/qwen/qwen3-embedding-8b` (configured with `dimensions: 1536` via Matryoshka Representation Learning). It provides top-tier MTEB multilingual, technical, and code retrieval benchmarks.
+- **Default Embedding Model:** `text-embedding-3-small` (`dimensions: 1536`), with optional `openrouter/qwen/qwen3-embedding-8b` (Matryoshka 1536 dims) via LiteLLM proxy configuration.
 - **Portability Guarantee:** Standardizing on 1,536 dimensions matches industry standards (OpenAI `text-embedding-3-small`, `text-embedding-3-large`, Voyage AI), enabling seamless model switching in the LiteLLM gateway without requiring SQL schema migrations.
 
 ### 3. Hybrid Retrieval & Cumulative `@-tag` Lineage
@@ -364,7 +364,7 @@ Phases 0–2 are entirely free/self-hosted. Phase 3 is a **configuration + adapt
 
 ## Recommended dev stack (Phase 0 docker-compose)
 
-Provisioned in the Phase-0 compose **today:** `postgres:16` (pgvector) · `redis` · `minio` · `ghcr.io/berriai/litellm` + `ollama` · `neo4j` · `keycloak`. **Planned (not yet in docker-compose):** the application services `mcp-gateway` · `knowledge-core` · `memory-core` · `worker` (reflection/consolidation), and observability `grafana`+`loki`+`tempo` (OTel).
+Provisioned in `docker-compose.yml` **today:** `postgres` (pgvector) · `redis` · `minio` · `ghcr.io/berriai/litellm` + `ollama` · `neo4j` · `keycloak` · `mcp-gateway` · `worker` (reflection/consolidation). Optional observability (`grafana`+`loki`+`tempo`) connects via OTel (`docs/OBSERVABILITY.md`).
 
 All open-source, all free, all with a documented GCP **and** Azure adapter for later. Start here; the cloud is a swap, not a rebuild.
 

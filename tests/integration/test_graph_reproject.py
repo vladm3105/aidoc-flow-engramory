@@ -66,7 +66,9 @@ async def test_reproject_canonical_postgres_to_live_neo4j(pg_dsn: str) -> None:
         assert edges == 1
 
         # 5. Query Neo4j live to verify graph traversal over projected data
-        neighbors = await graph.neighbors(id="ADR-03-graph", rel="CONSTRAINED_BY", depth=1)
+        neighbors = await graph.neighbors(
+            id="ADR-03-graph", rel="CONSTRAINED_BY", depth=1, tenant_id=tenant_id
+        )
         assert len(neighbors) == 1
         assert neighbors[0]["id"] == "ADR-01-spine"
         assert "ADR" in neighbors[0]["labels"]

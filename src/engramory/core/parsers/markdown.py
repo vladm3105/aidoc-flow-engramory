@@ -54,8 +54,8 @@ class MarkdownParser(BaseParser):
                 loaded = yaml.safe_load(fm_text)
                 if isinstance(loaded, dict):
                     doc_metadata = loaded
-            except Exception:
-                pass
+            except Exception as exc:
+                doc_metadata = {"_frontmatter_error": str(exc)}
 
         body = text[content_offset:]
 

@@ -35,7 +35,7 @@ async def test_project_entities_invokes_graph_upsert_node() -> None:
     assert count == 1
     mock_graph.upsert_node.assert_awaited_once_with(
         id="ADR-01",
-        labels=["ADR"],
+        labels=["ADR", "SDD"],
         props={
             "name": "Postgres as Spine",
             "domain_id": "core",

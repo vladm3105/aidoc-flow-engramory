@@ -40,6 +40,7 @@ class LiteLLMAdapter:
         self._default_embed_model = default_embed_model or os.getenv(
             "ENGRAMORY_EMBED_MODEL", DEFAULT_EMBED_MODEL
         )
+        self._embed_model = self._default_embed_model
         env_dims = os.getenv("ENGRAMORY_EMBED_DIMS")
         self._default_embed_dims = (
             default_embed_dims
@@ -56,15 +57,23 @@ class LiteLLMAdapter:
             else (float(env_timeout) if env_timeout else 30.0)
         )
 
+    @property
+    def embed_model(self) -> str:
+        """Configured default embedding model name."""
+        return str(self._default_embed_model)
+
     def _sync_request(self, endpoint: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         url = f"{self._base_url}/{endpoint.lstrip('/')}"
+        if not url.startswith(("http://", "https://")):
+            raise ValueError(f"LiteLLM base_url must use http:// or https://: {url!r}")
         data = json.dumps(payload).encode("utf-8")
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self._api_key}",
         }
         req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=self._timeout_sec) as resp:
+        # nosemgrep  # reason: url scheme validated to http/https
+        with urllib.request.urlopen(req, timeout=self._timeout_sec) as resp:  # nosec B310  # reason: url scheme validated to http/https
             raw = resp.read().decode("utf-8")
             return json.loads(raw)  # type: ignore[no-any-return]  # reason: json.loads returns Any and caller parses structure
 

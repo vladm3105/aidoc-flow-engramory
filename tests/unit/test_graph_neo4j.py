@@ -220,6 +220,47 @@ async def test_descendants_executes_directed_inpath_query() -> None:
     cypher_query = call_args[0][0]
     parameters = call_args[0][1]
 
-    assert "MATCH (m:Entity)-[*1..5]->(n)" in cypher_query
+    assert "MATCH p = (m:Entity)-[*1..5]->(n)" in cypher_query
+    assert "ALL(" in cypher_query
     assert "n.uid = $uid" in cypher_query
     assert parameters["uid"] == "default:ADR-03"
+
+
+@pytest.mark.asyncio
+async def test_upsert_node_guards_label_injection_by_project_id() -> None:
+    mock_session = AsyncMock()
+    mock_driver = MagicMock()
+    mock_driver.session.return_value.__aenter__.return_value = mock_session
+
+    adapter = Neo4jGraphAdapter(driver=mock_driver)
+    await adapter.upsert_node(
+        id="SPEC-01",
+        labels=["SPEC"],
+        props={"tenant_id": "t1", "project_id": "proj-b"},
+    )
+
+    cypher_query = mock_session.run.await_args[0][0]
+    assert "FOREACH (_ IN CASE" in cypher_query
+    assert "n.project_id = $project_id" in cypher_query
+
+
+@pytest.mark.asyncio
+async def test_neighbors_restricts_default_tenant_and_intermediate_hops() -> None:
+    mock_result = AsyncMock()
+    mock_result.data.return_value = []
+    mock_session = AsyncMock()
+    mock_session.run.return_value = mock_result
+    mock_driver = MagicMock()
+    mock_driver.session.return_value.__aenter__.return_value = mock_session
+
+    adapter = Neo4jGraphAdapter(driver=mock_driver)
+    await adapter.neighbors(id="ADR-01", depth=3, tenant_id="default", project_id="proj-a")
+
+    cypher_query = mock_session.run.await_args[0][0]
+    assert "$tenant_id = 'default' OR n.tenant_id = $tenant_id" not in cypher_query
+    assert (
+        "n.tenant_id = $tenant_id OR ($tenant_id = 'default' AND n.tenant_id IS NULL)"
+        in cypher_query
+    )
+    assert "ALL(" in cypher_query
+    assert "x IN nodes(p)" in cypher_query

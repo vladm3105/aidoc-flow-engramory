@@ -28,11 +28,21 @@ class SemanticChunker:
             if len(words) <= self.max_words:
                 split_sections.append(s)
             else:
+                ctx_header = ""
+                body_words = words
+                eff_max = self.max_words
+                if s.content.startswith("[Doc: ") and "]\n" in s.content:
+                    idx = s.content.find("]\n")
+                    ctx_header = s.content[: idx + 2]
+                    body_text = s.content[idx + 2 :].lstrip("\n")
+                    body_words = body_text.split()
+                    eff_max = max(1, self.max_words - len(ctx_header.split()))
+
                 base_citation = s.citation or "§section"
-                for i in range(0, len(words), self.max_words):
-                    part_num = (i // self.max_words) + 1
-                    part_words = words[i : i + self.max_words]
-                    part_text = " ".join(part_words)
+                for i in range(0, len(body_words), eff_max):
+                    part_num = (i // eff_max) + 1
+                    part_words = body_words[i : i + eff_max]
+                    part_text = f"{ctx_header}{' '.join(part_words)}"
                     sub_citation = f"{base_citation}-p{part_num}" if part_num > 1 else base_citation
 
                     split_sections.append(

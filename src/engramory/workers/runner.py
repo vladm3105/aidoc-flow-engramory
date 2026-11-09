@@ -11,6 +11,7 @@ import logging
 import os
 import signal
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -20,7 +21,12 @@ from engramory.workers.distillation import reflect
 
 logger = logging.getLogger("engramory.worker")
 DEFAULT_INTERVAL_SEC = 300
-HEARTBEAT_PATH = Path("/tmp/engramory-worker.heartbeat")
+HEARTBEAT_PATH = Path(
+    os.environ.get(
+        "ENGRAMORY_HEARTBEAT_PATH",
+        os.path.join(tempfile.gettempdir(), "engramory-worker.heartbeat"),
+    )
+)
 
 
 async def run_worker_loop(

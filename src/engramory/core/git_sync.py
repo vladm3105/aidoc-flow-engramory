@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-import subprocess
+import subprocess  # nosec B404 # reason: read-only git rev-parse, config, ls-files, and diff with validated refs
 import time
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -103,7 +103,7 @@ class GitSyncEngine:
     def get_git_head_sha(self, repo_path: Path) -> str:
         """Resolve current HEAD commit SHA."""
         try:
-            res = subprocess.run(
+            res = subprocess.run(  # nosec B603 B607 # reason: fixed git rev-parse HEAD call
                 ["git", "rev-parse", "HEAD"],
                 cwd=str(repo_path),
                 capture_output=True,
@@ -113,8 +113,8 @@ class GitSyncEngine:
             sha = res.stdout.strip()
             if sha and not res.returncode:
                 return sha
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to resolve git HEAD sha in %s: %s", repo_path, exc)
         return "local-head"
 
     def get_git_origin_repo(self, repo_path: Path) -> str | None:
@@ -122,7 +122,7 @@ class GitSyncEngine:
         if self.github_repo:
             return self.github_repo
         try:
-            res = subprocess.run(
+            res = subprocess.run(  # nosec B603 B607 # reason: fixed git config read call
                 ["git", "config", "--get", "remote.origin.url"],
                 cwd=str(repo_path),
                 capture_output=True,
@@ -133,8 +133,8 @@ class GitSyncEngine:
             if raw and ("github.com" in raw or "gitea" in raw):
                 clean = raw.replace(".git", "").split("github.com/")[-1].split(":")[-1]
                 return clean.strip("/")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed to read git remote origin in %s: %s", repo_path, exc)
         return None
 
     def get_changed_files(
@@ -154,7 +154,7 @@ class GitSyncEngine:
 
         if not base_sha:
             # Full initial baseline sync: list all tracked files in git
-            res = subprocess.run(
+            res = subprocess.run(  # nosec B603 B607 # reason: fixed git ls-files call
                 ["git", "ls-files"],
                 cwd=str(repo_path),
                 capture_output=True,
@@ -169,9 +169,15 @@ class GitSyncEngine:
             ]
 
         # Incremental diff between base and head
+        from engramory.core.docs_tools import _GIT_REF_RE
+        from engramory.core.models import ValidationError
+
         target_head = head_sha or "HEAD"
+        for ref_label, ref_val in (("base_sha", base_sha), ("head_sha", target_head)):
+            if ref_val.startswith("-") or not _GIT_REF_RE.match(ref_val):
+                raise ValidationError(f"Invalid git reference for {ref_label}: {ref_val!r}")
         cmd = ["git", "diff", "--name-status", f"{base_sha}..{target_head}"]
-        res = subprocess.run(
+        res = subprocess.run(  # nosec B603 # reason: fixed git diff call with _GIT_REF_RE validated refs
             cmd,
             cwd=str(repo_path),
             capture_output=True,
@@ -234,8 +240,9 @@ class GitSyncEngine:
         except UnicodeDecodeError:
             full_text = ""
 
+        seen_citations: set[str] = set()
         sections: list[KBSection] = []
-        for sec in extract_res.sections:
+        for idx, sec in enumerate(extract_res.sections, 1):
             # Calculate line numbers
             l_start, l_end = calculate_line_numbers(full_text, sec.char_start, sec.char_end)
             if repo_name:
@@ -251,6 +258,9 @@ class GitSyncEngine:
 
             # Combine citation URL and section slug
             full_citation = f"{cit_url}{sec.citation or ''}"
+            if full_citation in seen_citations:
+                full_citation = f"{full_citation}#{sec.section_id or idx}"
+            seen_citations.add(full_citation)
             sec_domain = (
                 str(sec.metadata["domain"]).strip()
                 if sec.metadata and sec.metadata.get("domain")
@@ -371,7 +381,15 @@ class GitSyncEngine:
                         if s_id and len(vec) == expected_embedding_dims:
                             valid_updates.append((s_id, vec))
                     if valid_updates:
-                        embed_model = getattr(llm, "_embed_model", "text-embedding-3-small")
+                        embed_model = next(
+                            (
+                                val
+                                for attr in ("embed_model", "_embed_model", "_default_embed_model")
+                                if isinstance((val := getattr(llm, attr, None)), str)
+                                and val.strip()
+                            ),
+                            "text-embedding-3-small",
+                        )
                         await repo.set_kb_sections_embedding_batch(
                             valid_updates,
                             embedding_model=embed_model,
