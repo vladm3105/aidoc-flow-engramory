@@ -867,6 +867,8 @@ class AidocDependencyGraph:
 
         base_name = file_path.stem
         node_id = fm_id or base_name
+        if not fm_id and node_id in self.nodes and self.nodes[node_id].file_path != rel_path:
+            node_id = f"{file_path.parent.name}:{base_name}"
         id_prefix = node_id.split(".")[0].split("-")[0].upper()
         md_layer = normalize_layer(
             fm_layer or (id_prefix if id_prefix in CANONICAL_LAYERS else None) or dir_layer
@@ -877,7 +879,7 @@ class AidocDependencyGraph:
             ArtifactNode(
                 node_id=node_id,
                 layer=md_layer,
-                content=content[:4000],
+                content=content[:65536],
                 dependencies=all_deps,
                 title=title,
                 file_path=rel_path,
@@ -906,14 +908,18 @@ def compact_node_content(content: str, tier: int = 1) -> str:
     lines = content.strip().splitlines()
     if tier == 1:
         in_fm = False
+        fm_closed = False
         kept: list[str] = []
-        for line in lines:
-            if line.strip() == "---":
-                in_fm = not in_fm
+        for idx, line in enumerate(lines):
+            if idx == 0 and line.strip() == "---":
+                in_fm = True
                 kept.append(line)
                 continue
             if in_fm:
                 kept.append(line)
+                if line.strip() == "---" and not fm_closed:
+                    in_fm = False
+                    fm_closed = True
                 continue
             s = line.strip()
             if (
@@ -942,14 +948,18 @@ def compact_node_content(content: str, tier: int = 1) -> str:
 
     # Tier 2: Summary only
     in_fm = False
+    fm_closed = False
     kept_t2: list[str] = []
-    for line in lines:
-        if line.strip() == "---":
-            in_fm = not in_fm
+    for idx, line in enumerate(lines):
+        if idx == 0 and line.strip() == "---":
+            in_fm = True
             kept_t2.append(line)
             continue
         if in_fm:
             kept_t2.append(line)
+            if line.strip() == "---" and not fm_closed:
+                in_fm = False
+                fm_closed = True
             continue
         if line.strip().startswith("#"):
             kept_t2.append(line)
@@ -986,15 +996,19 @@ class ContextSlicer:
 
         depth_limit = max(1, min(int(max_depth), 20))
         target_key = _canonical_node_key(target_task_id)
-        visited_keys: set[str] = set()
+        best_depth: dict[str, int] = {}
+        emitted_keys: set[str] = set()
         ordered_closure: list[ArtifactNode] = []
 
         def dfs(current_id: str, depth: int) -> None:
             node = self.graph.get_node(current_id)
             curr_key = _canonical_node_key(node.node_id if node else current_id)
-            if curr_key in visited_keys or depth > depth_limit:
+            if depth > depth_limit:
                 return
-            visited_keys.add(curr_key)
+            prev_depth = best_depth.get(curr_key)
+            if prev_depth is not None and depth >= prev_depth:
+                return
+            best_depth[curr_key] = depth
 
             if node is None:
                 return
@@ -1002,7 +1016,12 @@ class ContextSlicer:
             for parent_id in node.dependencies:
                 dfs(parent_id, depth + 1)
 
-            if node.layer in allowed_layers and curr_key != target_key:
+            if (
+                node.layer in allowed_layers
+                and curr_key != target_key
+                and curr_key not in emitted_keys
+            ):
+                emitted_keys.add(curr_key)
                 ordered_closure.append(node)
 
         dfs(target_task_id, 0)
@@ -1537,6 +1556,35 @@ class StackPolicyValidator:
                                 "(strict allowlist active)."
                             )
 
+    @staticmethod
+    def _strip_inline_comment(line: str, *, is_python: bool) -> str:
+        """Strip trailing `#` (Python) or `//` (JS/TS/Go/Rust) comments outside string literals."""
+        in_single = False
+        in_double = False
+        escaped = False
+        n = len(line)
+        for idx, ch in enumerate(line):
+            if escaped:
+                escaped = False
+                continue
+            if ch == "\\" and (in_single or in_double):
+                escaped = True
+                continue
+            if ch == "'" and not in_double:
+                in_single = not in_single
+                continue
+            if ch == '"' and not in_single:
+                in_double = not in_double
+                continue
+            if not in_single and not in_double:
+                if is_python and ch == "#":
+                    return line[:idx].strip()
+                if not is_python and ch == "/" and idx + 1 < n and line[idx + 1] == "/":
+                    if idx > 0 and line[idx - 1] == ":":
+                        continue
+                    return line[:idx].strip()
+        return line.strip()
+
     def _scan_banned_patterns(self, banned_patterns: list[str]) -> list[str]:
         """Scan source files for prohibited AST / string patterns (skipping Python docstrings)."""
         violations: list[str] = []
@@ -1553,12 +1601,13 @@ class StackPolicyValidator:
                 text = _read_bounded_text(file_path)
                 if text is None:
                     continue
-                doc_lines = _python_docstring_lines(text) if file.endswith(".py") else set()
+                is_py = file.endswith(".py")
+                doc_lines = _python_docstring_lines(text) if is_py else set()
                 rel_path = file_path.resolve().relative_to(self.root_dir).as_posix()
                 for line_no, line in enumerate(text.splitlines(), 1):
                     if line_no in doc_lines:
                         continue
-                    code_part = line.split("#")[0].split("//")[0].strip()
+                    code_part = self._strip_inline_comment(line, is_python=is_py)
                     for pattern in banned_patterns:
                         if pattern in code_part:
                             violations.append(

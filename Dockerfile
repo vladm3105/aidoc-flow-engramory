@@ -20,7 +20,10 @@ FROM python:3.12-slim-bookworm
 ARG USER_ID=1004
 ARG GROUP_ID=1004
 
-RUN groupadd -g ${GROUP_ID} engramory && \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    && rm -rf /var/lib/apt/lists/* && \
+    groupadd -g ${GROUP_ID} engramory && \
     useradd -u ${USER_ID} -g engramory -m -s /bin/bash engramory && \
     mkdir -p /var/spool/interlog && \
     chown -R engramory:engramory /var/spool/interlog

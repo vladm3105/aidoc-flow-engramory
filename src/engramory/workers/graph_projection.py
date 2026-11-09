@@ -14,6 +14,11 @@ from engramory.ports import GraphPort
 logger = logging.getLogger(__name__)
 
 
+_SDD_LAYERS = frozenset(
+    {"BRD", "PRD", "EARS", "BDD", "ADR", "SPEC", "TDD", "TASK", "IPLAN", "CHG", "EVAL"}
+)
+
+
 async def project_entities(
     repo: Repository,
     graph: GraphPort,
@@ -30,9 +35,12 @@ async def project_entities(
             "tenant_id": entity.tenant_id,
             **entity.properties,
         }
+        labels = [entity.entity_type]
+        if entity.entity_type in _SDD_LAYERS or entity.properties.get("sdd"):
+            labels.append("SDD")
         await graph.upsert_node(
             id=entity.id,
-            labels=[entity.entity_type],
+            labels=labels,
             props=props,
         )
         count += 1

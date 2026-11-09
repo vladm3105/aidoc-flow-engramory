@@ -171,7 +171,8 @@ class Repository:
                     _memory_params(memory),
                 )
             ).fetchone()
-            assert row is not None
+            if row is None:
+                raise RuntimeError("INSERT INTO memories did not return id")
             if memory.supersedes is not None:
                 # tenant_id guard: the tenant wall (ADR-07) holds on the write
                 # path too — a supersede can never end-date a foreign-tenant row.
@@ -194,8 +195,12 @@ class Repository:
         async with self._conn() as conn:
             row = await (
                 await conn.execute(
-                    f"""
-                    SELECT {_MEMORY_COLUMNS} FROM memories
+                    """
+                    SELECT id, agent_id, project_id, domain_id, tenant_id, scope, type,
+                           content_raw, summary, embedding_model, embedding_dims,
+                           provenance, confidence, status, source_trust,
+                           valid_from, valid_to, supersedes
+                    FROM memories
                     WHERE id = %(id)s AND tenant_id = %(tenant_id)s
                     """,
                     {"id": memory_id, "tenant_id": tenant_id},
@@ -230,16 +235,49 @@ class Repository:
                 f"feedback outcome must be one of {sorted(FEEDBACK_OUTCOMES)}: {outcome!r}"
             )
         async with self._conn() as conn:
-            cur = await conn.execute(
-                """
-                UPDATE memory_retrievals
-                SET feedback = %(outcome)s, feedback_at = now()
-                WHERE id = %(id)s AND tenant_id = %(tenant_id)s
-                """,
-                {"id": retrieval_id, "outcome": outcome, "tenant_id": tenant_id},
-            )
-            if cur.rowcount != 1:
-                raise KeyError(retrieval_id)
+            async with conn.transaction():
+                row = await (
+                    await conn.execute(
+                        """
+                        UPDATE memory_retrievals
+                        SET feedback = %(outcome)s, feedback_at = now()
+                        WHERE id = %(id)s AND tenant_id = %(tenant_id)s
+                        RETURNING memory_id
+                        """,
+                        {"id": retrieval_id, "outcome": outcome, "tenant_id": tenant_id},
+                    )
+                ).fetchone()
+                if row is None:
+                    raise KeyError(retrieval_id)
+                memory_id = row["memory_id"]
+                if outcome == "useful":
+                    await conn.execute(
+                        """
+                        UPDATE memories
+                        SET confidence = LEAST(1.0, confidence + 0.05)
+                        WHERE id = %(memory_id)s AND tenant_id = %(tenant_id)s
+                        """,
+                        {"memory_id": memory_id, "tenant_id": tenant_id},
+                    )
+                elif outcome == "not_useful":
+                    await conn.execute(
+                        """
+                        UPDATE memories
+                        SET confidence = GREATEST(0.0, confidence - 0.10)
+                        WHERE id = %(memory_id)s AND tenant_id = %(tenant_id)s
+                        """,
+                        {"memory_id": memory_id, "tenant_id": tenant_id},
+                    )
+                elif outcome == "harmful":
+                    await conn.execute(
+                        """
+                        UPDATE memories
+                        SET confidence = GREATEST(0.0, confidence - 0.30),
+                            status = 'quarantined'
+                        WHERE id = %(memory_id)s AND tenant_id = %(tenant_id)s
+                        """,
+                        {"memory_id": memory_id, "tenant_id": tenant_id},
+                    )
 
     async def get_retrieval_feedback(self, *, tenant_id: str, memory_id: str) -> list[str | None]:
         """Feedback values for a memory's retrievals, oldest first (tests/eval)."""
@@ -367,6 +405,7 @@ class Repository:
         project_id: str | None = None,
         domain_id: str | None = None,
         k: int = 8,
+        query: str | None = None,
         query_vec: Sequence[float] | None = None,
         scopes: Sequence[str] | None = None,
     ) -> list[Memory]:
@@ -376,31 +415,70 @@ class Repository:
         means the full ladder (repo-level tooling — the access surface always
         passes the caller's granted subset).
 
-        Ranked by cosine similarity to ``query_vec`` when given (rows without
-        an embedding projection are excluded — they cannot be ranked), by
-        recency otherwise.
+        Ranked by cosine similarity to ``query_vec`` when given (with fallback
+        lexical/substring boost for ``query``), by recency otherwise.
         """
+        _visibility_sql(scopes)
+        levels = tuple(scopes) if scopes is not None else tuple(_SCOPE_CLAUSES)
+        has_qv = query_vec is not None and len(query_vec) == 1536
+        has_q = bool(query and query.strip())
         params: dict[str, Any] = {
             "tenant_id": tenant_id,
             "agent_id": agent_id,
             "project_id": project_id,
             "domain_id": domain_id,
             "k": k,
+            "inc_agent": "agent" in levels,
+            "inc_project": "project" in levels,
+            "inc_domain": "domain" in levels,
+            "inc_space": "space" in levels,
+            "qv": vector_literal(query_vec) if has_qv and query_vec is not None else None,
+            "q_like": f"%{query.strip()}%" if has_q and query is not None else None,
         }
-        if query_vec is not None:
-            extra = "AND embedding IS NOT NULL"
-            order = "embedding <=> %(qv)s::vector"
-            params["qv"] = vector_literal(query_vec)
-        else:
-            extra = ""
-            order = "valid_from DESC"
         async with self._conn() as conn:
             rows = await (
                 await conn.execute(
-                    f"""
-                    SELECT {_MEMORY_COLUMNS} FROM memories
-                    WHERE {_visibility_sql(scopes)} {extra}
-                    ORDER BY {order}
+                    """
+                    SELECT id, agent_id, project_id, domain_id, tenant_id, scope, type,
+                           content_raw, summary, embedding_model, embedding_dims,
+                           provenance, confidence, status, source_trust,
+                           valid_from, valid_to, supersedes
+                    FROM memories
+                    WHERE tenant_id = %(tenant_id)s
+                      AND valid_to IS NULL
+                      AND status = 'active'
+                      AND (
+                          (%(inc_agent)s AND scope = 'agent' AND agent_id = %(agent_id)s)
+                          OR (
+                              %(inc_project)s
+                              AND scope = 'project'
+                              AND project_id IS NOT NULL
+                              AND project_id = %(project_id)s
+                          )
+                          OR (
+                              %(inc_domain)s
+                              AND scope = 'domain'
+                              AND domain_id IS NOT NULL
+                              AND domain_id = %(domain_id)s
+                          )
+                          OR (%(inc_space)s AND scope = 'space')
+                      )
+                    ORDER BY
+                      CASE
+                        WHEN %(qv)s::text IS NOT NULL AND embedding IS NOT NULL
+                          THEN embedding <=> %(qv)s::vector
+                        ELSE 2.0
+                      END ASC,
+                      CASE
+                        WHEN %(q_like)s::text IS NOT NULL
+                             AND (
+                                 content_raw ILIKE %(q_like)s
+                                 OR coalesce(summary, '') ILIKE %(q_like)s
+                             )
+                          THEN 1
+                        ELSE 0
+                      END DESC,
+                      valid_from DESC
                     LIMIT %(k)s
                     """,
                     params,
@@ -495,41 +573,50 @@ class Repository:
 
         for i in range(0, len(unique_sections), chunk_size):
             chunk = unique_sections[i : i + chunk_size]
-            values_clauses = []
-            params: dict[str, Any] = {}
-            for idx, sec in enumerate(chunk):
-                p = f"s{idx}_"
-                values_clauses.append(
-                    f"(%({p}tenant)s, %({p}project)s, %({p}domain)s, "
-                    f"%({p}scope)s, %({p}doc_id)s, %({p}citation)s, "
-                    f"%({p}text)s, %({p}version)s)"
-                )
-                params[f"{p}tenant"] = sec.tenant_id
-                params[f"{p}project"] = sec.project_id
-                params[f"{p}domain"] = sec.domain_id
-                params[f"{p}scope"] = sec.scope
-                params[f"{p}doc_id"] = sec.doc_id
-                params[f"{p}citation"] = sec.citation
-                params[f"{p}text"] = sec.text
-                params[f"{p}version"] = sec.version
-
-            sql = f"""
-                INSERT INTO kb_sections
-                    (tenant_id, project_id, domain_id, scope, doc_id, citation,
-                     text, version)
-                VALUES {", ".join(values_clauses)}
-                ON CONFLICT (tenant_id, doc_id, citation, version)
-                    DO UPDATE SET
-                        project_id = COALESCE(EXCLUDED.project_id, kb_sections.project_id),
-                        domain_id = COALESCE(EXCLUDED.domain_id, kb_sections.domain_id),
-                        scope = EXCLUDED.scope,
-                        text = EXCLUDED.text
-                    WHERE kb_sections.project_id IS NULL
-                       OR kb_sections.project_id = EXCLUDED.project_id
-                RETURNING id, tenant_id, doc_id, citation, version
-            """
+            params: dict[str, Any] = {
+                "tenants": [sec.tenant_id for sec in chunk],
+                "projects": [sec.project_id for sec in chunk],
+                "domains": [sec.domain_id for sec in chunk],
+                "scopes": [sec.scope for sec in chunk],
+                "doc_ids": [sec.doc_id for sec in chunk],
+                "citations": [sec.citation for sec in chunk],
+                "texts": [sec.text for sec in chunk],
+                "versions": [sec.version for sec in chunk],
+            }
             async with self._conn() as conn:
-                rows = await (await conn.execute(sql, params)).fetchall()
+                rows = await (
+                    await conn.execute(
+                        """
+                        INSERT INTO kb_sections
+                            (tenant_id, project_id, domain_id, scope, doc_id, citation,
+                             text, version)
+                        SELECT * FROM UNNEST(
+                            %(tenants)s::text[],
+                            %(projects)s::text[],
+                            %(domains)s::text[],
+                            %(scopes)s::text[],
+                            %(doc_ids)s::text[],
+                            %(citations)s::text[],
+                            %(texts)s::text[],
+                            %(versions)s::int[]
+                        )
+                        ON CONFLICT (tenant_id, doc_id, citation, version)
+                            DO UPDATE SET
+                                project_id = COALESCE(
+                                    EXCLUDED.project_id, kb_sections.project_id
+                                ),
+                                domain_id = COALESCE(
+                                    EXCLUDED.domain_id, kb_sections.domain_id
+                                ),
+                                scope = EXCLUDED.scope,
+                                text = EXCLUDED.text
+                            WHERE kb_sections.project_id IS NULL
+                               OR kb_sections.project_id = EXCLUDED.project_id
+                        RETURNING id, tenant_id, doc_id, citation, version
+                        """,
+                        params,
+                    )
+                ).fetchall()
                 if len(rows) != len(chunk):
                     raise ValidationError(
                         "Cross-project kb_section batch collision: one or more sections "
@@ -588,8 +675,10 @@ class Repository:
         async with self._conn() as conn:
             row = await (
                 await conn.execute(
-                    f"""
-                    SELECT {_KB_SECTION_COLUMNS} FROM kb_sections
+                    """
+                    SELECT id, tenant_id, project_id, domain_id, scope, doc_id,
+                           citation, text, version
+                    FROM kb_sections
                     WHERE id = %(id)s AND tenant_id = %(tenant_id)s
                     """,
                     {"id": section_id, "tenant_id": tenant_id},
@@ -608,21 +697,22 @@ class Repository:
         limit: int = 50,
     ) -> list[KBSection]:
         """List knowledge sections matching tenant and optional project/doc_id."""
-        clauses = ["tenant_id = %(tenant_id)s"]
-        params: dict[str, Any] = {"tenant_id": tenant_id, "limit": limit}
-        if project_id is not None:
-            clauses.append("project_id = %(project_id)s")
-            params["project_id"] = project_id
-        if doc_id is not None:
-            clauses.append("doc_id = %(doc_id)s")
-            params["doc_id"] = doc_id
-        where = " AND ".join(clauses)
+        params: dict[str, Any] = {
+            "tenant_id": tenant_id,
+            "project_id": project_id,
+            "doc_id": doc_id,
+            "limit": limit,
+        }
         async with self._conn() as conn:
             rows = await (
                 await conn.execute(
-                    f"""
-                    SELECT {_KB_SECTION_COLUMNS} FROM kb_sections
-                    WHERE {where}
+                    """
+                    SELECT id, tenant_id, project_id, domain_id, scope, doc_id,
+                           citation, text, version
+                    FROM kb_sections
+                    WHERE tenant_id = %(tenant_id)s
+                      AND (%(project_id)s::text IS NULL OR project_id = %(project_id)s)
+                      AND (%(doc_id)s::text IS NULL OR doc_id = %(doc_id)s)
                     ORDER BY doc_id, version DESC, id
                     LIMIT %(limit)s
                     """,
@@ -644,55 +734,128 @@ class Repository:
     ) -> list[KBSection]:
         """Search knowledge sections by vector similarity (if query_vec is provided)
         or by text matching (ILIKE fallback). Guarded by tenant and scope hierarchy."""
-        clauses = ["tenant_id = %(tenant_id)s"]
         params: dict[str, Any] = {
             "tenant_id": tenant_id,
             "project_id": project_id,
             "domain_id": domain_id,
             "scope": scope,
             "limit": limit,
+            "qv": vector_literal(query_vec) if query_vec is not None else None,
+            "pattern": f"%{query}%",
         }
-
-        if scope == "space":
-            clauses.append(
-                "(scope = 'space' OR "
-                "(%(project_id)s::text IS NOT NULL AND project_id = %(project_id)s))"
-            )
-        elif scope == "domain":
-            clauses.append(
-                "((scope = 'domain' AND "
-                "(%(domain_id)s::text IS NULL OR domain_id = %(domain_id)s)) "
-                "OR scope = 'space' "
-                "OR (%(project_id)s::text IS NOT NULL AND project_id = %(project_id)s))"
-            )
-        else:
-            if project_id is not None:
-                clauses.append("(project_id = %(project_id)s OR scope = 'space')")
-            if scope is not None:
-                clauses.append("scope IN (%(scope)s, 'space')")
-
-        if query_vec is not None:
-            clauses.append("embedding IS NOT NULL")
-            order = "embedding <=> %(qv)s::vector"
-            params["qv"] = vector_literal(query_vec)
-        else:
-            clauses.append("text ILIKE %(pattern)s")
-            params["pattern"] = f"%{query}%"
-            order = "version DESC, id"
-
-        where = " AND ".join(clauses)
         async with self._conn() as conn:
-            rows = await (
-                await conn.execute(
-                    f"""
-                    SELECT {_KB_SECTION_COLUMNS} FROM kb_sections
-                    WHERE {where}
-                    ORDER BY {order}
-                    LIMIT %(limit)s
-                    """,
-                    params,
-                )
-            ).fetchall()
+            if query_vec is not None:
+                rows = await (
+                    await conn.execute(
+                        """
+                        SELECT id, tenant_id, project_id, domain_id, scope, doc_id,
+                               citation, text, version
+                        FROM kb_sections
+                        WHERE tenant_id = %(tenant_id)s
+                          AND (
+                              (
+                                  %(scope)s::text = 'space'
+                                  AND (
+                                      scope = 'space'
+                                      OR (
+                                          %(project_id)s::text IS NOT NULL
+                                          AND project_id = %(project_id)s
+                                      )
+                                  )
+                              )
+                              OR (
+                                  %(scope)s::text = 'domain'
+                                  AND (
+                                      (
+                                          scope = 'domain'
+                                          AND (
+                                              %(domain_id)s::text IS NULL
+                                              OR domain_id = %(domain_id)s
+                                          )
+                                      )
+                                      OR scope = 'space'
+                                      OR (
+                                          %(project_id)s::text IS NOT NULL
+                                          AND project_id = %(project_id)s
+                                      )
+                                  )
+                              )
+                              OR (
+                                  coalesce(%(scope)s::text, '') NOT IN ('space', 'domain')
+                                  AND (
+                                      %(project_id)s::text IS NULL
+                                      OR project_id = %(project_id)s
+                                      OR scope = 'space'
+                                  )
+                                  AND (
+                                      %(scope)s::text IS NULL
+                                      OR scope IN (%(scope)s, 'space')
+                                  )
+                              )
+                          )
+                          AND embedding IS NOT NULL
+                        ORDER BY embedding <=> %(qv)s::vector
+                        LIMIT %(limit)s
+                        """,
+                        params,
+                    )
+                ).fetchall()
+            else:
+                rows = await (
+                    await conn.execute(
+                        """
+                        SELECT id, tenant_id, project_id, domain_id, scope, doc_id,
+                               citation, text, version
+                        FROM kb_sections
+                        WHERE tenant_id = %(tenant_id)s
+                          AND (
+                              (
+                                  %(scope)s::text = 'space'
+                                  AND (
+                                      scope = 'space'
+                                      OR (
+                                          %(project_id)s::text IS NOT NULL
+                                          AND project_id = %(project_id)s
+                                      )
+                                  )
+                              )
+                              OR (
+                                  %(scope)s::text = 'domain'
+                                  AND (
+                                      (
+                                          scope = 'domain'
+                                          AND (
+                                              %(domain_id)s::text IS NULL
+                                              OR domain_id = %(domain_id)s
+                                          )
+                                      )
+                                      OR scope = 'space'
+                                      OR (
+                                          %(project_id)s::text IS NOT NULL
+                                          AND project_id = %(project_id)s
+                                      )
+                                  )
+                              )
+                              OR (
+                                  coalesce(%(scope)s::text, '') NOT IN ('space', 'domain')
+                                  AND (
+                                      %(project_id)s::text IS NULL
+                                      OR project_id = %(project_id)s
+                                      OR scope = 'space'
+                                  )
+                                  AND (
+                                      %(scope)s::text IS NULL
+                                      OR scope IN (%(scope)s, 'space')
+                                  )
+                              )
+                          )
+                          AND text ILIKE %(pattern)s
+                        ORDER BY version DESC, id
+                        LIMIT %(limit)s
+                        """,
+                        params,
+                    )
+                ).fetchall()
             return [_hydrate_kb_section(row) for row in rows]
 
     async def record_audit(
@@ -772,7 +935,8 @@ class Repository:
                         },
                     )
                 ).fetchone()
-                assert row is not None
+                if row is None:
+                    raise RuntimeError("INSERT INTO memory_retrievals did not return id")
                 retrieval_ids.append(str(row["id"]))
             # tenant guard: defense-in-depth — this public method must never
             # bump a foreign tenant's usage signals.
@@ -965,15 +1129,13 @@ class Repository:
         Foreign keys automatically cascade-delete associated relations.
         Returns the list of deleted entity IDs.
         """
-        if not active_ids:
-            return []
         async with self._conn() as conn:
             async with conn.transaction():
                 query = """
                 SELECT id FROM graph_entities
                 WHERE tenant_id = %(tenant_id)s
                   AND properties->>'project_id' = %(project_id)s
-                  AND NOT id = ANY(%(active_ids)s)
+                  AND NOT id = ANY(%(active_ids)s::text[])
                 """
                 cur = await conn.execute(
                     query,
@@ -992,7 +1154,7 @@ class Repository:
                     """
                     DELETE FROM graph_entities
                     WHERE tenant_id = %(tenant_id)s
-                      AND id = ANY(%(stale_ids)s)
+                      AND id = ANY(%(stale_ids)s::text[])
                     """,
                     {"tenant_id": tenant_id, "stale_ids": stale_ids},
                 )
@@ -1030,24 +1192,25 @@ class Repository:
         project_id: str | None = None,
     ) -> list[GraphEntity]:
         """List canonical graph entities with optional entity_type and project_id filter."""
-        clauses = ["tenant_id = %(tenant_id)s"]
-        params: dict[str, Any] = {"tenant_id": tenant_id}
-        if entity_type:
-            clauses.append("entity_type = %(entity_type)s")
-            params["entity_type"] = entity_type
-        if project_id is not None:
-            clauses.append(
-                "(properties->>'project_id' IS NULL OR properties->>'project_id' = %(project_id)s)"
-            )
-            params["project_id"] = project_id
+        params: dict[str, Any] = {
+            "tenant_id": tenant_id,
+            "entity_type": entity_type or None,
+            "project_id": project_id,
+        }
 
         async with self._conn() as conn:
             rows = await (
                 await conn.execute(
-                    f"""
+                    """
                     SELECT id, tenant_id, domain_id, entity_type, name, properties
                     FROM graph_entities
-                    WHERE {" AND ".join(clauses)}
+                    WHERE tenant_id = %(tenant_id)s
+                      AND (%(entity_type)s::text IS NULL OR entity_type = %(entity_type)s)
+                      AND (
+                          %(project_id)s::text IS NULL
+                          OR properties->>'project_id' IS NULL
+                          OR properties->>'project_id' = %(project_id)s
+                      )
                     ORDER BY id ASC
                     """,
                     params,
@@ -1069,19 +1232,23 @@ class Repository:
         self, *, tenant_id: str = "default", entity_id: str | None = None
     ) -> list[GraphRelation]:
         """List canonical graph relations, optionally connected to entity_id."""
-        clauses = ["tenant_id = %(tenant_id)s"]
-        params: dict[str, Any] = {"tenant_id": tenant_id}
-        if entity_id:
-            clauses.append("(src_id = %(eid)s OR dst_id = %(eid)s)")
-            params["eid"] = entity_id
+        params: dict[str, Any] = {
+            "tenant_id": tenant_id,
+            "eid": entity_id or None,
+        }
 
         async with self._conn() as conn:
             rows = await (
                 await conn.execute(
-                    f"""
+                    """
                     SELECT id, tenant_id, src_id, dst_id, rel_type, properties
                     FROM graph_relations
-                    WHERE {" AND ".join(clauses)}
+                    WHERE tenant_id = %(tenant_id)s
+                      AND (
+                          %(eid)s::text IS NULL
+                          OR src_id = %(eid)s
+                          OR dst_id = %(eid)s
+                      )
                     ORDER BY created_at ASC
                     """,
                     params,
@@ -1279,17 +1446,25 @@ class Repository:
 
     async def _count(self, table: str, tenant_id: str) -> int:
         # Security guard, not an assert: asserts vanish under `python -O`,
-        # and this is the only barrier before f-string SQL interpolation.
-        if table not in {"episodes", "kb_sections", "graph_entities", "graph_relations"}:
+        # and this is the only barrier before table lookup.
+        count_queries = {
+            "episodes": "SELECT count(*) AS n FROM episodes WHERE tenant_id = %(t)s",
+            "kb_sections": "SELECT count(*) AS n FROM kb_sections WHERE tenant_id = %(t)s",
+            "graph_entities": "SELECT count(*) AS n FROM graph_entities WHERE tenant_id = %(t)s",
+            "graph_relations": "SELECT count(*) AS n FROM graph_relations WHERE tenant_id = %(t)s",
+        }
+        query_sql = count_queries.get(table)
+        if query_sql is None:
             raise ValueError(f"refusing to interpolate table name: {table!r}")
         async with self._conn() as conn:
             row = await (
                 await conn.execute(
-                    f"SELECT count(*) AS n FROM {table} WHERE tenant_id = %(t)s",
+                    query_sql,
                     {"t": tenant_id},
                 )
             ).fetchone()
-            assert row is not None
+            if row is None:
+                raise RuntimeError("SELECT count(*) returned no row")
             return int(row["n"])
 
     async def upsert_kb_document(self, doc: KBDocument) -> str:

@@ -6,6 +6,7 @@ PostgreSQL remains the canonical source of truth for entities and relations.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from collections.abc import Mapping, Sequence
@@ -13,9 +14,11 @@ from typing import Any
 
 from neo4j import AsyncDriver, AsyncGraphDatabase
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_NEO4J_URI = "bolt://localhost:7687"
 DEFAULT_NEO4J_USER = "neo4j"
-DEFAULT_NEO4J_PASSWORD = "change_me"
+DEFAULT_NEO4J_PASSWORD = "change_me"  # nosec B105  # reason: local dev default placeholder when NEO4J_PASSWORD is unset
 
 _IDENT_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
@@ -75,8 +78,8 @@ class Neo4jGraphAdapter:
         async with self._driver.session() as session:
             try:
                 await session.run(drop_old)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Optional legacy constraint drop skipped: %s", exc)
             await session.run(query)
 
     async def upsert_node(
@@ -102,10 +105,16 @@ class Neo4jGraphAdapter:
         query = f"""
         MERGE (n:Entity {{uid: $uid}})
         ON CREATE SET n.id = $id, n.tenant_id = $tenant_id, n{label_str}, n += $props
-        ON MATCH SET n{label_str}, n += CASE
-            WHEN n.project_id IS NULL OR n.project_id = $project_id THEN $props
+        ON MATCH SET n += CASE
+            WHEN n.project_id IS NULL OR $project_id IS NULL OR n.project_id = $project_id
+            THEN $props
             ELSE {{}}
         END
+        FOREACH (_ IN CASE
+            WHEN n.project_id IS NULL OR $project_id IS NULL OR n.project_id = $project_id
+            THEN [1]
+            ELSE []
+        END | SET n{label_str})
         """
         async with self._driver.session() as session:
             await session.run(
@@ -131,16 +140,33 @@ class Neo4jGraphAdapter:
         sanitized_rel = _sanitize_ident(rel, "relationship type")
         clean_props = dict(props or {})
         tenant_id = clean_props.get("tenant_id", "default")
+        project_id = clean_props.get("project_id")
         src_uid = f"{tenant_id}:{src}"
         dst_uid = f"{tenant_id}:{dst}"
 
         query = f"""
         MERGE (a:Entity {{uid: $src_uid}})
-        ON CREATE SET a.id = $src, a.tenant_id = $tenant_id
+        ON CREATE SET a.id = $src, a.tenant_id = $tenant_id, a.project_id = $project_id
         MERGE (b:Entity {{uid: $dst_uid}})
-        ON CREATE SET b.id = $dst, b.tenant_id = $tenant_id
+        ON CREATE SET b.id = $dst, b.tenant_id = $tenant_id, b.project_id = $project_id
+        WITH a, b
+        WHERE (a.tenant_id = $tenant_id OR ($tenant_id = 'default' AND a.tenant_id IS NULL))
+          AND (b.tenant_id = $tenant_id OR ($tenant_id = 'default' AND b.tenant_id IS NULL))
+          AND ($project_id IS NULL OR a.project_id IS NULL OR a.project_id = $project_id)
+          AND ($project_id IS NULL OR b.project_id IS NULL OR b.project_id = $project_id)
         MERGE (a)-[r:`{sanitized_rel}`]->(b)
-        SET r += $props
+        ON CREATE SET r.project_id = $project_id, r += $props
+        ON MATCH SET
+            r.project_id = CASE
+                WHEN r.project_id IS NULL OR $project_id IS NULL
+                THEN coalesce($project_id, r.project_id)
+                ELSE r.project_id
+            END,
+            r += CASE
+                WHEN r.project_id IS NULL OR $project_id IS NULL OR r.project_id = $project_id
+                THEN $props
+                ELSE {{}}
+            END
         """
         async with self._driver.session() as session:
             await session.run(
@@ -151,6 +177,7 @@ class Neo4jGraphAdapter:
                     "src": src,
                     "dst": dst,
                     "tenant_id": tenant_id,
+                    "project_id": project_id,
                     "props": clean_props,
                 },
             )
@@ -184,17 +211,16 @@ class Neo4jGraphAdapter:
             OR n.uid = $prefixed_uid
             OR (
                 (n.id = $id OR n.id = $prefixed_id)
-                AND ($tenant_id = 'default' OR n.tenant_id = $tenant_id)
+                AND (n.tenant_id = $tenant_id OR ($tenant_id = 'default' AND n.tenant_id IS NULL))
             )
         )
-        MATCH (n)-[{rel_pattern}]-(m:Entity)
-        WHERE (m.tenant_id = n.tenant_id) AND m <> n
-          AND (
-              $project_id IS NULL
-              OR (
-                  (n.project_id IS NULL OR n.project_id = $project_id)
-                  AND (m.project_id IS NULL OR m.project_id = $project_id)
-              )
+        MATCH p = (n)-[{rel_pattern}]-(m:Entity)
+        WHERE m <> n
+          AND (m.tenant_id = $tenant_id OR ($tenant_id = 'default' AND m.tenant_id IS NULL))
+          AND ALL(
+              x IN nodes(p)
+              WHERE (x.tenant_id = $tenant_id OR ($tenant_id = 'default' AND x.tenant_id IS NULL))
+                AND ($project_id IS NULL OR x.project_id IS NULL OR x.project_id = $project_id)
           )
         RETURN DISTINCT m.id AS id, labels(m) AS labels, properties(m) AS properties
         """
@@ -249,17 +275,16 @@ class Neo4jGraphAdapter:
             OR n.uid = $prefixed_uid
             OR (
                 (n.id = $id OR n.id = $prefixed_id)
-                AND ($tenant_id = 'default' OR n.tenant_id = $tenant_id)
+                AND (n.tenant_id = $tenant_id OR ($tenant_id = 'default' AND n.tenant_id IS NULL))
             )
         )
-        MATCH (n)-[{rel_pattern}]->(m:Entity)
-        WHERE (m.tenant_id = n.tenant_id) AND m <> n
-          AND (
-              $project_id IS NULL
-              OR (
-                  (n.project_id IS NULL OR n.project_id = $project_id)
-                  AND (m.project_id IS NULL OR m.project_id = $project_id)
-              )
+        MATCH p = (n)-[{rel_pattern}]->(m:Entity)
+        WHERE m <> n
+          AND (m.tenant_id = $tenant_id OR ($tenant_id = 'default' AND m.tenant_id IS NULL))
+          AND ALL(
+              x IN nodes(p)
+              WHERE (x.tenant_id = $tenant_id OR ($tenant_id = 'default' AND x.tenant_id IS NULL))
+                AND ($project_id IS NULL OR x.project_id IS NULL OR x.project_id = $project_id)
           )
         RETURN DISTINCT m.id AS id, labels(m) AS labels, properties(m) AS properties
         """
@@ -314,17 +339,16 @@ class Neo4jGraphAdapter:
             OR n.uid = $prefixed_uid
             OR (
                 (n.id = $id OR n.id = $prefixed_id)
-                AND ($tenant_id = 'default' OR n.tenant_id = $tenant_id)
+                AND (n.tenant_id = $tenant_id OR ($tenant_id = 'default' AND n.tenant_id IS NULL))
             )
         )
-        MATCH (m:Entity)-[{rel_pattern}]->(n)
-        WHERE (m.tenant_id = n.tenant_id) AND m <> n
-          AND (
-              $project_id IS NULL
-              OR (
-                  (n.project_id IS NULL OR n.project_id = $project_id)
-                  AND (m.project_id IS NULL OR m.project_id = $project_id)
-              )
+        MATCH p = (m:Entity)-[{rel_pattern}]->(n)
+        WHERE m <> n
+          AND (m.tenant_id = $tenant_id OR ($tenant_id = 'default' AND m.tenant_id IS NULL))
+          AND ALL(
+              x IN nodes(p)
+              WHERE (x.tenant_id = $tenant_id OR ($tenant_id = 'default' AND x.tenant_id IS NULL))
+                AND ($project_id IS NULL OR x.project_id IS NULL OR x.project_id = $project_id)
           )
         RETURN DISTINCT m.id AS id, labels(m) AS labels, properties(m) AS properties
         """
@@ -390,7 +414,10 @@ class Neo4jGraphAdapter:
         whose IDs are not in active_ids.
         """
         active_uids = [f"{tenant_id}:{i}" for i in active_ids]
-        where_clauses = ["n.tenant_id = $tenant_id", "NOT n.uid IN $active_uids"]
+        where_clauses = [
+            "(n.tenant_id = $tenant_id OR ($tenant_id = 'default' AND n.tenant_id IS NULL))",
+            "NOT n.uid IN $active_uids",
+        ]
         params: dict[str, Any] = {"tenant_id": tenant_id, "active_uids": active_uids}
         if project_id:
             where_clauses.append("n.project_id = $project_id")

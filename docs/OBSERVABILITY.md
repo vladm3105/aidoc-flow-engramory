@@ -59,7 +59,6 @@ To ensure unambiguous service topology maps in the Coroot UI (`http://100.98.134
 | `engramory-mcp` | MCP Gateway (FastAPI / SSE) | `8000` | Inbound HTTP/SSE throughput, error rates (5xx), latency percentiles (p50/p95/p99). |
 | `engramory-postgres` | Canonical Distilled Storage (`pgvector`) | `5432` | Top slow queries, table locks, connection pool exhaustion, index scans. |
 | `engramory-neo4j` | Knowledge Graph Projection | `7687` (Bolt), `7474` (HTTP) | Cypher query latency, heap/pagecache utilization, Bolt connection lifetime. |
-| `engramory-seaweedfs` | Raw Content S3 Object Store | `9000` (S3), `8888` (Filer) | S3 PUT/GET throughput, storage IOPS, volume server status. |
 | `engramory-redis` | Ephemeral Caching & Locks | `6379` | Command latency, key hit rates, connection counts. |
 | `engramory-worker` | Distillation & Reflection Daemon | N/A (background) | Background CPU/Memory cgroup consumption, database query throughput. |
 

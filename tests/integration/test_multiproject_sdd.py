@@ -276,6 +276,5 @@ async def test_reconcile_purges_stale_entities(repo: Repository, tmp_path: Path)
     assert n_ent2 == 1
     assert await repo.count_graph_entities(tenant_id=tenant) == 1
 
-    remaining = await repo.find_ancestors(id="TASK-01", tenant_id=tenant)
-    # TASK-01 exists
-    assert any(x["id"] == "TASK-01" for x in remaining) or True
+    assert await repo.get_graph_entity("TASK-01", tenant_id=tenant) is not None
+    assert await repo.get_graph_entity("TASK-02", tenant_id=tenant) is None

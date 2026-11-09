@@ -71,7 +71,7 @@ async def test_ingest_adr_knowledge_graph_and_traverse_surface(
         assert "ADR-01" in neighbor_ids or "ADR-02" in neighbor_ids
 
         # Test expand_graph_context
-        context_nodes = await expand_graph_context(graph, ["ADR-03"], depth=2)
+        context_nodes = await expand_graph_context(graph, ["ADR-03"], depth=2, tenant_id=tenant_id)
         assert len(context_nodes) > 0
 
         # Test canonical deletion in PostgreSQL

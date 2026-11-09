@@ -22,8 +22,8 @@
 ## 1. Stand up the store
 
 ```bash
-git clone https://github.com/vladm3105/aidoc-flow-engramory.git
-cd aidoc-flow-engramory
+git clone https://github.com/vladm3105/platform-engramory.git
+cd platform-engramory
 make up        # pgvector/pg16 + the rest of the dev stack
 make migrate   # applies db/migrations/*.sql in order
 ```

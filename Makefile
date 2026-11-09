@@ -10,6 +10,8 @@ endif
 
 POSTGRES_USER ?= engramory
 POSTGRES_DB   ?= engramory
+ENGRAMORY_EMBED_MODEL ?= text-embedding-3-small
+ENGRAMORY_EMBED_DIMS  ?= 1536
 
 help:          ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -30,9 +32,9 @@ migrate:       ## Apply all database migrations in order
 			-U $(POSTGRES_USER) -d $(POSTGRES_DB) -f /migrations/$$(basename $$f); \
 	done
 
-pull-models:   ## Pull local Ollama models used in dev (bge-m3 or nomic-embed-text)
+pull-models:   ## Pull local Ollama models used in dev (llama3.1 and bge-m3)
 	docker compose exec ollama ollama pull llama3.1
-	docker compose exec ollama ollama pull bge-m3 || docker compose exec ollama ollama pull nomic-embed-text
+	docker compose exec ollama ollama pull bge-m3
 
 lint:          ## Lint
 	ruff check src

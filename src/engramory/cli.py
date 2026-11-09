@@ -23,7 +23,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import inspect
 import json
+import logging
 import os
 import sys
 import tomllib
@@ -180,6 +182,17 @@ def _cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _close_adapters(adapters: Any) -> None:
+    graph = getattr(adapters, "graph", None)
+    if graph is not None and hasattr(graph, "close"):
+        try:
+            res = graph.close()
+            if inspect.isawaitable(res):
+                await res
+        except Exception as exc:  # noqa: BLE001  # reason: adapter cleanup must never mask command outcome
+            logging.getLogger(__name__).debug("Adapter close error ignored: %s", exc)
+
+
 def _run_with_surface(
     args: argparse.Namespace,
     op: Callable[[AccessSurface, ActorContext], Coroutine[Any, Any, dict[str, Any]]],
@@ -187,8 +200,19 @@ def _run_with_surface(
 ) -> int:
     config = _load_config(getattr(args, "config", None))
     adapters = dev_adapters(config.dsn)
-    surface = AccessSurface(Repository(config.dsn), graph=adapters.graph)
-    payload = asyncio.run(op(surface, config.ctx))
+    surface = AccessSurface(
+        Repository(config.dsn),
+        graph=adapters.graph,
+        llm=getattr(adapters, "llm", None),
+    )
+
+    async def _runner() -> dict[str, Any]:
+        try:
+            return await op(surface, config.ctx)
+        finally:
+            await _close_adapters(adapters)
+
+    payload = asyncio.run(_runner())
     _emit(args.json, payload, human(payload))
     return 0
 
@@ -247,15 +271,20 @@ def _cmd_memory_distill(args: argparse.Namespace) -> int:
     config = _load_config(getattr(args, "config", None))
     repo = Repository(config.dsn)
     adapters = dev_adapters(config.dsn)
-    created = asyncio.run(
-        reflect(
-            repo,
-            tenant_id=config.ctx.tenant_id,
-            agent_id=config.ctx.agent_id,
-            llm=adapters.llm,
-            vector=adapters.vector,
-        )
-    )
+
+    async def _run_distill() -> int:
+        try:
+            return await reflect(
+                repo,
+                tenant_id=config.ctx.tenant_id,
+                agent_id=config.ctx.agent_id,
+                llm=adapters.llm,
+                vector=adapters.vector,
+            )
+        finally:
+            await _close_adapters(adapters)
+
+    created = asyncio.run(_run_distill())
     _emit(args.json, {"created": created}, f"distilled {created} memorie(s)")
     return 0
 
@@ -305,25 +334,30 @@ def _cmd_knowledge_ingest(args: argparse.Namespace) -> int:
         _emit(args.json, {"files": 0, "sections": 0}, "No files found to ingest")
         return 0
 
+    from engramory.core.extraction.router import SmartExtractionRouter
     from engramory.core.knowledge import KnowledgeCore
 
-    core = KnowledgeCore(repo, llm=adapters.llm)
+    router = SmartExtractionRouter(enable_docling=bool(getattr(args, "docling", False)))
+    core = KnowledgeCore(repo, llm=adapters.llm, router=router)
 
     async def run_batch() -> dict[str, Any]:
-        results = await core.ingest_documents_batch(
-            files_to_ingest,
-            tenant_id=config.ctx.tenant_id,
-            project_id=config.ctx.project_id,
-            scope=getattr(args, "scope", "project"),
-            evidence_ref=getattr(args, "evidence_ref", None),
-            repo_root=target_path if target_path.is_dir() else None,
-        )
-        total_sections = sum(len(ids) for ids in results.values())
-        return {
-            "files": len(results),
-            "sections": total_sections,
-            "details": results,
-        }
+        try:
+            results = await core.ingest_documents_batch(
+                files_to_ingest,
+                tenant_id=config.ctx.tenant_id,
+                project_id=config.ctx.project_id,
+                scope=getattr(args, "scope", "project"),
+                evidence_ref=getattr(args, "evidence_ref", None),
+                repo_root=target_path if target_path.is_dir() else None,
+            )
+            total_sections = sum(len(ids) for ids in results.values())
+            return {
+                "files": len(results),
+                "sections": total_sections,
+                "details": results,
+            }
+        finally:
+            await _close_adapters(adapters)
 
     payload = asyncio.run(run_batch())
     _emit(
@@ -347,27 +381,30 @@ def _cmd_knowledge_sync_git(args: argparse.Namespace) -> int:
     engine = GitSyncEngine()
 
     async def run_sync() -> dict[str, Any]:
-        sync_result = await engine.sync(
-            repo,
-            repo_path=repo_path,
-            base_sha=base_sha,
-            head_sha=head_sha,
-            tenant_id=config.ctx.tenant_id,
-            project_id=config.ctx.project_id,
-            scope=getattr(args, "scope", "project"),
-            llm=adapters.llm,
-        )
-        return {
-            "success": sync_result.success,
-            "base_sha": sync_result.base_sha,
-            "head_sha": sync_result.head_sha,
-            "files_added": sync_result.files_added,
-            "files_modified": sync_result.files_modified,
-            "files_deleted": sync_result.files_deleted,
-            "files_skipped": sync_result.files_skipped,
-            "sections_created": sync_result.sections_created,
-            "duration_ms": sync_result.duration_ms,
-        }
+        try:
+            sync_result = await engine.sync(
+                repo,
+                repo_path=repo_path,
+                base_sha=base_sha,
+                head_sha=head_sha,
+                tenant_id=config.ctx.tenant_id,
+                project_id=config.ctx.project_id,
+                scope=getattr(args, "scope", "project"),
+                llm=adapters.llm,
+            )
+            return {
+                "success": sync_result.success,
+                "base_sha": sync_result.base_sha,
+                "head_sha": sync_result.head_sha,
+                "files_added": sync_result.files_added,
+                "files_modified": sync_result.files_modified,
+                "files_deleted": sync_result.files_deleted,
+                "files_skipped": sync_result.files_skipped,
+                "sections_created": sync_result.sections_created,
+                "duration_ms": sync_result.duration_ms,
+            }
+        finally:
+            await _close_adapters(adapters)
 
     payload = asyncio.run(run_sync())
     _emit(
@@ -390,28 +427,31 @@ def _cmd_knowledge_search(args: argparse.Namespace) -> int:
     core = KnowledgeCore(repo, llm=adapters.llm)
 
     async def run_search() -> dict[str, Any]:
-        sections = await core.search_sections(
-            args.query,
-            tenant_id=config.ctx.tenant_id,
-            project_id=config.ctx.project_id,
-            scope=getattr(args, "scope", None),
-            limit=getattr(args, "limit", 5),
-        )
-        return {
-            "query": args.query,
-            "count": len(sections),
-            "results": [
-                {
-                    "id": s.id,
-                    "doc_id": s.doc_id,
-                    "citation": s.citation,
-                    "scope": s.scope,
-                    "version": s.version,
-                    "text": s.text[:200] + ("..." if len(s.text) > 200 else ""),
-                }
-                for s in sections
-            ],
-        }
+        try:
+            sections = await core.search_sections(
+                args.query,
+                tenant_id=config.ctx.tenant_id,
+                project_id=config.ctx.project_id,
+                scope=getattr(args, "scope", None),
+                limit=getattr(args, "limit", 5),
+            )
+            return {
+                "query": args.query,
+                "count": len(sections),
+                "results": [
+                    {
+                        "id": s.id,
+                        "doc_id": s.doc_id,
+                        "citation": s.citation,
+                        "scope": s.scope,
+                        "version": s.version,
+                        "text": s.text[:200] + ("..." if len(s.text) > 200 else ""),
+                    }
+                    for s in sections
+                ],
+            }
+        finally:
+            await _close_adapters(adapters)
 
     payload = asyncio.run(run_search())
     _emit(
@@ -467,9 +507,13 @@ def _cmd_graph_reproject(args: argparse.Namespace) -> int:
     tenant_id = args.tenant_id or config.ctx.tenant_id
 
     async def run_reproject() -> dict[str, Any]:
-        assert adapters.graph is not None
-        nodes, edges = await reproject_all(repo, adapters.graph, tenant_id=tenant_id)
-        return {"status": "ok", "tenant_id": tenant_id, "nodes": nodes, "edges": edges}
+        try:
+            if adapters.graph is None:
+                raise RuntimeError("Graph adapter is required for reproject")
+            nodes, edges = await reproject_all(repo, adapters.graph, tenant_id=tenant_id)
+            return {"status": "ok", "tenant_id": tenant_id, "nodes": nodes, "edges": edges}
+        finally:
+            await _close_adapters(adapters)
 
     payload = asyncio.run(run_reproject())
     msg = (
@@ -495,23 +539,26 @@ def _cmd_sdd_ingest(args: argparse.Namespace) -> int:
     reconcile = not getattr(args, "no_reconcile", False)
 
     async def run_ingest() -> dict[str, Any]:
-        num_ent, num_rel = await ingest_sdd_knowledge_graph(
-            repo,
-            adapters.graph,
-            sdd_root=sdd_root,
-            tenant_id=tenant_id,
-            project_id=project_id,
-            reconcile=reconcile,
-        )
-        return {
-            "status": "ok",
-            "sdd_root": str(sdd_root),
-            "tenant_id": tenant_id,
-            "project_id": project_id,
-            "reconcile": reconcile,
-            "entities_ingested": num_ent,
-            "relations_ingested": num_rel,
-        }
+        try:
+            num_ent, num_rel = await ingest_sdd_knowledge_graph(
+                repo,
+                adapters.graph,
+                sdd_root=sdd_root,
+                tenant_id=tenant_id,
+                project_id=project_id,
+                reconcile=reconcile,
+            )
+            return {
+                "status": "ok",
+                "sdd_root": str(sdd_root),
+                "tenant_id": tenant_id,
+                "project_id": project_id,
+                "reconcile": reconcile,
+                "entities_ingested": num_ent,
+                "relations_ingested": num_rel,
+            }
+        finally:
+            await _close_adapters(adapters)
 
     payload = asyncio.run(run_ingest())
     msg = (
@@ -737,7 +784,11 @@ def _cmd_mcp_serve(args: argparse.Namespace) -> int:
     config = _load_config(getattr(args, "config", None))
     adapters = dev_adapters(config.dsn)
     repo = Repository(config.dsn)
-    surface = AccessSurface(repo, graph=adapters.graph)
+    surface = AccessSurface(
+        repo,
+        graph=adapters.graph,
+        llm=getattr(adapters, "llm", None),
+    )
 
     async def do_ingest(
         sdd_root: str, tenant_id: str, project_id: str, reconcile: bool = True
@@ -779,12 +830,15 @@ def _cmd_mcp_serve(args: argparse.Namespace) -> int:
         security_gate_url=security_gate_url,
     )
     transport = getattr(args, "transport", "stdio")
-    if transport == "sse":
-        host = getattr(args, "host", "127.0.0.1")
-        port = getattr(args, "port", 8000)
-        server.run_sse(host=host, port=port)
-    else:
-        asyncio.run(server.run_stdio())
+    try:
+        if transport == "sse":
+            host = getattr(args, "host", "127.0.0.1")
+            port = getattr(args, "port", 8000)
+            server.run_sse(host=host, port=port)
+        else:
+            asyncio.run(server.run_stdio())
+    finally:
+        asyncio.run(_close_adapters(adapters))
     return 0
 
 

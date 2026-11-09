@@ -111,6 +111,9 @@ class JWKSValidator:
         req_headers = {"User-Agent": "Engramory-Auth/1.0"}
         if headers:
             req_headers.update(headers)
+        self.headers = req_headers
+        self.cache_jwk_set = cache_jwk_set
+        self.lifespan = lifespan
         self._jwks_client = PyJWKClient(
             uri=jwks_url,
             cache_jwk_set=cache_jwk_set,
@@ -145,8 +148,9 @@ class JWKSValidator:
                 with self._lock:
                     self._jwks_client = PyJWKClient(
                         uri=self.jwks_url,
-                        cache_jwk_set=True,
-                        lifespan=300,
+                        cache_jwk_set=self.cache_jwk_set,
+                        lifespan=self.lifespan,
+                        headers=self.headers,
                     )
                 signing_key = self._jwks_client.get_signing_key_from_jwt(clean_token)
 
@@ -228,6 +232,7 @@ def check_token_revocation(
     security_gate_url: str | None = None,
     *,
     revoked_identifiers: set[str] | None = None,
+    fail_closed: bool | None = None,
 ) -> None:
     """Check if token jti or agent_id has been revoked by platform kill-switch.
 
@@ -235,7 +240,17 @@ def check_token_revocation(
         claims: Verified token claims.
         security_gate_url: Optional Security Gate HTTP URL (e.g. http://security-gate:8095).
         revoked_identifiers: Optional in-memory set of revoked JTIs or agent IDs (for tests).
+        fail_closed: If True (default unless SECURITY_GATE_FAIL_CLOSED=false), raise
+            AuthenticationError when a configured security_gate_url is unreachable.
     """
+    import os
+
+    if fail_closed is None:
+        fail_closed = os.environ.get("SECURITY_GATE_FAIL_CLOSED", "true").lower() not in (
+            "0",
+            "false",
+            "no",
+        )
     jti = claims.jti
     agent_id = claims.agent_id or claims.sub
 
@@ -271,3 +286,7 @@ def check_token_revocation(
                         )
         except urllib.error.URLError as exc:
             logger.warning("Could not reach Security Gate revocation endpoint: %s", exc)
+            if fail_closed:
+                raise AuthenticationError(
+                    f"Token revocation check failed (fail-closed): {exc}"
+                ) from exc

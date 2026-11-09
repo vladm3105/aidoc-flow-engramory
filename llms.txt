@@ -4,7 +4,7 @@
 
 ## Core Documents & Runbooks
 - [AGENTS.md](AGENTS.md): AGENTS.md — working agreement for AI coding agents on Engramory (`id: platform-engramory:AGENTS.md`)
-- [README.md](README.md): platform-engramory (aidoc-flow-engramory) (`id: platform-engramory:README.md`)
+- [README.md](README.md): platform-engramory (`id: platform-engramory:README.md`)
 - [docs/doc-tools/01_SYSTEM_ARCHITECTURE_AND_TOPOLOGY.md](docs/doc-tools/01_SYSTEM_ARCHITECTURE_AND_TOPOLOGY.md): System Architecture, Dual-Plane Topology & End-to-End Agent Flows (`id: doc-platform-docs-01-architecture`, `kind: architecture`, `tier: green`)
 - [docs/doc-tools/09_ENGRAMORY_CONSOLIDATION_AND_EXTENSION_BLUEPRINT.md](docs/doc-tools/09_ENGRAMORY_CONSOLIDATION_AND_EXTENSION_BLUEPRINT.md): Architectural Evaluation & Blueprint — Extending aidoc-flow-engramory vs. Standalone platform-docs (`id: doc-platform-docs-09-engramory-consolidation`, `kind: architecture`, `tier: green`)
 - [docs/doc-tools/00_INDEX.md](docs/doc-tools/00_INDEX.md): Platform Docs Master Documentation Index, Architecture Map & Core Invariants (`id: doc-platform-docs-00-index`, `kind: index`, `tier: green`)

@@ -6,8 +6,9 @@ computes git evidence hashes, and ingests sections into the knowledge core.
 
 from __future__ import annotations
 
+import logging
 import re
-import subprocess
+import subprocess  # nosec B404 # reason: read-only git log/rev-parse metadata queries
 from pathlib import Path
 from typing import Any
 
@@ -15,13 +16,15 @@ from engramory.access.authz import ActorContext
 from engramory.access.surface import AccessSurface
 from engramory.core.repository import Repository
 
+logger = logging.getLogger(__name__)
+
 MAX_CHUNK_WORDS = 300
 
 
 def get_git_commit_hash(file_path: Path) -> str:
     """Return latest commit hash for file, or current HEAD."""
     try:
-        res = subprocess.run(
+        res = subprocess.run(  # nosec B603 B607 # reason: fixed git log call with -- separator
             ["git", "log", "-1", "--format=%H", "--", str(file_path)],
             capture_output=True,
             text=True,
@@ -30,7 +33,7 @@ def get_git_commit_hash(file_path: Path) -> str:
         out = res.stdout.strip()
         if out:
             return out
-        head_res = subprocess.run(
+        head_res = subprocess.run(  # nosec B603 B607 # reason: fixed git rev-parse HEAD call
             ["git", "rev-parse", "HEAD"],
             capture_output=True,
             text=True,
@@ -62,8 +65,8 @@ def chunk_markdown(
                     loaded = yaml.safe_load("\n".join(lines[1:idx]))
                     if isinstance(loaded, dict):
                         fm_meta = loaded
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("Ignoring malformed YAML frontmatter in %s: %s", doc_id, exc)
                 body_lines = lines[idx + 1 :]
                 break
 
@@ -216,7 +219,15 @@ async def ingest_file(
             try:
                 embeddings = await adapters.llm.embed(texts=[text])
                 if embeddings:
-                    embed_model = getattr(adapters.llm, "_embed_model", "text-embedding-3-small")
+                    embed_model = next(
+                        (
+                            val
+                            for attr in ("embed_model", "_embed_model", "_default_embed_model")
+                            if isinstance((val := getattr(adapters.llm, attr, None)), str)
+                            and val.strip()
+                        ),
+                        "text-embedding-3-small",
+                    )
                     await repo.set_kb_sections_embedding_batch(
                         [(sec_id, embeddings[0])],
                         embedding_model=embed_model,

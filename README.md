@@ -1,4 +1,4 @@
-# platform-engramory (aidoc-flow-engramory)
+# platform-engramory
 
 ## Platform Engramory — Shared Memory, Knowledge & Documentation Operating System
 
@@ -46,21 +46,20 @@ It consolidates two predecessor designs — **RAC** (a working knowledge platfor
 
 ```bash
 cp .env.example .env          # fill in secrets; set POSTGRES_HOST_PORT if 5432 is taken
-docker compose up -d          # Postgres+pgvector, Redis, MinIO, LiteLLM+Ollama, Neo4j, Keycloak
+docker compose up -d          # Postgres+pgvector, Redis, Neo4j, MCP gateway, Worker
 make migrate                  # apply db/migrations
-make pull-models              # pull local Ollama models
-# the MCP gateway is not yet shipped — the dev/CI agent face is the CLI (ADR-10):
+make pull-models              # pull local Ollama models (when using local-ai profile)
 pip install -e . && engramory --help
 ```
 
 All dev dependencies are free and open-source.
 
-## Use it as an agent (memory for AI agents)
+## Use it as an agent (memory, knowledge, SDD & docs for AI agents)
 
-Any AI agent with a shell uses Engramory as memory through the **`engramory`
-CLI** — remember (`memory add` + `memory distill`), retrieve (`memory
-search`), and close the learning loop (`memory feedback`). Every call is
-authorized (default deny), scoped agent/project/tenant, and audited.
+Any AI agent with a shell or MCP client uses Engramory through two thin faces over `AccessSurface` (ADR-10):
+
+- **`engramory` CLI (dev/CI face):** `engramory memory` (`add`, `distill`, `search`, `feedback`, `forget`), `engramory knowledge` (`ingest`, `sync-git`, `search`), `engramory sdd` (`ingest`, `slice`, `blast-radius`, `validate-graph`, `check-invariants`, `lint-policy`), `engramory docs` (`lint`, `ingest`, `search`, `slice-runbook`, `blast-radius`, `audit-drift`, `export-llms`), and `engramory mcp` (`--transport stdio|sse`).
+- **MCP Gateway (`engramory mcp`, authenticated production face):** exposes `memory_*`, `knowledge_ingest`, `knowledge_search`, `graph_neighbors`, `sdd_context_slice`, `sdd_blast_radius`, `sdd_ingest`, `sdd_validate_graph`, `sdd_check_invariants`, `sdd_lint_policy`, and `docs_*` tools with OIDC/JWKS authentication and fail-closed authorization.
 
 - **Install + first round-trip:** [docs/INSTALL.md](docs/INSTALL.md)
 - **Agent workflow (3 tracks: terminal agent, CI, Skill):** [docs/AGENT-QUICKSTART.md](docs/AGENT-QUICKSTART.md)

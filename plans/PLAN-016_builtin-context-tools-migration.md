@@ -92,12 +92,12 @@ With `archived/aidoc-context-tools` retired, this plan audits and consolidates t
 
 **Steps:**
 
-1. Add `"sdd_validate_graph"`, `"sdd_check_invariants"`, and `"sdd_lint_policy"` to `KNOWN_ACTIONS` in [src/engramory/access/authz.py:15-35](src/engramory/access/authz.py#L15-L35).
-2. Enhance `engramory sdd` subcommands in [src/engramory/cli.py:789-850](src/engramory/cli.py#L789-L850):
+1. Add `"sdd_validate_graph"`, `"sdd_check_invariants"`, and `"sdd_lint_policy"` to `KNOWN_ACTIONS` in [src/engramory/access/authz.py:15-35](../src/engramory/access/authz.py#L15-L35).
+2. Enhance `engramory sdd` subcommands in [src/engramory/cli.py:789-850](../src/engramory/cli.py#L789-L850):
    - On `engramory sdd slice`: add `--root` (default `None`), `--offline` (`action="store_true"`), and `--digest` (`action="store_true"`). When `--offline` or `--root` is passed, or when `_run_with_surface` raises `(ConfigError, StoreUnavailable)`, fall back to `slice_local_context(...)`. Support `--digest` to emit the Tier 0/1/2 compacted prompt digest (`render_context_digest`).
    - On `engramory sdd blast-radius`: add `--root` (default `None`) and `--offline` (`action="store_true"`), falling back to `local_blast_radius(...)` when `--offline`/`--root` is specified or `(ConfigError, StoreUnavailable)` occurs.
    - Add `engramory sdd validate-graph [--root .] [--invariants]` (`_cmd_sdd_validate_graph`), `engramory sdd check-invariants [--root .] [--base origin/dev] [--type CODE2C] [--offline]` (`_cmd_sdd_check_invariants`), and `engramory sdd lint-policy [--root .] [--policy .aidoc/stack-policy.yaml]` (`_cmd_sdd_lint_policy`), each emitting structured output via `_emit(args.json, report, summary)` and returning `0` when `report["passed"]` is `True` and `1` when `False`.
-3. Extend `McpServer` in [src/engramory/mcp/server.py:317-470](src/engramory/mcp/server.py#L317-L470) and `TOOLS_SCHEMA`:
+3. Extend `McpServer` in [src/engramory/mcp/server.py:317-470](../src/engramory/mcp/server.py#L317-L470) and `TOOLS_SCHEMA`:
    - Add `SDD_CONTEXT_TOOLS_SCHEMA` (`sdd_validate_graph`, `sdd_check_invariants`, `sdd_lint_policy`) with `readOnlyHint: True`, and add optional `workspace_dir` / `offline` / `format="digest"` support to `sdd_context_slice` and `sdd_blast_radius`.
    - Ensure `sdd_context_slice` and `sdd_blast_radius` ALWAYS invoke `await self._surface._decide(call_ctx, "context_slice" / "blast_radius", TargetScope(tenant_id=call_ctx.tenant_id, scope=scope))` even when `offline=True` is passed, preserving the `SPEC-01` / `EARS.01.03.b050` audit invariant.
    - Enforce `self._surface._decide(call_ctx, tool_name, TargetScope(tenant_id=call_ctx.tenant_id, scope=scope))` and `resolve_confined_repo_path(..., project_id=call_ctx.project_id, enforce_project_boundary=enforce_project)` on every workspace-reading tool (`allow_sibling_lookup=not enforce_project`).

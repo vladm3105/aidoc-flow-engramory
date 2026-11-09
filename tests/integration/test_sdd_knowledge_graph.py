@@ -63,23 +63,23 @@ async def test_sdd_knowledge_graph_ingestion_and_context_slicing(
         assert "SPEC-03" in slice_ids or "ADR-03" in slice_ids
 
         # 4. Test Helper get_sdd_context_slice
-        direct_slice = await get_sdd_context_slice(graph, "IPLAN-03", depth=4)
+        direct_slice = await get_sdd_context_slice(graph, "IPLAN-03", depth=4, tenant_id=tenant_id)
         assert len(direct_slice) > 0
 
         # 5. Test AccessSurface Blast Radius (downstream impact of modifying a specification)
         blast_nodes = await surface.blast_radius(ctx, doc_id="ADR-03", depth=5)
         # ADR-03 is upstream of SPEC-03 / IPLAN-03
         blast_ids = {n["id"] for n in blast_nodes}
-        assert len(blast_ids) >= 0
+        assert len(blast_ids) > 0
 
-        direct_blast = await get_sdd_blast_radius(graph, "SPEC-03", depth=3)
+        direct_blast = await get_sdd_blast_radius(graph, "SPEC-03", depth=3, tenant_id=tenant_id)
         assert isinstance(direct_blast, list)
 
         # 6. Test Lifecycle Deletion
         # Deleting a leaf entity cascades cleanly in Postgres and Neo4j
         ent_count_before = await repo.count_graph_entities(tenant_id=tenant_id)
         await repo.delete_graph_entity("IPLAN-06", tenant_id=tenant_id)
-        await graph.delete_node(id="IPLAN-06")
+        await graph.delete_node(id="IPLAN-06", tenant_id=tenant_id)
 
         ent_count_after = await repo.count_graph_entities(tenant_id=tenant_id)
         assert ent_count_after == ent_count_before - 1

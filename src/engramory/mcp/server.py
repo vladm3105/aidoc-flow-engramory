@@ -131,6 +131,41 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "knowledge_search",
+        "description": "Scoped hybrid search over L0 knowledge base sections.",
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query text"},
+                "project_id": {
+                    "type": "string",
+                    "description": "Project override (default: caller scope)",
+                },
+                "domain_id": {
+                    "type": "string",
+                    "description": "Optional domain filter",
+                },
+                "scope": {
+                    "type": "string",
+                    "description": "Visibility scope (project, domain, space)",
+                    "default": "project",
+                },
+                "k": {
+                    "type": "integer",
+                    "description": "Maximum number of sections returned",
+                    "default": 5,
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
         "name": "graph_neighbors",
         "description": "Retrieve connected graph neighbors for an entity within depth hops.",
         "inputSchema": {
@@ -407,6 +442,29 @@ class McpServer:
                 )
                 return {"content": [{"type": "text", "text": f"Ingested section {sec_id}"}]}
 
+            elif name == "knowledge_search":
+                sections = await self._surface.knowledge_search(
+                    call_ctx,
+                    query=arguments["query"],
+                    domain_id=arguments.get("domain_id"),
+                    scope=arguments.get("scope", "project"),
+                    limit=int(arguments.get("k", arguments.get("limit", 5))),
+                )
+                formatted_secs = [
+                    {
+                        "id": s.id,
+                        "doc_id": s.doc_id,
+                        "citation": s.citation,
+                        "text": s.text,
+                        "project_id": s.project_id,
+                        "domain_id": s.domain_id,
+                        "scope": s.scope,
+                        "version": s.version,
+                    }
+                    for s in sections
+                ]
+                return {"content": [{"type": "text", "text": json.dumps(formatted_secs, indent=2)}]}
+
             elif name == "graph_neighbors":
                 neighbors = await self._surface.graph_neighbors(
                     call_ctx,
@@ -589,12 +647,12 @@ class McpServer:
                 enforce_project = self._auth_enabled and ("space" not in call_ctx.scopes)
                 confined_sdd = resolve_confined_repo_path(
                     str(sdd_root),
-                    project_id=call_ctx.project_id,
+                    project_id=project_id,
                     enforce_project_boundary=enforce_project,
                 )
                 reconcile = arguments.get("reconcile", True)
                 num_ent, num_rel = await self._ingest_fn(
-                    sdd_root=str(confined_sdd) if self._auth_enabled else sdd_root,
+                    sdd_root=str(confined_sdd),
                     tenant_id=call_ctx.tenant_id,
                     project_id=project_id,
                     reconcile=reconcile,
@@ -670,7 +728,22 @@ class McpServer:
         self, host: str = "127.0.0.1", port: int = 8000
     ) -> http.server.ThreadingHTTPServer:
         """Create a ThreadingHTTPServer for MCP SSE and HTTP transports."""
+        import threading
+
         server_instance = self
+        max_body_bytes = 4 * 1024 * 1024
+        bg_loop = asyncio.new_event_loop()
+        loop_ready = threading.Event()
+
+        def _run_bg_loop() -> None:
+            asyncio.set_event_loop(bg_loop)
+            loop_ready.set()
+            bg_loop.run_forever()
+            bg_loop.close()
+
+        loop_thread = threading.Thread(target=_run_bg_loop, daemon=True, name="engramory-mcp-loop")
+        loop_thread.start()
+        loop_ready.wait(timeout=5.0)
 
         class MCPRequestHandler(http.server.BaseHTTPRequestHandler):
             def log_message(self, format: str, *args: Any) -> None:
@@ -726,12 +799,15 @@ class McpServer:
                     endpoint_event = "event: endpoint\ndata: /messages\n\n"
                     self.wfile.write(endpoint_event.encode("utf-8"))
                     self.wfile.flush()
-                else:
+                elif parsed.path in ("/", "/health", "/healthz"):
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     self.end_headers()
                     resp = {"status": "ok", "service": "engramory-mcp", "version": "0.1.0"}
                     self.wfile.write(json.dumps(resp).encode("utf-8"))
+                else:
+                    self.send_response(404)
+                    self.end_headers()
 
             def do_POST(self) -> None:
                 if self.path not in ("/messages", "/messages/"):
@@ -740,9 +816,38 @@ class McpServer:
                     return
 
                 content_length = int(self.headers.get("Content-Length", 0))
+                if content_length < 0 or content_length > max_body_bytes:
+                    self.send_response(413)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    err = {
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {"code": -32600, "message": "Request payload too large"},
+                    }
+                    self.wfile.write(json.dumps(err).encode("utf-8"))
+                    return
+
                 body = self.rfile.read(content_length).decode("utf-8")
+                req_id: Any = None
                 try:
-                    req = json.loads(body)
+                    try:
+                        req = json.loads(body)
+                    except json.JSONDecodeError as parse_exc:
+                        self.send_response(400)
+                        self.send_header("Content-Type", "application/json")
+                        self.end_headers()
+                        err = {
+                            "jsonrpc": "2.0",
+                            "id": None,
+                            "error": {"code": -32700, "message": f"Parse error: {parse_exc}"},
+                        }
+                        self.wfile.write(json.dumps(err).encode("utf-8"))
+                        return
+
+                    if isinstance(req, dict):
+                        req_id = req.get("id")
+
                     if server_instance._auth_enabled:
                         auth_hdr = self.headers.get("Authorization")
                         if not auth_hdr or not auth_hdr.strip().startswith("Bearer "):
@@ -751,6 +856,7 @@ class McpServer:
                             self.end_headers()
                             err = {
                                 "jsonrpc": "2.0",
+                                "id": req_id,
                                 "error": {
                                     "code": -32001,
                                     "message": "Unauthorized: Missing Bearer token",
@@ -780,7 +886,10 @@ class McpServer:
                                 scopes=req_ctx.scopes,
                             )
 
-                    res = asyncio.run(server_instance.handle_request(req, ctx=req_ctx))
+                    fut = asyncio.run_coroutine_threadsafe(
+                        server_instance.handle_request(req, ctx=req_ctx), bg_loop
+                    )
+                    res = fut.result(timeout=60.0)
                     if res is None:
                         self.send_response(204)
                         self.end_headers()
@@ -795,6 +904,7 @@ class McpServer:
                     self.end_headers()
                     err = {
                         "jsonrpc": "2.0",
+                        "id": req_id,
                         "error": {"code": -32001, "message": f"Unauthorized: {auth_exc}"},
                     }
                     self.wfile.write(json.dumps(err).encode("utf-8"))
@@ -802,10 +912,22 @@ class McpServer:
                     self.send_response(500)
                     self.send_header("Content-Type", "application/json")
                     self.end_headers()
-                    err = {"jsonrpc": "2.0", "error": {"code": -32603, "message": str(exc)}}
+                    err = {
+                        "jsonrpc": "2.0",
+                        "id": req_id,
+                        "error": {"code": -32603, "message": str(exc)},
+                    }
                     self.wfile.write(json.dumps(err).encode("utf-8"))
 
-        return http.server.ThreadingHTTPServer((host, port), MCPRequestHandler)
+        class _ManagedMCPHTTPServer(http.server.ThreadingHTTPServer):
+            def server_close(self) -> None:
+                try:
+                    if bg_loop.is_running():
+                        bg_loop.call_soon_threadsafe(bg_loop.stop)
+                finally:
+                    super().server_close()
+
+        return _ManagedMCPHTTPServer((host, port), MCPRequestHandler)
 
     def run_sse(self, host: str = "127.0.0.1", port: int = 8000) -> None:
         """Run MCP HTTP/SSE server loop over TCP host:port."""
