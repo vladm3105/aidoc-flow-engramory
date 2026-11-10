@@ -240,19 +240,22 @@ _GREEN_BANNED_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         re.compile(
             r"\b(?:tofu|terraform)\s+(?:apply|destroy|import|taint|state\s+rm)\b"
             r"|\bkubectl\b[^\n]*\b(?:apply|delete|patch|edit|replace|scale|rollout\s+restart)\b"
-            r"|\bgit\s+(?:push|reset|clean|commit|merge|rebase)\b",
+            r"|\bgit\s+(?:push|reset|clean|commit|merge|rebase|checkout\s+-f|branch\s+-[dD]|tag\s+-d)\b",
             re.IGNORECASE,
         ),
         "Mutating IaC/orchestrator/git command is prohibited in tier='green'",
     ),
     (
         re.compile(
-            r"\b(?:rm|mv|dd|shred|unlink|chmod|chown|mkfs|truncate)\b"
-            r"|\bfind\b[^\n]*\s-(?:delete|exec)\b"
+            r"\b(?:rm|mv|dd|shred|unlink|chmod|chown|mkfs|truncate|pkill|killall|kill)\b"
+            r"|\bsed\s+-[a-zA-Z]*i\b"
+            r"|\bawk\s+-i\s+inplace\b"
+            r"|\bfind\b[^\n]*\s-(?:delete|exec(?:dir)?)\b"
         ),
         (
-            "Destructive or mutating file operation ('rm|mv|dd|shred|unlink|chmod|chown|truncate') "
-            "is prohibited in tier='green'"
+            "Destructive or mutating file/process operation ('rm|mv|dd|shred|unlink|chmod|chown|"
+            "truncate|sed -i|awk -i inplace|find -exec|pkill|killall|kill') is prohibited "
+            "in tier='green'"
         ),
     ),
     (
@@ -280,11 +283,12 @@ _GREEN_BANNED_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (
         re.compile(
             r"\$\(|`[^`]*`|[<>]\(|\b(?:eval|exec|source)\b"
-            r"|\b(?:bash|sh|zsh|dash|python3?|perl|ruby|node)\s+-[ce]\b"
+            r"|\b(?:bash|sh|zsh|dash|python3?|perl|ruby|node)\b[^\n;|&]*\s-(?:[a-zA-Z]*[ce]|m)\b"
+            r"|\|\s*(?:env\s+)?(?:bash|sh|zsh|dash|python3?|perl|ruby|node)\b"
         ),
         (
             "Subshell/process substitution or inline interpreter ('$(...)', backticks, '<(...)', "
-            "'eval', 'exec', 'bash -c', 'python -c') is prohibited in tier='green'"
+            "'eval', 'exec', 'bash -c', 'python -c', '| bash') is prohibited in tier='green'"
         ),
     ),
     (
@@ -313,7 +317,8 @@ _AMBIGUOUS_SUBJECT_RE = re.compile(
 _BARE_LOCALHOST_RE = re.compile(r"\bhttps?://localhost:\d+\b")
 
 _SENSITIVE_ENV_RE = re.compile(
-    r"(?:SECRET|TOKEN|PASSWORD|PASSWD|PRIVATE_KEY|API_KEY|DATABASE_URL|DSN|CREDENTIAL|AUTH)",
+    r"(?:SECRET|TOKEN|PASSWORD|PASSWD|PRIVATE_KEY|API_KEY|DATABASE_URL|DSN|CREDENTIAL|AUTH"
+    r"|AWS_ACCESS_KEY_ID|GOOGLE_APPLICATION_CREDENTIALS|SSH_AUTH_SOCK|KUBECONFIG)",
     re.IGNORECASE,
 )
 
@@ -362,6 +367,14 @@ def _is_within_root(file_path: Path, root: Path) -> bool:
         return False
 
 
+def _is_sdd_doc_path(file_path: Path, repo_root: Path) -> bool:
+    """Return True if `file_path` sits inside `<repo_root>/docs/sdd` or `<repo_root>/sdd`."""
+    for sdd_sub in (repo_root / "docs" / "sdd", repo_root / "sdd"):
+        if sdd_sub.exists() and _is_within_root(file_path, sdd_sub):
+            return True
+    return False
+
+
 def resolve_confined_repo_path(
     path: str | Path,
     *,
@@ -400,7 +413,11 @@ def resolve_confined_repo_path(
         else:
             candidate = (effective_base / raw).resolve()
     else:
-        candidate = (Path.cwd().resolve() / raw).resolve()
+        cwd_candidate = (Path.cwd().resolve() / raw).resolve()
+        if allowed_root is not None and not cwd_candidate.is_relative_to(base):
+            candidate = (base / raw).resolve()
+        else:
+            candidate = cwd_candidate
 
     if not candidate.is_relative_to(base) or not candidate.is_relative_to(effective_base):
         raise ValidationError("Requested path is outside allowed boundary")
@@ -681,6 +698,7 @@ def parse_markdown_document(
     steps: list[KBRunbookStep] = []
     step_order = 0
     seen_step_ids: set[str] = set()
+    rollback_candidates: list[tuple[str, str]] = []
 
     for idx, line in enumerate(lines):
         line_no = body_start_line + idx
@@ -806,8 +824,9 @@ def parse_markdown_document(
                         )
 
                     cmd_body = "\n".join(fence_lines).strip()
+                    green_violations = check_green_step_safety(cmd_body) if tier == "green" else []
                     if tier == "green":
-                        for violation in check_green_step_safety(cmd_body):
+                        for violation in green_violations:
                             diagnostics.append(
                                 LintDiagnostic(
                                     rule_id="INV-STEP-02",
@@ -825,6 +844,9 @@ def parse_markdown_document(
                                 )
                             )
 
+                    if rollback_step:
+                        rollback_candidates.append((step_id, rollback_step))
+
                     try:
                         expect_exit = int(expect_exit_str)
                     except ValueError:
@@ -840,7 +862,9 @@ def parse_markdown_document(
                         else (kb_doc.title if kb_doc else resolved_file.stem)
                     )
                     prose_ctx = " ".join(recent_prose_lines)
-                    if cmd_body and not (tier == "green" and mode != "read-only"):
+                    if cmd_body and not (
+                        tier == "green" and (mode != "read-only" or bool(green_violations))
+                    ):
                         steps.append(
                             KBRunbookStep(
                                 step_uid=f"{doc_id}#{step_id}",
@@ -866,8 +890,8 @@ def parse_markdown_document(
                 fence_lines.append(line)
 
     # Referential check: MISSING_ROLLBACK_STEP
-    for st in steps:
-        if st.rollback_step and st.rollback_step not in seen_step_ids:
+    for cand_step_id, cand_rollback in rollback_candidates:
+        if cand_rollback not in seen_step_ids:
             diagnostics.append(
                 LintDiagnostic(
                     rule_id="MISSING_ROLLBACK_STEP",
@@ -875,11 +899,11 @@ def parse_markdown_document(
                     file=rel_path,
                     line=1,
                     message=(
-                        f"Step '{st.step_id}' references rollback_step='{st.rollback_step}', "
+                        f"Step '{cand_step_id}' references rollback_step='{cand_rollback}', "
                         f"which does not exist in '{rel_path}'"
                     ),
                     remediation_hint=(
-                        f"Add an executable code block with id='{st.rollback_step}' to "
+                        f"Add an executable code block with id='{cand_rollback}' to "
                         f"'{rel_path}' or update rollback_step to an existing step id."
                     ),
                 )
@@ -1278,7 +1302,12 @@ def lint_repo(
             raw_files = sorted((resolved / "docs").rglob("*.md"))
         else:
             raw_files = sorted(resolved.rglob("*.md"))
-        files = [f for f in raw_files if _is_within_root(f, resolved)]
+        files = [
+            f
+            for f in raw_files
+            if _is_within_root(f, resolved)
+            and (_is_sdd_doc_path(resolved, repo_root) or not _is_sdd_doc_path(f, repo_root))
+        ]
 
     all_diags: list[LintDiagnostic] = []
     for f in files:
@@ -1386,7 +1415,12 @@ def smoke_run_green_steps(
         if (root / "docs").is_dir()
         else sorted(root.rglob("*.md"))
     )
-    md_files = [f for f in raw_files if _is_within_root(f, bound_root)]
+    md_files = [
+        f
+        for f in raw_files
+        if _is_within_root(f, bound_root)
+        and (root.is_file() or not _is_sdd_doc_path(f, bound_root))
+    ]
 
     results: list[dict[str, Any]] = []
     passed = 0
@@ -1550,7 +1584,7 @@ def check_repo_drift(
 
     docs_dir = root / "docs"
     raw_files = sorted(docs_dir.rglob("*.md")) if docs_dir.is_dir() else sorted(root.glob("*.md"))
-    md_files = [f for f in raw_files if _is_within_root(f, root)]
+    md_files = [f for f in raw_files if _is_within_root(f, root) and not _is_sdd_doc_path(f, root)]
 
     findings: list[dict[str, Any]] = []
     docs_scanned = 0
@@ -1678,12 +1712,18 @@ def export_repo_llms(
             candidates.append(p)
     if (root / "docs").is_dir():
         candidates.extend(
-            f for f in sorted((root / "docs").rglob("*.md")) if _is_within_root(f, root)
+            f
+            for f in sorted((root / "docs").rglob("*.md"))
+            if _is_within_root(f, root) and not _is_sdd_doc_path(f, root)
         )
-    if (root / "sdd").is_dir():
-        candidates.extend(
-            f for f in sorted((root / "sdd").rglob("*.yaml")) if _is_within_root(f, root)
-        )
+    seen_yaml: set[Path] = set()
+    for sdd_dir in (root / "docs" / "sdd", root / "sdd"):
+        if sdd_dir.is_dir():
+            for f in sorted(sdd_dir.rglob("*.yaml")):
+                resolved_yaml = f.resolve()
+                if _is_within_root(f, root) and resolved_yaml not in seen_yaml:
+                    seen_yaml.add(resolved_yaml)
+                    candidates.append(f)
 
     entries: list[tuple[str, str, str, str, str, str, str]] = []
     # tuple: (sort_group, kind, doc_id, rel_path, title, summary, body_clean)
@@ -1905,7 +1945,12 @@ def slice_local_runbooks(
         if (root / "docs").is_dir()
         else sorted(root.rglob("*.md"))
     )
-    md_files = [f for f in raw_files if _is_within_root(f, bound_root)]
+    md_files = [
+        f
+        for f in raw_files
+        if _is_within_root(f, bound_root)
+        and (root.is_file() or not _is_sdd_doc_path(f, bound_root))
+    ]
 
     if max_tier is not None and max_tier not in TIER_ORDER:
         raise ValidationError(f"Invalid max_tier '{max_tier}'; must be one of {sorted(TIER_ORDER)}")

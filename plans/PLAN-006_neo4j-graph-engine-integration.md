@@ -6,7 +6,7 @@
 > **Owning Repo:** `aidoc-flow-engramory`  
 > **Cross-Repo Impact:** `platform-litellm-laya`  
 > **Target Environments:** Local Dev Stack & Pre-Production Staging (`100.98.134.10`)  
-> **Canonical Decisions:** [ADR-01 (PostgreSQL Spine)](../sdd/05_ADR/ADR-01_postgres_spine.yaml), [ADR-02 (Ports & Adapters)](../sdd/05_ADR/ADR-02_ports_and_adapters.yaml), [ADR-03 (Graph Engine: Neo4j over AGE)](../sdd/05_ADR/ADR-03_graph_engine.yaml), [ADR-05 (Rebuildable Projections)](../sdd/05_ADR/ADR-05_canonical_memory.yaml)
+> **Canonical Decisions:** [ADR-01 (PostgreSQL Spine)](../docs/sdd/05_ADR/ADR-01_postgres_spine.yaml), [ADR-02 (Ports & Adapters)](../docs/sdd/05_ADR/ADR-02_ports_and_adapters.yaml), [ADR-03 (Graph Engine: Neo4j over AGE)](../docs/sdd/05_ADR/ADR-03_graph_engine.yaml), [ADR-05 (Rebuildable Projections)](../docs/sdd/05_ADR/ADR-05_canonical_memory.yaml)
 
 ---
 
@@ -18,10 +18,10 @@ Neo4j will enable high-performance multi-hop relationship traversals, entity net
 
 ### Architectural Invariants
 
-1. **PostgreSQL Remains the Single Canonical Source of Truth ([ADR-01](../sdd/05_ADR/ADR-01_postgres_spine.yaml)):**
-   * The graph in Neo4j is strictly a **rebuildable projection** ([ADR-05](../sdd/05_ADR/ADR-05_canonical_memory.yaml)).
+1. **PostgreSQL Remains the Single Canonical Source of Truth ([ADR-01](../docs/sdd/05_ADR/ADR-01_postgres_spine.yaml)):**
+   * The graph in Neo4j is strictly a **rebuildable projection** ([ADR-05](../docs/sdd/05_ADR/ADR-05_canonical_memory.yaml)).
    * All canonical entities, relationships, lineage, and document source texts reside in PostgreSQL. If the Neo4j database or volume is lost, a background projection worker or migration script can reconstruct the entire graph from PostgreSQL.
-2. **Ports & Adapters Isolation ([ADR-02](../sdd/05_ADR/ADR-02_ports_and_adapters.yaml)):**
+2. **Ports & Adapters Isolation ([ADR-02](../docs/sdd/05_ADR/ADR-02_ports_and_adapters.yaml)):**
    * Business core (`core/`, `mcp/`, `workers/`) only depends on [`GraphPort`](../src/engramory/ports/graph.py).
    * The `neo4j` Python driver is restricted exclusively to `src/engramory/adapters/dev/graph_neo4j.py`, enforced by architecture guards ([`test_no_vendor_imports.py`](../tests/unit/test_no_vendor_imports.py)).
 3. **Multi-Cloud Portability:**

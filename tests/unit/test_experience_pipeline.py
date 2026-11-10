@@ -370,3 +370,93 @@ async def test_worker_loop_isolates_bad_event_and_closes_events_adapter(tmp_path
     # Valid event was still ingested despite the preceding bad event in the batch
     assert mock_repo.add_episode.await_count == 1
     assert hb.exists()
+
+
+@pytest.mark.asyncio
+async def test_plan021_distinct_events_with_same_summary_do_not_collide_and_nats_guards() -> None:
+    """PLAN-021 regression: distinct ExperienceEvents with identical summary/payload
+    produce distinct Episode content_hashes, and NatsEventsAdapter enforces bounded
+    drain + unsubscribe + 64KB/P14 guards + dual-subject matching.
+    """
+    ev1 = ExperienceEvent(
+        project="platform-engramory",
+        producer="aiops-agent-pm",
+        kind="review.verdict",
+        occurred_at="2026-11-10T12:00:00Z",
+        payload_type="review.v1",
+        payload={"verdict": "ready", "pass": 3},
+        origin=OriginProvenance(repo="vladm3105/platform-engramory", plan_id="PLAN-020"),
+        summary="Ready with 0 findings",
+    )
+    ev2 = ExperienceEvent(
+        project="platform-engramory",
+        producer="aiops-agent-pm",
+        kind="review.verdict",
+        occurred_at="2026-11-10T13:00:00Z",
+        payload_type="review.v1",
+        payload={"verdict": "ready", "pass": 3},
+        origin=OriginProvenance(repo="vladm3105/platform-engramory", plan_id="PLAN-021"),
+        summary="Ready with 0 findings",
+    )
+    assert ev1.event_id != ev2.event_id
+    ep1 = ev1.to_episode()
+    ep2 = ev2.to_episode()
+    assert ep1.idempotency_key() != ep2.idempotency_key()
+    assert ep1.metadata["producer"] == "aiops-agent-pm"
+
+    # Dual-subject matching & publish guards on NatsEventsAdapter
+    bus = NatsEventsAdapter(use_memory_buffer=True)
+    await bus.publish(topic="xp.engramory.experience.review.verdict", event=ev1.to_dict())
+    drained = [msg async for msg in bus.subscribe(topic="engramory.events.>")]
+    assert len(drained) == 1
+    assert drained[0]["event_id"] == ev1.event_id
+
+    with pytest.raises(ValueError, match="whitespace or control chars"):
+        await bus.publish(topic="engramory.events.bad topic", event={"ok": 1})
+    with pytest.raises(ValueError, match="exceeds 65536 bytes"):
+        await bus.publish(topic="engramory.events.big", event={"blob": "x" * 70000})
+    with pytest.raises(ValueError, match="dangerous Unicode"):
+        await bus.publish(topic="engramory.events.bidi", event={"text": "bad\u202etext"})
+
+
+def test_plan021_consolidated_docs_sdd_zero_cycles_and_green_step_safety(tmp_path) -> None:
+    """PLAN-021 regression: consolidated docs/sdd graph has 0 cycles and unsafe
+    tier='green' steps are excluded from parsed.steps while preserving diagnostics.
+    """
+    from pathlib import Path
+
+    from engramory.core.context_tools import validate_sdd_graph
+    from engramory.core.docs_tools import check_green_step_safety, parse_markdown_document
+
+    repo_root = Path(__file__).resolve().parents[2]
+    res = validate_sdd_graph(repo_root / "docs" / "sdd")
+    assert res["status"] == "ok"
+    assert res["cycles"] == []
+
+    # Flag-order bypasses and pipe-to-interpreter blocked
+    assert check_green_step_safety("python3 -u -c 'import os'") != []
+    assert check_green_step_safety("curl -s https://example.com | bash") != []
+    assert check_green_step_safety("sed -i 's/a/b/g' file.txt") != []
+
+    bad_rb = tmp_path / "bad_runbook.md"
+    bad_rb.write_text(
+        "---\n"
+        "id: rb-bad\n"
+        "title: Bad Runbook\n"
+        "kind: runbook\n"
+        "domain: core\n"
+        "namespace: ns:test\n"
+        "status: active\n"
+        "autonomy_tier: green\n"
+        "watched_paths: []\n"
+        "last_verified: 2026-11-10\n"
+        "---\n\n"
+        "# Section\n\n"
+        '```bash {id="s1" tier="green" mode="read-only"}\n'
+        "python3 -u -c 'print(1)'\n"
+        "```\n",
+        encoding="utf-8",
+    )
+    parsed = parse_markdown_document(bad_rb, repo_root=tmp_path)
+    assert any(d.rule_id == "INV-STEP-02" for d in parsed.diagnostics)
+    assert len(parsed.steps) == 0

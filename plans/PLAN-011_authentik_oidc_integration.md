@@ -11,10 +11,10 @@
 
 ## 1. Executive Summary & Goals
 
-Engramory's architecture ([`ADR-10`](../sdd/05_ADR/ADR-10_agent_facing_packaging.yaml)) defines a strict trust model for its production access surface:
+Engramory's architecture ([`ADR-10`](../docs/sdd/05_ADR/ADR-10_agent_facing_packaging.yaml)) defines a strict trust model for its production access surface:
 > *"Trust model (SPEC-01 / access/surface.py): ActorContext is an authenticated principal built exclusively from verified OIDC claims; nothing client-supplied may reach ActorContext.tenant_id or .scopes."*
 
-While local developer tooling enjoys a single-tenant dev carve-out ([`ADR-10`](../sdd/05_ADR/ADR-10_agent_facing_packaging.yaml)), the staging and production MCP gateway ([`server.py`](../src/engramory/mcp/server.py)) currently accepts unauthenticated HTTP requests on `/messages` and reads raw, client-supplied headers `X-Tenant-ID` and `X-Project-ID` ([`server.py`](../src/engramory/mcp/server.py)), falling back to an unverified static context.
+While local developer tooling enjoys a single-tenant dev carve-out ([`ADR-10`](../docs/sdd/05_ADR/ADR-10_agent_facing_packaging.yaml)), the staging and production MCP gateway ([`server.py`](../src/engramory/mcp/server.py)) currently accepts unauthenticated HTTP requests on `/messages` and reads raw, client-supplied headers `X-Tenant-ID` and `X-Project-ID` ([`server.py`](../src/engramory/mcp/server.py)), falling back to an unverified static context.
 
 Across the ecosystem, the platform identity and security architecture has been unified into the **6-Pillar Security Suite** located at `../platform-security` (`platform-security`), which consolidates:
 

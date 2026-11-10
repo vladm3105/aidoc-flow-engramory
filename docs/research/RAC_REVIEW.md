@@ -1,6 +1,6 @@
 # AI Knowledge RAC — Project Review & Cipher Comparison
 
-> Historical input — decisions superseded by [docs/ARCHITECTURE.md](../ARCHITECTURE.md) and [sdd/05_ADR/](../../sdd/05_ADR/) where they conflict.
+> Historical input — decisions superseded by [docs/ARCHITECTURE.md](../ARCHITECTURE.md) and [sdd/05_ADR/](../sdd/05_ADR/) where they conflict.
 
 *Reviewed June 22, 2026 · based on the RAC documentation in a private local source (`docs/` + `rac-system/docs/`)*
 

@@ -3,7 +3,7 @@
 These are short, narrative records of the **desired** significant decisions — the
 conceptual form, written for humans. They are **not** the canonical implementing log.
 
-**Canonical, implementing ADRs live in [`sdd/05_ADR/`](../../sdd/05_ADR/ADR-00_index.md)**
+**Canonical, implementing ADRs live in [`sdd/05_ADR/`](../sdd/05_ADR/ADR-00_index.md)**
 (framework-conformant YAML, with traceability into SPEC/TDD). When a decision here and
 its `sdd/05_ADR/` counterpart differ, the `sdd/05_ADR/` version governs. Record **new**
 implementing decisions in `sdd/05_ADR/`; keep this file for the conceptual summary.

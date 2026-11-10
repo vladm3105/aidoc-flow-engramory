@@ -58,14 +58,14 @@ All dev dependencies are free and open-source.
 
 Any AI agent with a shell or MCP client uses Engramory through two thin faces over `AccessSurface` (ADR-10):
 
-- **`engramory` CLI (dev/CI face):** `engramory memory` (`add`, `distill`, `search`, `feedback`, `forget`), `engramory knowledge` (`ingest`, `sync-git`, `search`), `engramory sdd` (`ingest`, `slice`, `blast-radius`, `validate-graph`, `check-invariants`, `lint-policy`), `engramory docs` (`lint`, `ingest`, `search`, `slice-runbook`, `blast-radius`, `audit-drift`, `export-llms`), and `engramory mcp` (`--transport stdio|sse`).
+- **`engramory` CLI (dev/CI face):** `engramory memory` (`add`, `distill`, `search`, `feedback`, `forget`, `ingest-event`, `learning-health`), `engramory knowledge` (`ingest`, `sync-git`, `search`), `engramory sdd` (`ingest`, `slice`, `blast-radius`, `validate-graph`, `check-invariants`, `lint-policy`), `engramory docs` (`lint`, `ingest`, `search`, `slice-runbook`, `blast-radius`, `audit-drift`, `export-llms`, `smoke-run`, `inventory`, `build-portal`), and `engramory mcp` (`--transport stdio|sse`).
 - **MCP Gateway (`engramory mcp`, authenticated production face):** exposes `memory_*`, `knowledge_ingest`, `knowledge_search`, `graph_neighbors`, `sdd_context_slice`, `sdd_blast_radius`, `sdd_ingest`, `sdd_validate_graph`, `sdd_check_invariants`, `sdd_lint_policy`, and `docs_*` tools with OIDC/JWKS authentication and fail-closed authorization.
 
 - **Install + first round-trip:** [docs/INSTALL.md](docs/INSTALL.md)
 - **Agent workflow (3 tracks: terminal agent, CI, Skill):** [docs/AGENT-QUICKSTART.md](docs/AGENT-QUICKSTART.md)
 - **Wire any vendor (Claude / Gemini / Codex / Copilot / Cursor):** [docs/AGENT-INTEGRATION.md](docs/AGENT-INTEGRATION.md)
 - **Claude reference Skill:** [skills/engramory-memory/SKILL.md](skills/engramory-memory/SKILL.md)
-- **CLI contract (exit codes, JSON shapes, config):** [sdd/06_SPEC/SPEC-07_cli_face.yaml](sdd/06_SPEC/SPEC-07_cli_face.yaml)
+- **CLI contract (exit codes, JSON shapes, config):** [docs/sdd/06_SPEC/SPEC-07_cli_face.yaml](docs/sdd/06_SPEC/SPEC-07_cli_face.yaml)
 
 The CLI is the ADR-10 **dev/CI face** (single-tenant dev tier); the MCP
 gateway is the authenticated production face and arrives in a later cycle.
@@ -80,21 +80,21 @@ gateway is the authenticated production face and arrives in a later cycle.
 | [docs/STRATEGY.md](docs/STRATEGY.md) | Build strategy & recommendation (build the plane, adopt the engine, lead with evaluation) |
 | [docs/MEMORY_DESIGN.md](docs/MEMORY_DESIGN.md) | Layered memory (L0–L3), distillation loop, schema, portability |
 | [docs/PORTABILITY.md](docs/PORTABILITY.md) | Self-hosted → GCP/Azure principles and migration |
-| [roadmap/ROADMAP.md](roadmap/ROADMAP.md) | Canonical roadmap — MVP cycle plan (MVP-1..8) + engineering Phase view (Phase 0–3) |
+| [docs/sdd/08_IPLAN/IPLAN-00_index.yaml](docs/sdd/08_IPLAN/IPLAN-00_index.yaml) | Canonical SDD implementation plan index (IPLAN-01..06) and `plans/PLAN-*.md` |
 | [docs/GLOSSARY.md](docs/GLOSSARY.md) | Terms |
 | [docs/HOW_TO_USE_THE_FRAMEWORK.md](docs/HOW_TO_USE_THE_FRAMEWORK.md) | Authoring SDD artifacts the UCX / aidoc-flow way |
 | [docs/UCX_INTEGRATION.md](docs/UCX_INTEGRATION.md) | How Engramory fits UCX and replaces `ucx_kb` |
 | [docs/INSTALL.md](docs/INSTALL.md) | Install the dev stack + CLI |
 | [docs/AGENT-QUICKSTART.md](docs/AGENT-QUICKSTART.md) | An agent's first remembered + retrieved memory |
 | [docs/AGENT-INTEGRATION.md](docs/AGENT-INTEGRATION.md) | Per-vendor agent wiring (Claude/Gemini/Codex/Copilot/…) |
-| [sdd/](sdd/) | SDD lifecycle artifacts (BRD→IPLAN); `sdd/05_ADR/` = canonical implementing ADRs |
+| [docs/sdd/](docs/sdd/) | SDD lifecycle artifacts (BRD→IPLAN→CHG); `docs/sdd/05_ADR/` = canonical implementing ADRs |
 | [docs/adr/](docs/adr/) | Conceptual/descriptive architecture decision records |
 | [config/](config/) | Per-project / per-domain YAML config on the shared core |
 | [docs/research/](docs/research/) | Background: memory-tool landscape, RAC & Nexus v3 reviews |
 
 ## Status
 
-Project initiation. Phase 0 (dev foundation) scaffolding. See [roadmap/ROADMAP.md](roadmap/ROADMAP.md) § "Engineering Phase view".
+Active platform core (`platform-engramory`). See [docs/sdd/08_IPLAN/IPLAN-00_index.yaml](docs/sdd/08_IPLAN/IPLAN-00_index.yaml) and [plans/](plans/).
 
 ## License
 

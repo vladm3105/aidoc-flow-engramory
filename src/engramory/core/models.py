@@ -20,7 +20,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from types import MappingProxyType
 from typing import Any
 
@@ -166,9 +166,11 @@ class AgentProfile:
     agent_id: str
     display_name: str | None = None
     standing_preferences: Mapping[str, Any] = field(default_factory=dict)
+    tenant_id: str = "default"
 
     def __post_init__(self) -> None:
         _require(bool(self.agent_id), "AgentProfile.agent_id is required")
+        _require(bool(self.tenant_id), "AgentProfile.tenant_id is required")
         object.__setattr__(self, "standing_preferences", _frozen_mapping(self.standing_preferences))
 
 
@@ -253,6 +255,13 @@ class KBDocument:
             f"KBDocument.autonomy_tier must be one of {sorted(AUTONOMY_TIERS)}",
         )
         _require(self.review_ttl_days >= 1, "KBDocument.review_ttl_days must be >= 1")
+        try:
+            date.fromisoformat(str(self.last_verified))
+        except (TypeError, ValueError) as exc:
+            raise ValidationError(
+                f"KBDocument.last_verified must be an ISO YYYY-MM-DD date string: "
+                f"{self.last_verified!r}"
+            ) from exc
         object.__setattr__(self, "frontmatter", _frozen_mapping(self.frontmatter))
         object.__setattr__(self, "watched_paths", tuple(self.watched_paths))
         object.__setattr__(self, "trigger_alerts", tuple(self.trigger_alerts))

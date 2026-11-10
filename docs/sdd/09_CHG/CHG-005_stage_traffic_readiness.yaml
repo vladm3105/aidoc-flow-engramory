@@ -8,6 +8,7 @@
 # =============================================================================
 
 id: CHG-005
+doc_id: CHG-005
 title: "Staging Traffic Readiness Remediation for Ambient Gateway Traffic"
 
 metadata:

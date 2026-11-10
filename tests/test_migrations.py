@@ -19,6 +19,7 @@ def test_migrations_exist_and_ordered() -> None:
         "0006_resize_embeddings_1536.sql",
         "0007_graph_entities_canonical.sql",
         "0008_runbooks_and_doc_governance.sql",
+        "0009_tenant_profiles_and_experience_dedup.sql",
     ]
 
 
@@ -106,3 +107,12 @@ def test_migration_0008_runbooks_and_doc_governance() -> None:
     assert "PRIMARY KEY (tenant_id, step_uid)" in sql
     assert "CONSTRAINT chk_green_readonly" in sql
     assert "DROP TRIGGER IF EXISTS trg_kb_documents_updated_at" in sql
+
+
+def test_migration_0009_tenant_profiles_and_experience_dedup() -> None:
+    """0009 adds tenant_id to agent_profiles and creates uq_episodes_event_id."""
+    sql = (MIGRATIONS / "0009_tenant_profiles_and_experience_dedup.sql").read_text()
+    assert "ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default'" in sql
+    assert "PRIMARY KEY (tenant_id, agent_id)" in sql
+    assert "CREATE UNIQUE INDEX IF NOT EXISTS uq_episodes_event_id" in sql
+    assert "CREATE INDEX IF NOT EXISTS idx_episodes_tenant_project_ts" in sql

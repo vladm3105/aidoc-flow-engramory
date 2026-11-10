@@ -297,6 +297,95 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "name": "memory_ingest_event",
+        "description": (
+            "Validate, screen, and persist a structured ExperienceEvent into L1 episodes."
+        ),
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "event": {
+                    "type": "object",
+                    "description": "ExperienceEvent payload dictionary",
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": ["agent", "project", "domain", "space"],
+                    "default": "project",
+                },
+            },
+            "required": ["event"],
+        },
+    },
+    {
+        "name": "memory_learning_health",
+        "description": (
+            "Compute closed-loop learning effectiveness metrics over recent tenant episodes."
+        ),
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project_id": {
+                    "type": "string",
+                    "description": "Optional project filter",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max recent episodes to inspect (default: 500)",
+                    "default": 500,
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": ["agent", "project", "domain", "space"],
+                    "default": "project",
+                },
+            },
+        },
+    },
+    {
+        "name": "docs_ingest_runbook",
+        "description": (
+            "Governed ingestion of a Markdown runbook and executable steps into PostgreSQL."
+        ),
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Path to the governed Markdown runbook file",
+                },
+                "evidence_ref": {
+                    "type": "string",
+                    "description": "Approved evidence reference (e.g. git commit or CHG ID)",
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": ["agent", "project", "domain", "space"],
+                    "default": "project",
+                },
+            },
+            "required": ["path", "evidence_ref"],
+        },
+    },
 ]
 
 
@@ -378,12 +467,13 @@ class McpServer:
         call_ctx = self._resolve_call_ctx(arguments, ctx)
         try:
             if name == "memory_search":
+                raw_budget = arguments.get("token_budget", 2000)
                 hits = await self._surface.memory_search(
                     call_ctx,
                     query=arguments["query"],
                     k=arguments.get("k", 8),
                     scope=arguments.get("scope", "agent"),
-                    token_budget=arguments.get("token_budget"),
+                    token_budget=2000 if raw_budget is None else int(raw_budget),
                 )
                 formatted = [
                     {
@@ -420,6 +510,26 @@ class McpServer:
                     reason=arguments["reason"],
                 )
                 return {"content": [{"type": "text", "text": "Memory retired"}]}
+
+            elif name == "memory_ingest_event":
+                ev_payload = arguments.get("event")
+                if not isinstance(ev_payload, Mapping):
+                    ev_payload = {k: v for k, v in arguments.items() if k not in ("scope", "event")}
+                ingested = await self._surface.memory_ingest_event(
+                    call_ctx,
+                    ev_payload,
+                    scope=str(arguments.get("scope", "project")),
+                )
+                return {"content": [{"type": "text", "text": json.dumps(ingested, indent=2)}]}
+
+            elif name == "memory_learning_health":
+                health = await self._surface.memory_learning_health(
+                    call_ctx,
+                    project_id=arguments.get("project_id"),
+                    limit=int(arguments.get("limit", 500)),
+                    scope=str(arguments.get("scope", "project")),
+                )
+                return {"content": [{"type": "text", "text": json.dumps(health, indent=2)}]}
 
             elif name == "agent_profile_get":
                 profile = await self._surface.agent_profile_get(call_ctx)
@@ -527,11 +637,15 @@ class McpServer:
                     except StoreUnavailable:
                         if not ws_dir:
                             raise
-                        await self._surface._decide(
+                        from engramory.access.authz import authorize
+
+                        decision = authorize(
                             call_ctx,
                             "context_slice",
                             TargetScope(tenant_id=call_ctx.tenant_id, scope=scope),
                         )
+                        if not decision.allowed:
+                            raise AuthzError(decision.reason) from None
                         ancestors = []
                     if not ancestors and (ws_dir or not self._auth_enabled):
                         confined_ws = resolve_confined_repo_path(
@@ -597,11 +711,15 @@ class McpServer:
                     except StoreUnavailable:
                         if not ws_dir:
                             raise
-                        await self._surface._decide(
+                        from engramory.access.authz import authorize
+
+                        decision = authorize(
                             call_ctx,
                             "blast_radius",
                             TargetScope(tenant_id=call_ctx.tenant_id, scope=scope),
                         )
+                        if not decision.allowed:
+                            raise AuthzError(decision.reason) from None
                         descendants = []
                     if not descendants and (ws_dir or not self._auth_enabled):
                         confined_ws = resolve_confined_repo_path(
@@ -686,9 +804,16 @@ class McpServer:
         self, request: dict[str, Any], ctx: ActorContext | None = None
     ) -> dict[str, Any] | None:
         """Handle a single MCP JSON-RPC request."""
+        if not isinstance(request, Mapping):
+            return {
+                "jsonrpc": "2.0",
+                "id": None,
+                "error": {"code": -32600, "message": "Invalid Request: expected JSON object"},
+            }
         req_id = request.get("id")
         method = request.get("method")
-        params = request.get("params", {})
+        raw_params = request.get("params")
+        params = raw_params if isinstance(raw_params, Mapping) else {}
 
         if method == "initialize":
             return {
@@ -709,8 +834,9 @@ class McpServer:
                 "result": {"tools": TOOLS_SCHEMA},
             }
         elif method == "tools/call":
-            tool_name = params.get("name", "")
-            tool_args = params.get("arguments", {})
+            tool_name = str(params.get("name") or "")
+            raw_args = params.get("arguments")
+            tool_args = dict(raw_args) if isinstance(raw_args, Mapping) else {}
             call_result = await self.handle_call_tool(tool_name, tool_args, ctx=ctx)
             return {
                 "jsonrpc": "2.0",
@@ -988,7 +1114,35 @@ class McpServer:
         scope = str(arguments.get("scope", "project"))
         enforce_project = self._auth_enabled and ("space" not in call_ctx.scopes)
 
-        if name == "docs_slice_runbook":
+        if name == "docs_ingest_runbook":
+            from engramory.core.docs_tools import parse_markdown_document
+
+            target = resolve_confined_repo_path(
+                str(arguments["path"]),
+                project_id=call_ctx.project_id,
+                enforce_project_boundary=enforce_project,
+            )
+            parsed = parse_markdown_document(
+                target,
+                tenant_id=call_ctx.tenant_id,
+                project_id=call_ctx.project_id,
+            )
+            if parsed.kb_document is None:
+                raise ValueError(
+                    f"Runbook '{target.name}' is missing required governed YAML frontmatter"
+                )
+            ing_res = await self._surface.docs_ingest_runbook(
+                call_ctx,
+                doc=parsed.kb_document,
+                steps=parsed.steps,
+                evidence_ref=arguments.get("evidence_ref"),
+                scope=scope,
+            )
+            return {"content": [{"type": "text", "text": json.dumps(ing_res, indent=2)}]}
+
+        elif name == "docs_slice_runbook":
+            from engramory.core.docs_tools import format_runbook_slice
+
             fmt = str(arguments.get("format", "json"))
             token_budget = int(arguments.get("token_budget", 2000))
             doc_id = arguments.get("doc_id")
@@ -1012,11 +1166,17 @@ class McpServer:
                     project_id=call_ctx.project_id,
                     enforce_project_boundary=enforce_project,
                 )
-                res = slice_local_runbooks(
+                local_slice = slice_local_runbooks(
                     confined,
                     doc_id=doc_id,
                     alert_id=alert_id,
                     max_tier=max_tier,
+                    token_budget=token_budget,
+                    output_format="json",
+                )
+                res = format_runbook_slice(
+                    local_slice.get("l0_steps", ()),
+                    memories=res.get("l2_memories", ()),
                     token_budget=token_budget,
                     output_format=fmt,
                 )

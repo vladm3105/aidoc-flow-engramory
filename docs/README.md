@@ -32,4 +32,4 @@ Engramory enforces **hierarchical access control** (`agent → project → domai
 | [adr/](adr/) | Conceptual/descriptive architecture decision records |
 | [research/](research/) | Historical landscape reviews, benchmark evaluations, and memory-tool critiques |
 
-The canonical SDD lifecycle artifacts (BRD→IPLAN) live in the [`sdd/`](../sdd/) tree; [`sdd/05_ADR/`](../sdd/05_ADR/ADR-00_index.md) holds the canonical implementing ADRs. Canonical roadmap is maintained at [`roadmap/ROADMAP.md`](../roadmap/ROADMAP.md).
+The canonical SDD lifecycle artifacts (BRD→IPLAN) live in the [`sdd/`](sdd/) tree; [`sdd/05_ADR/`](sdd/05_ADR/ADR-00_index.md) holds the canonical implementing ADRs. Canonical roadmap is maintained at [`docs/sdd/08_IPLAN/IPLAN-00_index.yaml`](sdd/08_IPLAN/IPLAN-00_index.yaml).
