@@ -3,13 +3,19 @@
 > **Status:** Ready for Implementation  
 > **Date:** 2026-11-09  
 > **Repository:** `platform-engramory`  
-> **Target Branch:** `feature/plan-019-platform-docs-consolidation` -> `dev`  
+> **Target Branch:** `feature/plan-018-harness-v0.2.0-reinit` -> `dev`  
 > **Governance Standard:** `aiops-harness` v0.2.0 (`verified-planning`)  
+> **Companion Plan on Branch:** `plans/PLAN-018_aiops-harness-v0.2.0-reinitialization.md`  
 > **Retiring External Spoke:** `$WORKSPACE_ROOT/platform-docs`
 
 ---
 
 ## 1. Context & Motivation
+
+This branch (`feature/plan-018-harness-v0.2.0-reinit`) combines two governed deliverables that together complete the `aiops-harness` v0.2.0 reinitialization and `platform-docs` consolidation on `platform-engramory`:
+
+- **`PLAN-018` (`plans/PLAN-018_aiops-harness-v0.2.0-reinitialization.md`):** Reinitializes `platform-engramory` onto `aiops-harness` v0.2.0 (`a669f84`), updating the vendored `.ci/`, `.agents/`, `.unified-test-suite/`, `.aidoc/`, and `.github/workflows/` canons, removing deprecated `CLAUDE.md`, archiving root `CHANGELOG.md` to `docs/archive/CHANGELOG.md`, updating `AGENTS.md`, `Taskfile.yml`, `.ci-config`, and `.gitignore`, and aligning the `docs/sdd/` 10-layer SDD artifacts and `docs/sdd/graph/` property graph.
+- **`PLAN-019` (this plan):** Consolidates the remaining `$WORKSPACE_ROOT/platform-docs` capabilities directly into `platform-engramory` as built-in modules so `$WORKSPACE_ROOT/platform-docs` can be retired.
 
 Earlier consolidation work (`PLAN-013`) integrated the core AI-first documentation parser, executable runbook AST validator (`INV-STEP-01`/`INV-STEP-02`), drift detector, `/llms.txt` exporter, and `docs/doc-tools/00_INDEX.md`..`09_ENGRAMORY_CONSOLIDATION_AND_EXTENSION_BLUEPRINT.md` into `platform-engramory`. However, an audit against the standalone `$WORKSPACE_ROOT/platform-docs` spoke identified five capabilities that still exist only in `$WORKSPACE_ROOT/platform-docs` (or have flag/catalog deltas):
 
@@ -53,11 +59,12 @@ Consolidating these five capabilities directly into `platform-engramory` as firs
    - Add `portal/package.json` (including `@astrojs/starlight`, `@scalar/api-reference`, `@scalar/astro`, `astro`, `mermaid`), `portal/astro.config.mjs`, and `portal/README.md`.
    - Regenerate `llms.txt` and `llms-full.txt` via `engramory docs export-llms . --write --full`.
 6. **Comprehensive Test Coverage (`tests/test_docs_tools.py`):** Add unit, CLI, MCP, and security tests covering `DOCUMENTATION_TOOL_CATALOG` (8 `Adopt`, 2 `Trial`, 2 `Hold`), `list_documentation_tools`, `run_governed_lint`, `lint_repo(..., require_frontmatter=True, verify_registry=True)`, `stage_portal_bundle` (including symlink escape rejection, `output_dir` confinement, and Rule D14 secret scrubbing), `portal/` scaffold validation, and `docs/doc-tools/10_DOCUMENTATION_TOOLS_TECHNICAL_REFERENCE.md`.
+7. **Harness v0.2.0 Reinitialization (`PLAN-018` Companion Deliverables on Branch):** Include the `aiops-harness` v0.2.0 canon synchronization (`.ci/`, `.agents/`, `.unified-test-suite/`, `.aidoc/`, `.github/workflows/`, `AGENTS.md`, `Taskfile.yml`, `.ci-config`, `CLAUDE.md` removal, `CHANGELOG.md` relocation to `docs/archive/CHANGELOG.md`, and `docs/sdd/` + `docs/sdd/graph/` alignment) authorized by `plans/PLAN-018_aiops-harness-v0.2.0-reinitialization.md`.
 
 ### 2.2 Non-Goals
 
 - Adding a Node.js runtime service or `node_modules` tree to `Taskfile.yml` (the `portal/` directory is a static Starlight + Scalar build scaffold staged by `engramory docs build-portal`, keeping `platform-engramory`'s local CI gate fast and pure-Python).
-- Modifying vendored `.ci/`, `.agents/`, `.unified-test-suite/`, or `.aidoc/framework/` files.
+- Modifying database schemas under `db/migrations/`.
 - Deleting `$WORKSPACE_ROOT/platform-docs` outside the active repository without a separate human-approved workspace operation.
 
 ---
@@ -130,7 +137,7 @@ Consolidating these five capabilities directly into `platform-engramory` as firs
 
    - Re-export `stage_portal_bundle` from `src/engramory/core/docs_tools.py`.
 2. **Create `portal/` Scaffold in Repository Root:**
-   - Create `portal/package.json` (`name: "@platform/engramory-docs-portal"`, `private: true`, scripts `dev`, `build`, `preview`, `stage-docs: "uv run engramory docs build-portal --repo-path .."`, dependencies `@astrojs/starlight`, `@scalar/api-reference`, `@scalar/astro`, `astro`, `mermaid`).
+   - Create `portal/package.json` (`name: "@platform/engramory-docs-portal"`, `private: true`, scripts `dev`, `build`, `preview`, `stage-docs: "cd .. && uv run engramory docs build-portal --repo-path ."`, dependencies `@astrojs/starlight`, `@scalar/api-reference`, `@scalar/astro`, `astro`, `mermaid`).
    - Create `portal/astro.config.mjs` configuring Astro Starlight (`title: "AIOps Platform & Engramory Documentation Portal"`, sidebar groups `Architecture & Specifications`, `Operational Runbooks`, `API & FastMCP Reference`).
    - Create `portal/README.md` with valid governed YAML frontmatter (`id: doc-engramory-portal-readme`, `watched_paths: ["portal/package.json", "portal/astro.config.mjs", "src/engramory/core/portal_builder.py"]`) documenting how `engramory docs build-portal` stages governed Markdown into `portal/src/content/docs/reference/`.
    - Add `portal/dist/`, `portal/.astro/`, and `portal/src/content/docs/reference/` to `.gitignore` so transient staged output does not dirty the worktree.

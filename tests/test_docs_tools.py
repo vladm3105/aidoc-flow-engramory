@@ -1320,10 +1320,13 @@ def test_plan019_documentation_tool_catalog_and_cli(capsys: pytest.CaptureFixtur
         assert set(item.keys()) == expected_keys
 
     tools = {item["tool"]: item for item in DOCUMENTATION_TOOL_CATALOG}
-    assert tools["vale (errata-ai/vale)"]["tier"] == "Adopt"
+    assert tools["engramory docs"]["tier"] == "Adopt"
+    assert tools["engramory docs"]["license"] == "Proprietary-Internal (MIT deps)"
+    assert tools["vale"]["tier"] == "Adopt"
     assert tools["@astrojs/starlight"]["tier"] == "Trial"
     assert tools["@scalar/api-reference"]["tier"] == "Trial"
     assert tools["docling + pymupdf + beautifulsoup4"]["tier"] == "Adopt"
+    assert tools["aidoc-framework (sdd_doc_lint) + Embedded Kùzu"]["license"] == "MIT"
     assert tools["copybara"]["tier"] == "Hold"
 
     all_res = list_documentation_tools()
@@ -1371,7 +1374,7 @@ def test_plan019_governed_lint_and_doc_tools_suite() -> None:
 
 
 def test_plan019_verify_registry_diagnostics(tmp_path: Path) -> None:
-    """Verify verify_registry=True flags invalid endpoints and triggers with DOC-REG-001."""
+    """Verify verify_registry=True flags invalid or null endpoints and triggers with DOC-REG-001."""
     from engramory.core.docs_tools import run_governed_lint
 
     unfrontmattered = tmp_path / "plain.md"
@@ -1411,6 +1414,61 @@ Section text for registry verification.
     reg_errors = [d for d in diags if d.rule_id == "DOC-REG-001"]
     assert len(reg_errors) == 3
 
+    # Explicit null mappings and null nested keys must also trigger DOC-REG-001
+    null_reg = tmp_path / "null_reg.md"
+    null_reg.write_text(
+        """---
+id: doc-null-reg
+title: Null Registry Doc
+kind: reference
+domain: platform-engramory
+namespace: ns:platform
+status: active
+autonomy_tier: green
+endpoints: null
+triggers: null
+watched_paths:
+  - "README.md"
+last_verified: 2026-11-09
+---
+
+# Null Registry Example
+
+Section text for null registry verification.
+""",
+        encoding="utf-8",
+    )
+    null_diags = lint_markdown_file(null_reg, repo_root=tmp_path, verify_registry=True)
+    assert len([d for d in null_diags if d.rule_id == "DOC-REG-001"]) == 2
+
+    null_nested = tmp_path / "null_nested.md"
+    null_nested.write_text(
+        """---
+id: doc-null-nested
+title: Null Nested Registry Doc
+kind: reference
+domain: platform-engramory
+namespace: ns:platform
+status: active
+autonomy_tier: green
+endpoints:
+  host_loopback: null
+triggers:
+  cli_commands: null
+watched_paths:
+  - "README.md"
+last_verified: 2026-11-09
+---
+
+# Null Nested Registry Example
+
+Section text for null nested registry verification.
+""",
+        encoding="utf-8",
+    )
+    null_nested_diags = lint_markdown_file(null_nested, repo_root=tmp_path, verify_registry=True)
+    assert len([d for d in null_nested_diags if d.rule_id == "DOC-REG-001"]) == 2
+
 
 def test_plan019_portal_scaffold_and_stage_portal_bundle(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -1431,10 +1489,22 @@ def test_plan019_portal_scaffold_and_stage_portal_bundle(
     assert "@scalar/api-reference" in deps
     assert "@scalar/astro" in deps
     assert "mermaid" in deps
+    assert (
+        pkg["scripts"]["stage-docs"] == "cd .. && uv run engramory docs build-portal --repo-path ."
+    )
 
     astro_cfg = astro_cfg_path.read_text(encoding="utf-8")
     assert "@astrojs/starlight" in astro_cfg
     assert "https://docs.int.aiops-flow.io" in astro_cfg
+
+    # Verify default CWD confinement when ENGRAMORY_ALLOWED_DOCS_ROOT is unset
+    monkeypatch.delenv("ENGRAMORY_ALLOWED_DOCS_ROOT", raising=False)
+    monkeypatch.chdir(REPO_ROOT)
+    rc_cwd = cli_main(["docs", "build-portal", "--repo-path", ".", "--dry-run", "--json"])
+    assert rc_cwd == 0
+    out_cwd = json.loads(capsys.readouterr().out)
+    assert out_cwd["status"] == "ok"
+    assert out_cwd["files_staged"] >= 11
 
     workspace = tmp_path / "workspace"
     repo_root = workspace / "platform-sample"
@@ -1476,7 +1546,7 @@ def test_plan019_portal_scaffold_and_stage_portal_bundle(
         stage_portal_bundle(repo_root, output_dir=output_dir, allowed_root=workspace)
     (nested_dir / "escape.md").unlink()
 
-    # CLI build-portal dry-run
+    # CLI build-portal dry-run and export-llms positional path
     monkeypatch.setenv("ENGRAMORY_ALLOWED_DOCS_ROOT", str(workspace))
     rc = cli_main(
         [
@@ -1495,6 +1565,13 @@ def test_plan019_portal_scaffold_and_stage_portal_bundle(
     assert cli_out["status"] == "ok"
     assert cli_out["dry_run"] is True
     assert cli_out["files_staged"] == 1
+
+    rc_llms = cli_main(["docs", "export-llms", str(repo_root), "--write", "--full", "--json"])
+    assert rc_llms == 0
+    llms_out = json.loads(capsys.readouterr().out)
+    assert llms_out["status"] == "ok"
+    assert (repo_root / "llms.txt").is_file()
+    assert (repo_root / "llms-full.txt").is_file()
 
 
 @pytest.mark.asyncio

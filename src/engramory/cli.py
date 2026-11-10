@@ -1179,12 +1179,13 @@ def _register_docs_subcommands(sub: Any) -> None:
     p_drift = docs_sub.add_parser(
         "check-drift", help="detect watched_paths git drift & TTL staleness"
     )
+    p_drift.add_argument("path", nargs="?", default=".", help="repository path (default: .)")
     p_drift.add_argument(
         "--repo-path",
         "--target",
         dest="repo_path",
-        default=".",
-        help="repository path (default: .)",
+        default=None,
+        help="repository path override",
     )
     p_drift.add_argument(
         "--base-ref",
@@ -1208,12 +1209,13 @@ def _register_docs_subcommands(sub: Any) -> None:
     p_llms = docs_sub.add_parser(
         "export-llms", help="generate deterministic /llms.txt and /llms-full.txt"
     )
+    p_llms.add_argument("path", nargs="?", default=".", help="repository path (default: .)")
     p_llms.add_argument(
         "--repo-path",
         "--target",
         dest="repo_path",
-        default=".",
-        help="repository path (default: .)",
+        default=None,
+        help="repository path override",
     )
     p_llms.add_argument(
         "--write", action="store_true", help="write llms.txt (and llms-full.txt) to disk"
@@ -1254,11 +1256,14 @@ def _register_docs_subcommands(sub: Any) -> None:
         "smoke-run", help="verify and run tier='green' read-only runbook probes"
     )
     p_smoke.add_argument(
+        "path", nargs="?", default=".", help="repository or file path (default: .)"
+    )
+    p_smoke.add_argument(
         "--repo-path",
         "--target",
         dest="repo_path",
-        default=".",
-        help="repository or file path (default: .)",
+        default=None,
+        help="repository or file path override",
     )
     p_smoke.add_argument("--doc-id", default=None, help="optional document id filter")
     p_smoke.add_argument(
@@ -1273,11 +1278,14 @@ def _register_docs_subcommands(sub: Any) -> None:
         "ingest", help="ingest governed docs and runbook steps into Postgres"
     )
     p_ingest.add_argument(
+        "path", nargs="?", default=".", help="repository or file path (default: .)"
+    )
+    p_ingest.add_argument(
         "--repo-path",
         "--target",
         dest="repo_path",
-        default=".",
-        help="repository or file path (default: .)",
+        default=None,
+        help="repository or file path override",
     )
     p_ingest.add_argument("--project-id", default=None, help="override project id")
     p_ingest.add_argument(
@@ -1382,18 +1390,24 @@ def _cmd_docs_build_portal(args: argparse.Namespace) -> int:
 def _cmd_docs_check_drift(args: argparse.Namespace) -> int:
     from engramory.core.docs_tools import check_repo_drift, resolve_confined_repo_path
 
-    target = resolve_confined_repo_path(args.repo_path)
+    raw_path = args.repo_path or args.path
+    target = resolve_confined_repo_path(raw_path)
     report = check_repo_drift(target, base_ref=args.base_ref, head_ref=args.head_ref)
-    _emit(args.json, report, f"status={report['status']} findings={report['finding_count']}")
+    _emit(
+        bool(getattr(args, "json", False)),
+        report,
+        f"status={report['status']} findings={report['finding_count']}",
+    )
     return 0 if report["status"] == "ok" else 1
 
 
 def _cmd_docs_export_llms(args: argparse.Namespace) -> int:
     from engramory.core.docs_tools import export_repo_llms, resolve_confined_repo_path
 
-    target = resolve_confined_repo_path(args.repo_path)
+    raw_path = args.repo_path or args.path
+    target = resolve_confined_repo_path(raw_path)
     report = export_repo_llms(target, write_files=bool(args.write), include_full=bool(args.full))
-    _emit(args.json, report, str(report["llms_txt"]).rstrip())
+    _emit(bool(getattr(args, "json", False)), report, str(report["llms_txt"]).rstrip())
     return 0
 
 
@@ -1413,7 +1427,7 @@ def _cmd_docs_slice_runbook(args: argparse.Namespace) -> int:
             token_budget=int(args.token_budget),
             output_format=args.format,
         )
-        _emit(args.json, res, _fmt_human(res))
+        _emit(bool(getattr(args, "json", False)), res, _fmt_human(res))
         return 0
 
     try:
@@ -1439,17 +1453,18 @@ def _cmd_docs_slice_runbook(args: argparse.Namespace) -> int:
             token_budget=int(args.token_budget),
             output_format=args.format,
         )
-        _emit(args.json, res, _fmt_human(res))
+        _emit(bool(getattr(args, "json", False)), res, _fmt_human(res))
         return 0
 
 
 def _cmd_docs_smoke_run(args: argparse.Namespace) -> int:
     from engramory.core.docs_tools import resolve_confined_repo_path, smoke_run_green_steps
 
-    target = resolve_confined_repo_path(args.repo_path)
+    raw_path = args.repo_path or args.path
+    target = resolve_confined_repo_path(raw_path)
     report = smoke_run_green_steps(target, doc_id=args.doc_id, dry_run=bool(args.dry_run))
     summary = f"status={report['status']} passed={report['passed']} failed={report['failed']}"
-    _emit(args.json, report, summary)
+    _emit(bool(getattr(args, "json", False)), report, summary)
     return 0 if report["status"] == "ok" else 1
 
 
@@ -1464,7 +1479,8 @@ def _cmd_docs_ingest(args: argparse.Namespace) -> int:
     )
     from engramory.core.models import KBSection
 
-    target = resolve_confined_repo_path(args.repo_path)
+    raw_path = args.repo_path or args.path
+    target = resolve_confined_repo_path(raw_path)
     bound_root = target if target.is_dir() else target.parent
     raw_files = (
         [target]

@@ -79,11 +79,11 @@ BANNED_RETIRED_TOOLS: Mapping[str, str] = {
 
 DOCUMENTATION_TOOL_CATALOG: tuple[dict[str, str], ...] = (
     {
-        "tool": "engramory docs (platform-engramory)",
-        "category": "Core Documentation, Runbook AST, Drift & RAG Engine",
+        "tool": "engramory docs",
+        "category": "Core Engine & AST Linter",
         "tier": "Adopt",
-        "gate": "Tier 1 + Tier 2 + Tier 3 + MCP Server",
-        "license": "Apache-2.0",
+        "gate": "Tier-1 (<1s) + Tier-2 + MCP",
+        "license": "Proprietary-Internal (MIT deps)",
         "role": (
             "Parses DocumentFrontmatter & {id, tier, mode} executable runbook steps, enforces "
             "INV-STEP-01/02, checks git watched_paths drift & TTL staleness, exports /llms.txt, "
@@ -91,10 +91,10 @@ DOCUMENTATION_TOOL_CATALOG: tuple[dict[str, str], ...] = (
         ),
     },
     {
-        "tool": "vale (errata-ai/vale)",
-        "category": "AI-Chunking & Prose AST Linter",
+        "tool": "vale",
+        "category": "Prose & Chunk-Independence Linter",
         "tier": "Adopt",
-        "gate": "Tier 1 (Offline <1s)",
+        "gate": "Tier-1 (<1s)",
         "license": "MIT",
         "role": (
             "Enforces AIOpsAgent chunk-independence rules (.vale.ini & .vale/styles/AIOpsAgent/): "
@@ -104,9 +104,9 @@ DOCUMENTATION_TOOL_CATALOG: tuple[dict[str, str], ...] = (
     },
     {
         "tool": "@astrojs/starlight",
-        "category": "Static Multi-Repo Developer Portal",
+        "category": "Human Supervision Web Portal",
         "tier": "Trial",
-        "gate": "Tier 2 Build / Stage Portal (https://docs.int.aiops-flow.io)",
+        "gate": "Portal Build",
         "license": "MIT",
         "role": (
             "Aggregates thin-spoke docs/*.md and SDD projections into a zero-JS searchable "
@@ -115,9 +115,9 @@ DOCUMENTATION_TOOL_CATALOG: tuple[dict[str, str], ...] = (
     },
     {
         "tool": "@scalar/api-reference",
-        "category": "Interactive API & Contract Playground",
+        "category": "Interactive API & MCP Console",
         "tier": "Trial",
-        "gate": "Tier 2 Build / Stage Portal (/contracts/<service>)",
+        "gate": "Portal Build",
         "license": "MIT",
         "role": (
             "Renders interactive OpenAPI 3.1 specs, JSONSchema contracts, MCP tool schemas, "
@@ -126,20 +126,20 @@ DOCUMENTATION_TOOL_CATALOG: tuple[dict[str, str], ...] = (
     },
     {
         "tool": "docling + pymupdf + beautifulsoup4",
-        "category": "Multi-Format Document Layout & Table Extraction",
+        "category": "Multi-Format Ingestion (PDF/DOCX/HTML -> MD)",
         "tier": "Adopt",
-        "gate": "Utility / Ingestion Pipeline (SmartExtractionRouter)",
-        "license": "MIT / AGPL-3.0 (optional) / MIT",
+        "gate": "L0 Ingestion",
+        "license": "MIT / AGPL-optional",
         "role": (
             "Extracts PDFs, DOCX, and HTML documents into heading-structured Markdown chunks "
             "inside platform-engramory's SmartExtractionRouter."
         ),
     },
     {
-        "tool": "mermaid (@mermaid-js/mermaid-cli / mmdc)",
-        "category": "Diagrams-as-Code",
+        "tool": "mermaid",
+        "category": "Architecture & Sequence Diagrams (C4 / DFD)",
         "tier": "Adopt",
-        "gate": "Tier 2 CI + Native Portal Rendering",
+        "gate": "Tier-1 + Portal",
         "license": "MIT",
         "role": (
             "Authoritative visualization standard for C4 topologies, sequence diagrams, "
@@ -148,9 +148,9 @@ DOCUMENTATION_TOOL_CATALOG: tuple[dict[str, str], ...] = (
     },
     {
         "tool": "markdownlint-cli2",
-        "category": "Markdown Syntax & Heading AST Linter",
+        "category": "Markdown Syntax & Formatting Gate",
         "tier": "Adopt",
-        "gate": "Tier 1 (Offline <1s)",
+        "gate": "Tier-1 (<1s)",
         "license": "MIT",
         "role": (
             "Fast glob-aware Markdown structure and code-fence linter in lefthook & task check."
@@ -158,26 +158,26 @@ DOCUMENTATION_TOOL_CATALOG: tuple[dict[str, str], ...] = (
     },
     {
         "tool": "yamllint",
-        "category": "YAML Schema & Frontmatter Linter",
+        "category": "YAML Schema & Frontmatter Syntax Gate",
         "tier": "Adopt",
-        "gate": "Tier 1 (Offline <1s)",
-        "license": "GPL-3.0",
+        "gate": "Tier-1 (<1s)",
+        "license": "GPL-3.0 (CLI tool)",
         "role": "Lints SDD YAML layers, ADR/CHG records, and configuration manifests.",
     },
     {
         "tool": "lychee",
-        "category": "Cross-Repo & External Link Verifier",
+        "category": "Offline & External Link Integrity Checker",
         "tier": "Adopt",
-        "gate": "Tier 2 PR CI + Tier 3 Nightly Sweep",
+        "gate": "Tier-1 / Tier-2",
         "license": "Apache-2.0 / MIT",
         "role": "Rust link checker verifying relative anchors and external URLs.",
     },
     {
         "tool": "aidoc-framework (sdd_doc_lint) + Embedded Kùzu",
-        "category": "10-Layer SDD Lifecycle & Topological Graph Slicer",
+        "category": "10-Layer SDD & Runbook Graph Engine",
         "tier": "Adopt",
-        "gate": "Tier 1 + Tier 2",
-        "license": "Proprietary / MIT (Kùzu)",
+        "gate": "Tier-1 / Tier-2",
+        "license": "MIT",
         "role": (
             "Validates the 10-layer SDD chain (BRD->EVAL), executes Binary Topological Validation "
             "(BTV), and slices sub-millisecond openCypher context closures."
@@ -185,9 +185,9 @@ DOCUMENTATION_TOOL_CATALOG: tuple[dict[str, str], ...] = (
     },
     {
         "tool": "copybara",
-        "category": "Cross-Repo Git Sync (Evaluated & Held)",
+        "category": "Cross-Repo Code/Doc Sync",
         "tier": "Hold",
-        "gate": "None",
+        "gate": "Prohibited",
         "license": "Apache-2.0",
         "role": (
             "Not used (Hold): JVM Bazel dependency and Starlark transform maintenance overhead; "
@@ -197,10 +197,10 @@ DOCUMENTATION_TOOL_CATALOG: tuple[dict[str, str], ...] = (
     },
     {
         "tool": "mintlify / readme / mkdocs-material-insiders",
-        "category": "SaaS & Open-Core Doc Portals (Banned)",
+        "category": "Proprietary SaaS / Open-Core Paywalled Portals",
         "tier": "Hold",
-        "gate": "None",
-        "license": "Proprietary / Commercial",
+        "gate": "Prohibited",
+        "license": "Proprietary",
         "role": (
             "Banned per INV-DOC-01: proprietary SaaS lock-in or paywalled features; "
             "use Astro Starlight (MIT) + Scalar (MIT)."
@@ -925,8 +925,8 @@ def lint_markdown_file(
         )
 
     if verify_registry and parsed.has_frontmatter:
-        endpoints = parsed.frontmatter.get("endpoints")
-        if endpoints is not None:
+        if "endpoints" in parsed.frontmatter:
+            endpoints = parsed.frontmatter["endpoints"]
             if not isinstance(endpoints, dict):
                 diags.append(
                     LintDiagnostic(
@@ -942,47 +942,49 @@ def lint_markdown_file(
                     )
                 )
             else:
-                host_lb = endpoints.get("host_loopback")
-                if host_lb is not None and not re.match(
-                    r"^https?://127\.0\.0\.1:\d+", str(host_lb)
-                ):
-                    diags.append(
-                        LintDiagnostic(
-                            rule_id="DOC-REG-001",
-                            severity="error",
-                            file=rel_path,
-                            line=1,
-                            message=(
-                                f"Invalid endpoints.host_loopback '{host_lb}'; must bind to "
-                                f"explicit host loopback 'http(s)://127.0.0.1:<port>'"
-                            ),
-                            remediation_hint=(
-                                "Set endpoints.host_loopback to 'http://127.0.0.1:<port>'."
-                            ),
+                if "host_loopback" in endpoints:
+                    host_lb = endpoints["host_loopback"]
+                    if not isinstance(host_lb, str) or not re.match(
+                        r"^https?://127\.0\.0\.1:\d+", host_lb
+                    ):
+                        diags.append(
+                            LintDiagnostic(
+                                rule_id="DOC-REG-001",
+                                severity="error",
+                                file=rel_path,
+                                line=1,
+                                message=(
+                                    f"Invalid endpoints.host_loopback '{host_lb}'; must bind to "
+                                    f"explicit host loopback 'http(s)://127.0.0.1:<port>'"
+                                ),
+                                remediation_hint=(
+                                    "Set endpoints.host_loopback to 'http://127.0.0.1:<port>'."
+                                ),
+                            )
                         )
-                    )
-                container_gw = endpoints.get("container_gateway")
-                if container_gw is not None and not re.match(
-                    r"^https?://10\.250\.0\.1:\d+", str(container_gw)
-                ):
-                    diags.append(
-                        LintDiagnostic(
-                            rule_id="DOC-REG-001",
-                            severity="error",
-                            file=rel_path,
-                            line=1,
-                            message=(
-                                f"Invalid endpoints.container_gateway '{container_gw}'; must bind "
-                                f"to explicit container gateway 'http(s)://10.250.0.1:<port>'"
-                            ),
-                            remediation_hint=(
-                                "Set endpoints.container_gateway to 'http://10.250.0.1:<port>'."
-                            ),
+                if "container_gateway" in endpoints:
+                    container_gw = endpoints["container_gateway"]
+                    if not isinstance(container_gw, str) or not re.match(
+                        r"^https?://10\.250\.0\.1:\d+", container_gw
+                    ):
+                        diags.append(
+                            LintDiagnostic(
+                                rule_id="DOC-REG-001",
+                                severity="error",
+                                file=rel_path,
+                                line=1,
+                                message=(
+                                    f"Invalid endpoints.container_gateway '{container_gw}'; must "
+                                    f"bind to explicit container gateway 'http(s)://10.250.0.1:<port>'"
+                                ),
+                                remediation_hint=(
+                                    "Set endpoints.container_gateway to 'http://10.250.0.1:<port>'."
+                                ),
+                            )
                         )
-                    )
 
-        triggers = parsed.frontmatter.get("triggers")
-        if triggers is not None:
+        if "triggers" in parsed.frontmatter:
+            triggers = parsed.frontmatter["triggers"]
             if not isinstance(triggers, dict):
                 diags.append(
                     LintDiagnostic(
@@ -999,27 +1001,27 @@ def lint_markdown_file(
                 )
             else:
                 for trig_key in ("alerts", "cli_commands", "mcp_tools"):
-                    trig_val = triggers.get(trig_key)
-                    if trig_val is not None and (
-                        not isinstance(trig_val, list)
-                        or not all(isinstance(x, str) and bool(x.strip()) for x in trig_val)
-                    ):
-                        diags.append(
-                            LintDiagnostic(
-                                rule_id="DOC-REG-001",
-                                severity="error",
-                                file=rel_path,
-                                line=1,
-                                message=(
-                                    f"Frontmatter 'triggers.{trig_key}' must be a list of "
-                                    f"non-empty strings"
-                                ),
-                                remediation_hint=(
-                                    f"Ensure every entry under 'triggers.{trig_key}' is a "
-                                    f"non-empty string."
-                                ),
+                    if trig_key in triggers:
+                        trig_val = triggers[trig_key]
+                        if not isinstance(trig_val, list) or not all(
+                            isinstance(x, str) and bool(x.strip()) for x in trig_val
+                        ):
+                            diags.append(
+                                LintDiagnostic(
+                                    rule_id="DOC-REG-001",
+                                    severity="error",
+                                    file=rel_path,
+                                    line=1,
+                                    message=(
+                                        f"Frontmatter 'triggers.{trig_key}' must be a list of "
+                                        f"non-empty strings"
+                                    ),
+                                    remediation_hint=(
+                                        f"Ensure every entry under 'triggers.{trig_key}' is a "
+                                        f"non-empty string."
+                                    ),
+                                )
                             )
-                        )
 
     # Check watched_paths glob existence (DEAD_WATCHED_PATH_GLOB)
     if repo_root is not None and parsed.kb_document is not None:

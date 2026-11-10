@@ -26,12 +26,12 @@ Authoritative settings for the platform Chatwoot deployment are defined in
 
 ### Endpoint Resolution
 
-- **Internal Stage Mesh (preferred for local/host agents and CI runners):**
-  `http://10.250.0.1:3000` (routed via `platform-tenant-chatwoot.socket` to the rootless `chatwoot` container namespace, UID 1006, port 13030).
-- **Public Stage Domain (external access):**
-  `https://chatwoot-stage.aiops-flow.io` (managed by Cloudflare tunnel in `platform-stage-ops/scripts/cloudflare-platform-stage.py`).
+- **Public Stage HTTPS Domain (default for authenticated API calls):**
+  `https://chatwoot-stage.aiops-flow.io` (managed by Cloudflare TLS tunnel in `platform-stage-ops/scripts/cloudflare-platform-stage.py`).
+- **Internal Stage TLS Mesh (for local/host agents and CI runners with internal TLS):**
+  `https://10.250.0.1:3000` (routed via TLS termination to `platform-tenant-chatwoot.socket` in the rootless `chatwoot` container namespace, UID 1006, port 13030).
 - **Stage Host Runner (mesh access):**
-  `ssh ya@debian` or `ssh ya@100.98.134.10` over Tailscale mesh (direct access to tenant socket `10.250.0.1:3000`).
+  `ssh ya@debian` or `ssh ya@100.98.134.10` over Tailscale mesh.
 
 ### Tenant Accounts & Inboxes (PLAT-025 / ADR-02)
 
@@ -43,11 +43,15 @@ Authoritative settings for the platform Chatwoot deployment are defined in
 
 ### Environment Configuration & Secret Resolution
 
-Resolve the following variables from the environment or the OpenBao stage store (`stage/aidoc-flow-support-desk/tokens` or Chatwoot SuperAdmin user profile):
+Resolve the following variables from the environment or the OpenBao stage store (`stage/aidoc-flow-support-desk/tokens` or Chatwoot SuperAdmin user profile), and validate that `CHATWOOT_BASE_URL` uses `https://` before sending `CHATWOOT_API_TOKEN`:
 
 ```bash
-# Default to internal stage mesh endpoint; fallback to public stage URL if off-mesh:
-CHATWOOT_BASE_URL="${CHATWOOT_BASE_URL:-http://10.250.0.1:3000}"
+# Default to HTTPS stage endpoint; enforce https:// scheme before transmitting credentials:
+CHATWOOT_BASE_URL="${CHATWOOT_BASE_URL:-https://chatwoot-stage.aiops-flow.io}"
+case "$CHATWOOT_BASE_URL" in
+  https://*) ;;
+  *) echo "Error: CHATWOOT_BASE_URL must use https:// to protect CHATWOOT_API_TOKEN" >&2; exit 1 ;;
+esac
 CHATWOOT_API_TOKEN="${CHATWOOT_API_TOKEN:?CHATWOOT_API_TOKEN must be set}"
 CHATWOOT_ACCOUNT_ID="${CHATWOOT_ACCOUNT_ID:-1}"
 ```
@@ -97,7 +101,8 @@ Rules governing origin:
 Search existing Chatwoot conversations to prevent creating duplicate threads:
 
 ```bash
-curl -sS -f \
+case "$CHATWOOT_BASE_URL" in https://*) ;; *) echo "Error: CHATWOOT_BASE_URL must use https://" >&2; exit 1 ;; esac
+curl -sS -f --proto '=https' --tlsv1.2 \
   -H "api_access_token: $CHATWOOT_API_TOKEN" \
   "$CHATWOOT_BASE_URL/api/v1/accounts/$CHATWOOT_ACCOUNT_ID/conversations?q=distinctive+terms" \
   | jq -r '.data.payload[] | {id: .id, status: .status, title: .messages[0].content[:60]}'
@@ -179,7 +184,8 @@ cat > "$PAYLOAD" <<'EOF'
 }
 EOF
 
-RESPONSE=$(curl -sS -f -X POST \
+case "$CHATWOOT_BASE_URL" in https://*) ;; *) echo "Error: CHATWOOT_BASE_URL must use https://" >&2; exit 1 ;; esac
+RESPONSE=$(curl -sS -f --proto '=https' --tlsv1.2 -X POST \
   "$CHATWOOT_BASE_URL/api/v1/accounts/$CHATWOOT_ACCOUNT_ID/conversations/$CONVERSATION_ID/messages" \
   -H "Content-Type: application/json" \
   -H "api_access_token: $CHATWOOT_API_TOKEN" \
@@ -196,14 +202,15 @@ Chatwoot's API requires associating a conversation with an existing `contact_id`
 1. **Resolve or Create Contact:** Ensure a sender contact identity exists for the reporting agent or service:
 
 ```bash
+case "$CHATWOOT_BASE_URL" in https://*) ;; *) echo "Error: CHATWOOT_BASE_URL must use https://" >&2; exit 1 ;; esac
 CONTACT_EMAIL="agent-muse@aiops-flow.io"
-CONTACT_ID=$(curl -sS -f \
+CONTACT_ID=$(curl -sS -f --proto '=https' --tlsv1.2 \
   -H "api_access_token: $CHATWOOT_API_TOKEN" \
   "$CHATWOOT_BASE_URL/api/v1/accounts/$CHATWOOT_ACCOUNT_ID/contacts/search?q=$CONTACT_EMAIL" \
   | jq -r '.payload[0].id // empty')
 
 if [ -z "$CONTACT_ID" ]; then
-  CONTACT_ID=$(curl -sS -f -X POST \
+  CONTACT_ID=$(curl -sS -f --proto '=https' --tlsv1.2 -X POST \
     "$CHATWOOT_BASE_URL/api/v1/accounts/$CHATWOOT_ACCOUNT_ID/contacts" \
     -H "Content-Type: application/json" \
     -H "api_access_token: $CHATWOOT_API_TOKEN" \
@@ -220,7 +227,8 @@ INBOX_ID=1  # Account 1: 1 (support-desk), 2 (platform), 4 (framework), 6 (tradi
             # Account 3: 3 (operations-assistant), 7 (incidents)
             # Account 5: 5 (b-local)
 
-CONVO_RESP=$(curl -sS -f -X POST \
+case "$CHATWOOT_BASE_URL" in https://*) ;; *) echo "Error: CHATWOOT_BASE_URL must use https://" >&2; exit 1 ;; esac
+CONVO_RESP=$(curl -sS -f --proto '=https' --tlsv1.2 -X POST \
   "$CHATWOOT_BASE_URL/api/v1/accounts/$CHATWOOT_ACCOUNT_ID/conversations" \
   -H "Content-Type: application/json" \
   -H "api_access_token: $CHATWOOT_API_TOKEN" \
@@ -251,7 +259,8 @@ cat > "$PAYLOAD" <<'EOF'
 }
 EOF
 
-MSG_RESP=$(curl -sS -f -X POST \
+case "$CHATWOOT_BASE_URL" in https://*) ;; *) echo "Error: CHATWOOT_BASE_URL must use https://" >&2; exit 1 ;; esac
+MSG_RESP=$(curl -sS -f --proto '=https' --tlsv1.2 -X POST \
   "$CHATWOOT_BASE_URL/api/v1/accounts/$CHATWOOT_ACCOUNT_ID/conversations/$CONVO_ID/messages" \
   -H "Content-Type: application/json" \
   -H "api_access_token: $CHATWOOT_API_TOKEN" \
@@ -268,7 +277,8 @@ The Support Desk Agent Bot intercepts the webhook from Chatwoot, sanitizes secre
 
 ```bash
 sleep 2
-curl -sS -f \
+case "$CHATWOOT_BASE_URL" in https://*) ;; *) echo "Error: CHATWOOT_BASE_URL must use https://" >&2; exit 1 ;; esac
+curl -sS -f --proto '=https' --tlsv1.2 \
   -H "api_access_token: $CHATWOOT_API_TOKEN" \
   "$CHATWOOT_BASE_URL/api/v1/accounts/$CHATWOOT_ACCOUNT_ID/conversations/$CONVO_ID/messages" \
   | jq -r '.payload[] | select(.sender.name=="Vl" or .sender.type=="agent_bot") | .content'
@@ -291,7 +301,8 @@ in the thread without needing GitHub access:
 
 ```bash
 # Post a status query into the thread:
-curl -sS -f -X POST \
+case "$CHATWOOT_BASE_URL" in https://*) ;; *) echo "Error: CHATWOOT_BASE_URL must use https://" >&2; exit 1 ;; esac
+curl -sS -f --proto '=https' --tlsv1.2 -X POST \
   "$CHATWOOT_BASE_URL/api/v1/accounts/$CHATWOOT_ACCOUNT_ID/conversations/$CONVO_ID/messages" \
   -H "Content-Type: application/json" \
   -H "api_access_token: $CHATWOOT_API_TOKEN" \
@@ -299,7 +310,7 @@ curl -sS -f -X POST \
 
 # Read back the live status card generated by Support Desk:
 sleep 2
-curl -sS -f \
+curl -sS -f --proto '=https' --tlsv1.2 \
   -H "api_access_token: $CHATWOOT_API_TOKEN" \
   "$CHATWOOT_BASE_URL/api/v1/accounts/$CHATWOOT_ACCOUNT_ID/conversations/$CONVO_ID/messages" \
   | jq -r '.payload[-1].content'
