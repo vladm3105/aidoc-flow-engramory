@@ -61,6 +61,7 @@ COMMITTED-vs-LOCAL classification):
 ~/.agents/scripts/check-skill-shadowing.sh [repo-path]
 # exit 0 clean; 1 collision defect; 2 incomplete scan or usage error
 ```
+
 (Export `AGENTS_CONFIG_DIR` first when the global copy lives elsewhere —
 `~/.agents` is the default root, not the only one.)
 

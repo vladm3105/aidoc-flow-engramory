@@ -9,13 +9,30 @@
 # PROMOTION_REQUIRED_CHECKS is never clearable (empty would gut promotion safety).
 
 # Branch that changes are compared against and PRs target (integration branch).
-BASE_BRANCH=main
+BASE_BRANCH=dev
 # dev-staging-main model: branches reachable by `task promote -- <branch>` (space-separated,
 # in promotion order — one hop at a time, so `staging main` means dev->staging->main).
 # Promotion branches never use local CI: the gate is the server check(s) below on the exact commit.
 PROMOTION_BRANCHES=
 # ff = fast-forward push of the verified commit (same SHA) · pr = open a promotion PR
 PROMOTION_MODE=ff
+# Split forge (#47/#48): empty = one forge for the whole chain. `github` = BASE_BRANCH lives on
+# Gitea (local CI, ship, review, sync) and PROMOTION_BRANCHES live on GitHub, where promotion
+# PRs and `verify` run on self-hosted runners. Needs a `gitea` remote and PROMOTION_REMOTE;
+# `task mirror` pushes BASE_BRANCH from Gitea to GitHub (exact SHAs, never forced).
+PROMOTION_FORGE=
+# Remote carrying the promotion branches in split mode.
+PROMOTION_REMOTE=github
+# Promotion targets agents may promote into on their own (task autopromote), e.g. staging.
+# The promotion PR still needs every required check; main and releases stay human (PLAN-007).
+PROMOTION_AUTONOMOUS=staging
+# Issue tracker forge: github|gitea. Default: GitHub in split mode, otherwise the active forge (G1).
+ISSUE_FORGE=
+# Split forge mirror identity (PLAN-007 G4/G9): the GitHub App id that alone may push the GitHub copy of
+# dev (the key file comes from the environment, MIRROR_APP_KEY_FILE), and the Gitea account that alone
+# may push the Gitea copies of the promotion branches (task mirror --pull).
+MIRROR_APP_ID=
+MIRROR_GITEA_USER=
 # Server checks (GitHub Actions job names / status contexts) required green before promotion.
 PROMOTION_REQUIRED_CHECKS=verify
 # PROMOTION_MODE=pr: approvals required on promotion PRs.
@@ -23,6 +40,9 @@ PROMOTION_APPROVALS=0
 # Require the branch-promotion workflow job on promotion branches (task rulesets).
 # 0 opts out (only when the workflow is legitimately absent — promotions unchain).
 PROMOTION_SOURCE_CHECK=1
+# Require the branch-promotion workflow's verify-integration-source job (branch prefixes, ancestry
+# guard) on the integration branch when PROMOTION_BRANCHES is set (task rulesets). 0 opts out.
+INTEGRATION_SOURCE_CHECK=1
 # Extra required status checks on the integration branch (task rulesets),
 # e.g. blocked-founder-gate; --strict joins verify-integration-source.
 RULESET_EXTRA_CHECKS=
@@ -112,6 +132,9 @@ REVIEW_MODEL=tier-frontier
 REVIEW_RUBRIC=.ci-review/rubric.md
 REVIEW_MAX_ROUNDS=3
 REVIEW_MAX_DIFF_BYTES=150000
+# Vendored canon copies reviewed in their own repositories, left out of the review prompt.
+# Allowed values only: .agents/** .unified-test-suite/** .github/actions/** (space-separated).
+REVIEW_EXCLUDE=.agents/** .unified-test-suite/**
 REVIEW_TIMEOUT=900
 # Environment variables passed to the reviewer (everything else is dropped).
 REVIEW_ENV=LLM_URL LLM_API_KEY ANTHROPIC_API_KEY OPENAI_API_KEY
@@ -121,7 +144,7 @@ REVIEW_CWD=isolated
 REVIEW_STALE_H=24
 
 # Base branches `task autoship` may merge into without a human (e.g. "dev"). Empty = never.
-SHIP_AUTONOMOUS_BRANCHES=
+SHIP_AUTONOMOUS_BRANCHES=dev
 AUTO_MERGE_METHOD=squash
 
 # --- Merge-conflict resolution (canon: https://github.com/vladm3105/aidoc-hybrid-ci/blob/main/docs/CONFLICT_RESOLUTION.md) ---

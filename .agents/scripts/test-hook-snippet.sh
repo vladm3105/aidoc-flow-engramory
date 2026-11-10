@@ -23,7 +23,9 @@ no() { fail=$((fail+1)); printf 'FAIL %s\n' "$1"; }
 # setup lines (`S=$(mktemp)`, the EXIT trap), the leading
 # `jq --arg root ... '`, the trailing `' \` continuation, and the
 # settings.json redirection line.
-fence=$(awk '/^```bash$/{b="";f=1;next} /^```$/{if(f&&b~/\.hooks\.PreToolUse/){printf "%s",b;exit};f=0;next} f{b=b $0 "\n"}' "$ROOT/README.md")
+README_FILE="$ROOT/README.md"
+[ -f "$ROOT/.agents/README.md" ] && README_FILE="$ROOT/.agents/README.md"
+fence=$(awk '/^```bash$/{b="";f=1;next} /^```$/{if(f&&b~/\.hooks\.PreToolUse/){printf "%s",b;exit};f=0;next} f{b=b $0 "\n"}' "$README_FILE")
 [ -n "$fence" ] || { no "hook snippet fence not found in README.md"; echo; echo "passed: $pass   failed: $fail"; exit 1; }
 
 # The guard path must interpolate the config root, not hardcode ~/.agents:

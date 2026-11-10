@@ -29,6 +29,11 @@ This is the whole mechanism; everything else is packaging.
   `rubric vN` output stamp.
 - Diversity axes, in increasing strength: same model fresh context (default) →
   a different model tier via the `model` override → a different vendor.
+  A different vendor goes through the platform LLM gateway
+  **platform-litellm-laya** (OpenAI-compatible `LLM_URL` + the project's virtual
+  key `LLM_API_KEY`, a gateway alias such as `tier-frontier`), the same endpoint
+  the aidoc-hybrid-ci self-review uses. Never call an upstream vendor API with a
+  direct provider key.
 
 **This skill owns the independent-review contract.** `verified-planning` and
 `preprod-review` apply it to their own artifacts; where any of them disagree on
@@ -109,3 +114,11 @@ not in this canon.
 - The run log is `ops/judge-log.md`; the founder or `ceo` marks the outcome
   column, and the tally drives the keep/narrow/drop call.
 - The rubric extends the `weekly-cadence` quality bar.
+
+## Adaptive multi-lens dispatch & 2-pass pre-CI fold orchestration
+
+When dispatching a fresh-context subagent judge for plans or code diffs (before outer CI `task review`):
+
+- **Pass caller-selected 2–4 best-fit lenses as context (without altering the canonical judge rubric in `second-opinion-judge.md`):** Use `aiops sdd select-lenses` or `aiops sdd review-clusters` to select the 2–4 best-fit engineering lenses (`google_sre_design`, `anthropic_evaluator_boundary`, `aws_saga_resilience`, `microsoft_stride_contracts`; minimum-2 fallback `google_sre_design` + `microsoft_stride_contracts`) and include `<selected_review_lenses>` plus `<cross_chunk_index>` in the artifact context packet.
+- **2-pass review-and-fold convergence (3 reviews max):** Run **Pass 1** in a fresh-context subagent (`reviewer_id != generator_id`) to surface all Critical, Major, and Medium gaps; fold all fixes and regression tests; then run **Pass 2** to confirm `0` remaining blocking findings before invoking `task review` or arming auto-merge.
+

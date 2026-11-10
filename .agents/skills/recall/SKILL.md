@@ -18,7 +18,7 @@ whole store; you receive the handful that matter.
 
 ```sh
 SLUG=$(printf '%s' "$PWD" | sed 's#[/_.]#-#g')
-MEMDIR="${MEMDIR:-~/.claude/projects/$SLUG/memory}"
+MEMDIR="${MEMDIR:-${HOME}/.claude/projects/$SLUG/memory}"
 ```
 
 **`memory-hygiene` owns this rule** — its § *Resolve the store* carries the

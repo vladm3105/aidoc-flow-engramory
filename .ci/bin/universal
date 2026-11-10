@@ -92,6 +92,15 @@ case $check in
     need actionlint
     rc=0
     actionlint -no-color "${FILES[@]}" || rc=1
+    # Self-hosted runners only (#49): a GitHub-hosted image in runs-on (or a runner_labels
+    # default) fails the check.
+    hosted=$(grep -nE '^[[:space:]]*(runs-on:|default:).*\b(ubuntu|windows|macos)-[a-z0-9.]+' "${FILES[@]}" || true)
+    if [[ -n $hosted ]]; then
+      echo "workflows: GitHub-hosted runner image (self-hosted runners only):"
+      echo "$hosted" | sed 's/^/  /'
+      echo "  Use the self-hosted labels, e.g. runs-on: [self-hosted, ci, ephemeral]."
+      rc=1
+    fi
     # Anti-deadlock invariant: workflows providing REQUIRED checks must trigger on every event —
     # no paths/paths-ignore under on: (route inside jobs instead). An untriggered required check
     # never reports and blocks the branch ("Expected — Waiting for status to be reported").
@@ -106,6 +115,29 @@ case $check in
         rc=1
       fi
     done
+    # ff promotion source tips need verify (#11): with PROMOTION_MODE=ff, verify.yml must run
+    # on push to BASE_BRANCH and every intermediate promotion branch, or `promote` refuses
+    # them forever (verify: missing). The installer bakes this; older or hand-edited copies drift.
+    if [[ $(ci_config PROMOTION_MODE ff) == ff ]]; then
+      read -r -a promos <<<"$(ci_list PROMOTION_BRANCHES "")"
+      need_b=("$(ci_config BASE_BRANCH main)")
+      (( ${#promos[@]} > 1 )) && need_b+=("${promos[@]:0:${#promos[@]}-1}")
+      for wf in .github/workflows/verify.yml .gitea/workflows/verify.yml; do
+        [[ -f $wf ]] || continue
+        pushb=" $(awk '/^("?on"?):/ {inon=1; next} inon && /^[^[:space:]#]/ {inon=0}
+                    inon && /^  push:/ {inpush=1; next} inpush && /^  [^[:space:]#]/ {inpush=0}
+                    inpush && /^    branches:/ {inb=1; sub(/^    branches:[[:space:]]*/, ""); gsub(/[][,"'"'"']/, " "); print; next}
+                    inb && /^      -/ {sub(/^      -[[:space:]]*/, ""); gsub(/["'"'"']/, ""); print; next}
+                    inb {inb=0}' "$wf" | xargs) "
+        miss=()
+        for b in "${need_b[@]}"; do [[ $pushb == *" $b "* ]] || miss+=("$b"); done
+        if (( ${#miss[@]} )); then
+          echo "workflows: $wf does not run on push to: ${miss[*]} (PROMOTION_MODE=ff)"
+          echo "  ff promotion needs verify on the source tip; add them to on.push.branches (#11)."
+          rc=1
+        fi
+      done
+    fi
     exit $rc ;;
 
   shell)
@@ -131,7 +163,7 @@ case $check in
     for ex in $(ci_list LINT_EXCLUDE ""); do
       sca_excludes+=(--experimental-exclude "$ex")
     done
-    osv-scanner scan source -r --no-ignore "${sca_excludes[@]}" --no-call-analysis=all . ; rc=$?
+    ci_net_run osv-scanner scan source -r --no-ignore "${sca_excludes[@]}" --no-call-analysis=all . ; rc=$?
     [[ $rc -eq 128 ]] && na "no lockfiles/manifests found"
     exit $rc ;;
 

@@ -75,12 +75,14 @@ HRULE = re.compile(r"^(-{3,}|\*{3,}|_{3,})\s*$")
 
 
 def name2stem():
+    # Every file per drifted name: an alias shared by two memories is ambiguous and maps to
+    # None, so --fix never redirects a link to whichever file listdir returned first.
     m = {}
     for f in files():
         nm = fm_name(open(f, encoding="utf-8").read())
         if nm and nm != f[:-3]:
-            m.setdefault(nm, f[:-3])
-    return m
+            m.setdefault(nm, set()).add(f[:-3])
+    return {nm: next(iter(s)) if len(s) == 1 else None for nm, s in m.items()}
 
 
 def resolve(X, stems, n2s):

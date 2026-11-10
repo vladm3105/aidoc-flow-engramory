@@ -1,6 +1,8 @@
 # =============================================================================
 # ADR-01_foundation.template.yaml — Architecture Decision Record (SDD Layer 05)
 # Foundational Architecture and Ecosystem Canon Alignment
+# @ears: EARS.01.01.a001
+# @bdd: BDD.01.01.a001
 # =============================================================================
 
 id: ADR-01
@@ -9,12 +11,12 @@ title: "Foundational Architecture and Ecosystem Canon Alignment"
 
 metadata:
   schema_version: "1.0"
-  framework_version: "0.96.4"
+  framework_version: "0.96.25"
   document_type: "adr-document"
   layer: 5
   lifecycle: mvp-prod-newmvp
-  total_sections: 10
-  last_updated: "2026-10-18"
+  total_sections: 14
+  last_updated: "2026-11-09"
   validation:
     gate: "BTV PASS / FAIL"
     note: "BTV PASS/FAIL is the deterministic gate; heuristic percentage scores are retired."
@@ -217,3 +219,40 @@ security_and_compliance:
     - "semgrep static analysis"
   compliance_frameworks:
     - "Ecosystem Governance Standard"
+
+# =============================================================================
+# Section 11: Traceability
+# =============================================================================
+traceability:
+  upstream:
+    - "@ears: EARS.01.01.a001"
+    - "@bdd: BDD.01.01.a001"
+  downstream:
+    - "SPEC-01"
+
+# =============================================================================
+# Section 12: Related Decisions
+# =============================================================================
+related_decisions:
+  supersedes: []
+  superseded_by: []
+  related: []
+
+# =============================================================================
+# Section 13: Glossary
+# =============================================================================
+glossary:
+  terms:
+    - term: "Quad-Pillar Architecture"
+      definition: "8-Canon ecosystem governance model spanning methodology, agent rules, CI, and testing."
+    - term: "BTV"
+      definition: "Binary Topological Validation over SDD-GRAPH v2.0 property graphs."
+
+# =============================================================================
+# Section 14: Appendix
+# =============================================================================
+appendix:
+  references:
+    - "docs/ONBOARDING.md"
+    - ".aidoc/profile.yaml"
+    - ".aidoc/stack-policy.yaml"

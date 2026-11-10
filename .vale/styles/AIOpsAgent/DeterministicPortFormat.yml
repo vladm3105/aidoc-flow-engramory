@@ -1,6 +1,6 @@
 extends: existence
-message: "Avoid ambiguous localhost port '%s'; use explicit 127.0.0.1:<port> or 10.250.0.1:<port> binding."
+message: "Avoid bare '%s'; specify explicit host loopback ('127.0.0.1:<port>') or container gateway ('10.250.0.1:<port>')."
 level: warning
-ignorecase: true
+nonword: true
 tokens:
-  - 'http://localhost:\d+'
+  - 'https?://localhost:\d+'

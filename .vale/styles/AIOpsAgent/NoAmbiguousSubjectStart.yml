@@ -4,4 +4,4 @@ level: warning
 ignorecase: false
 nonword: true
 tokens:
-  - '\n+(?:It|This|They|These|Those)\s+(?:is|are|will|should|must|can)\b'
+  - '\n+(?:It|This|They|These|Those)\s+(?:is|are|was|were|will|should|must|can|triggers|runs|fails)\b'

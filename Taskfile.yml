@@ -14,7 +14,7 @@ includes:
     flatten: true
     vars:
       SERVICES: "app"
-      EXTRA_FAST_CHECKS: ""
+      EXTRA_FAST_CHECKS: "sdd:check"
       EXTRA_CHECKS: ""
 
   app:

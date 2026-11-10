@@ -18,10 +18,13 @@ def frontmatter(path: Path) -> dict:
     text = path.read_text(encoding="utf-8")
     if not text.startswith("---\n"):
         raise ValueError("missing opening ---")
+    # The block ends at the first `---` on its own line; without one, nothing is frontmatter.
+    lines = text.split("\n")
     try:
-        raw = text.split("---", 2)[1]
-    except IndexError as exc:
+        end = lines.index("---", 1)
+    except ValueError as exc:
         raise ValueError("missing closing ---") from exc
+    raw = "\n".join(lines[1:end])
     data = yaml.safe_load(raw)
     if not isinstance(data, dict):
         raise ValueError("frontmatter is not a mapping")
@@ -73,6 +76,21 @@ def validate(path: Path, kind: str) -> list[str]:
     return errors
 
 
+def _unmanaged_line_count(path: Path) -> int:
+    count = 0
+    skip = False
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line in ("<!-- aidoc-local-flow-ci:begin -->", "<!-- agents-canon:begin -->"):
+            skip = True
+            continue
+        if line in ("<!-- aidoc-local-flow-ci:end -->", "<!-- agents-canon:end -->"):
+            skip = False
+            continue
+        if not skip:
+            count += 1
+    return count
+
+
 def main() -> int:
     files = [
         *((path, "agent") for path in sorted((ROOT / ".agents/agents").rglob("*.md"))),
@@ -81,7 +99,7 @@ def main() -> int:
     ]
     errors = [error for path, kind in files for error in validate(path, kind)]
     instruction_lines = {
-        name: len((ROOT / name).read_text(encoding="utf-8").splitlines()) for name in ("AGENTS.md",)
+        name: _unmanaged_line_count(ROOT / name) for name in ("AGENTS.md",)
     }
     for name, line_count in instruction_lines.items():
         if line_count > 200:

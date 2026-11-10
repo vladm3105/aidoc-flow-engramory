@@ -17,8 +17,8 @@
 #                  provisioning cycle. It stays its own workflow.
 #   composition  — fires on pull_request_review + workflow_run, never
 #                  pull_request. Only same-trigger checks can share a job.
-#   secret-scan  — ubuntu-latest and fork-visible by design; the other scanners
-#                  are self-hosted and fork-guarded (PLAN-025 P3a).
+#   secret-scan  — fork-visible by design; every scanner runs on the self-hosted
+#                  pool (self-hosted runners only, #49).
 #
 # ── D4: THE JOB ID IS THE REQUIRED STATUS CONTEXT ────────────────────────────
 # Renders as `quick-gates`. Renaming the job id silently un-satisfies
@@ -28,18 +28,13 @@
 # `main` requires `call / markdownlint` and `suite`, neither of which appears in
 # any template.
 #
-# ── PRIVATE VARIANT — self-hosted, and that is SAFE here ─────────────────────
+# ── SELF-HOSTED ONLY — safe because repositories are PRIVATE ─────────────────
 # This job runs `pre-commit` over the PR's own files, i.e. it executes PR code.
-# On a PUBLIC repo that means it must stay `ubuntu-latest` (D7) — see the
-# `quick-gates.yml` sibling. On a PRIVATE repo there is no fork-PR surface, so
-# the ephemeral pool is both safe and REQUIRED: GitHub-hosted minutes
-# on a private repo are OPS-0049 billing exposure and against workspace policy.
-#
-# D1 — WHY THIS FILE EXISTS AS A SEPARATE TEMPLATE. `install.sh --update`
-# resolves each surface through manifest.json's `visibility_variants`. With no
-# private variant it re-applies the label-less generic, the reusable's
-# `ubuntu-latest` default wins, and jobs QUEUE FOREVER on a private repo — the
-# defect ci/v2.1.0 shipped the variants to close. Do not merge these two files.
+# On a PRIVATE repo there is no fork-PR surface, so the ephemeral pool is both
+# safe and REQUIRED: GitHub-hosted minutes are billing exposure and against
+# workspace policy (self-hosted runners only, #49). A PUBLIC repository is out
+# of that policy: a self-hosted runner would execute fork PR code. Keep repos
+# private; install.sh warns when the target is public.
 name: quick-gates
 
 'on':
@@ -143,7 +138,16 @@ jobs:
         continue-on-error: true
         uses: ./.github/actions/markdownlint
         with:
-          globs: ''
+          # Same file set as local `task check` (`universal markdown` excludes .ci/** and
+          # .ci-config LINT_EXCLUDE): add one `#<path>/**` line per LINT_EXCLUDE entry.
+          globs: |
+            **/*.md
+            #.ci/**
+            #node_modules/**
+            #vendor/**
+            #.git/**
+            #.agents/**
+            #.unified-test-suite/**
           fail-on-findings: 'true'
 
       # EVERY input passed explicitly, none left to a default. This is a

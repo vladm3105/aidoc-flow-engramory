@@ -1,0 +1,24 @@
+{
+  "name": "@platform/engramory-docs-portal",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "100% MIT Open-Source Human Supervision Portal built on Astro Starlight + Scalar + Mermaid v11",
+  "license": "MIT",
+  "scripts": {
+    "dev": "astro dev --host 127.0.0.1 --port 8005",
+    "build": "astro build",
+    "preview": "astro preview --host 127.0.0.1 --port 8005",
+    "stage-docs": "uv run engramory docs build-portal --repo-path .."
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.32.0",
+    "@scalar/api-reference": "^1.25.0",
+    "@scalar/astro": "^0.2.0",
+    "astro": "^5.1.0",
+    "mermaid": "^11.4.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}

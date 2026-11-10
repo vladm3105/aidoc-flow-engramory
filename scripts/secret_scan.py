@@ -24,7 +24,14 @@ from pathlib import Path
 
 SKIP_DIRS = frozenset({".venv", ".git", "__pycache__", "node_modules", ".mypy_cache", "dist", "build"})
 
-SKIP_PATH_PREFIXES = ("archive/", "archive")
+SKIP_PATH_PREFIXES = (
+    "archive/",
+    "archive",
+    ".aidoc/hybrid-ci/",
+    ".aidoc/hybrid-ci",
+    ".aidoc/framework/",
+    ".aidoc/framework",
+)
 
 
 def _is_skipped(path: Path, tree: Path) -> bool:
@@ -74,9 +81,7 @@ SECRET_ENV_ASSIGNMENT = SecretFormat(
 SECRET_ENV_YAML_ASSIGNMENT = SecretFormat(
     "secret_env_yaml_assignment",
     re.compile(
-        r"\b(?:"
-        + "|".join(DEFAULT_SECRET_ENV_KEYS)
-        + r")\s*:(?!-)\s+(?![\"']?\s*(?:\$|#|$))[\"']?[^\s\"'#${\[]"
+        r"\b(?:" + "|".join(DEFAULT_SECRET_ENV_KEYS) + r")\s*:(?!-)\s+(?![\"']?\s*(?:\$|#|$))[\"']?[^\s\"'#${\[]"
     ),
 )
 
@@ -152,7 +157,9 @@ def _allowlist(tree: Path) -> set[tuple[str, int | None]]:
     except OSError:
         return entries
     for line in lines:
-        entry = line.strip()
+        # Full-line and trailing comments ("path  # why"); a "#" not preceded by whitespace is
+        # part of the path.
+        entry = re.split(r"\s#", line, maxsplit=1)[0].strip()
         if not entry or entry.startswith("#"):
             continue
         path, sep, lineno = entry.rpartition(":")
@@ -179,9 +186,7 @@ def _scannable(tree: Path) -> list[Path]:
 
 class SecretScan:
     @staticmethod
-    def run(
-        trees: tuple[Path, ...], formats: tuple[SecretFormat, ...] = DEFAULT_FORMATS
-    ) -> ScanReport:
+    def run(trees: tuple[Path, ...], formats: tuple[SecretFormat, ...] = DEFAULT_FORMATS) -> ScanReport:
         findings: list[Finding] = []
         for tree in trees:
             allowed = _allowlist(tree)
@@ -199,11 +204,7 @@ class SecretScan:
                         continue
                     if (rel, None) in allowed or (rel, number) in allowed:
                         continue
-                    findings.extend(
-                        Finding(fmt.name, str(path), number)
-                        for fmt in formats
-                        if fmt.pattern.search(line)
-                    )
+                    findings.extend(Finding(fmt.name, str(path), number) for fmt in formats if fmt.pattern.search(line))
         return ScanReport(
             trees_scanned=tuple(str(tree) for tree in trees),
             formats_matched=tuple(fmt.name for fmt in formats),
@@ -211,15 +212,12 @@ class SecretScan:
         )
 
     @staticmethod
-    def enforce(
-        trees: tuple[Path, ...], formats: tuple[SecretFormat, ...] = DEFAULT_FORMATS
-    ) -> ScanReport:
+    def enforce(trees: tuple[Path, ...], formats: tuple[SecretFormat, ...] = DEFAULT_FORMATS) -> ScanReport:
         """Run the scan and fail on any match."""
         report = SecretScan.run(trees=trees, formats=formats)
         if report.findings:
             locations = ", ".join(
-                f"{finding.path}:{finding.line} ({finding.format})"
-                for finding in report.findings_detail
+                f"{finding.path}:{finding.line} ({finding.format})" for finding in report.findings_detail
             )
             raise SecretMaterialFound(f"Secret material found: {locations}")
         return report

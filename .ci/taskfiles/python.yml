@@ -1,4 +1,4 @@
-# aidoc-local-flow-ci language module: Python (uv · ruff · mypy · bandit · pytest-cov · pip-audit)
+# aidoc-hybrid-ci language module: Python (uv · ruff · mypy · bandit · pytest-cov · pip-audit)
 # Include per service:  payments: { taskfile: .ci/taskfiles/python.yml, dir: services/payments, vars: {...} }
 #
 # Vars (all optional):
@@ -70,7 +70,9 @@ tasks:
     vars: *v
     desc: Known-vulnerability scan (pip-audit)
     sources: ['uv.lock', 'pyproject.toml']
-    cmds: ['{{.AUDIT}}']
+    # Network-bound: one retry on a transport error, then timeout, never a finding (#37).
+    env: {CI_NET_CMD: '{{.AUDIT}}'}
+    cmds: ['bash "{{.TASKFILE_DIR}}/../bin/netrun"']
 
   where:
     desc: "(framework) print this service's directory — used by change-impact routing"

@@ -18,7 +18,7 @@ need() { if have "$1"; then ok+=("tool $1"); else problems+=("missing tool: $1 (
 want() { if have "$1"; then ok+=("tool $1"); else warnings+=("missing optional tool: $1 ($2)"); fi; }
 
 # --- languages used (modules referenced by the root Taskfile) ---------------------------
-langs=$(grep -oE '\.ci(-local)?/taskfiles/[a-z0-9_-]+\.ya?ml' Taskfile.yml 2>/dev/null \
+langs=$(grep -oE '(\.ci(-local)?/taskfiles|taskfiles)/[a-z0-9_-]+\.ya?ml' Taskfile.yml 2>/dev/null \
   | sed -E 's#.*/##; s#\.ya?ml$##' | grep -vE '^(common|root|_template)$' | sort -u)
 
 need git "version control"
@@ -60,6 +60,25 @@ on iac       && check_tool iac trivy "iac — mise install"
 want gh "needed for 'task ship' — mise install, then 'gh auth login'"
 ghish=0
 [[ $(ci_forge) == github ]] && ghish=1
+# Split forge (#48): Gitea integration + GitHub promotion; both remotes must exist.
+if [[ $(ci_config PROMOTION_FORGE "") == github ]]; then
+  ghish=1
+  if ci_split_forge; then
+    prem=$(ci_promotion_remote)
+    if [[ $(git remote get-url "$prem" 2>/dev/null) == *github.com* ]]; then
+      ok+=("split forge: integration on gitea ($(ci_push_remote)), promotion on github ($prem)")
+    else
+      problems+=("split forge: PROMOTION_REMOTE '$prem' is missing or not a GitHub remote — git remote add $prem https://github.com/<owner>/<repo>.git")
+    fi
+    # PLAN-007: one verify per promotion PR (pr mode); no dependency bot on the read-only GitHub dev (D-1).
+    [[ $(ci_config PROMOTION_MODE ff) == pr ]] \
+      || problems+=("split forge: PROMOTION_MODE must be pr (one verify per promotion PR; PLAN-007) — set PROMOTION_MODE=pr in .ci-config")
+    [[ -f .github/dependabot.yml || -f .github/dependabot.yaml ]] \
+      && warnings+=("split forge: .github/dependabot.yml opens PRs into the read-only GitHub dev — remove it; dependency updates go through task ship on Gitea (PLAN-007 D-1)")
+  else
+    problems+=("PROMOTION_FORGE=github needs a Gitea integration remote named 'gitea' — git remote add gitea <gitea-url>")
+  fi
+fi
 [[ $(git remote get-url origin 2>/dev/null) == *github.com* ]] && ghish=1
 if have gh && [[ $ghish == 1 ]]; then
   if gh auth status >/dev/null 2>&1; then ok+=("gh authenticated")
@@ -101,20 +120,38 @@ if [[ $(ci_config REVIEW off) != off ]]; then
   [[ $(ci_config REVIEW off) == required ]] && ok+=("self-review required (max $(ci_config REVIEW_MAX_ROUNDS 3) rounds, reviewer: ${rcmd%% *})")
 fi
 
-# --- vendored framework integrity ------------------------------------------------------
-if [[ -f .ci/MANIFEST.sha256 ]]; then
+# --- canon files hidden by .gitignore (a clone would miss them; integrity then fails in CI) ---
+if git rev-parse --git-dir >/dev/null 2>&1 && [[ -f .ci/MANIFEST.sha256 ]]; then
+  hidden=$( { awk '{sub(/^\.\//, "", $2); print ".ci/" $2}' .ci/MANIFEST.sha256; echo .ci/MANIFEST.sha256
+              echo scripts/secret_scan.py; echo scripts/pre_push_guard.sh; } \
+            | while read -r f; do [[ -e $f ]] && git check-ignore -q --no-index "$f" && echo "$f"; done | tr '\n' ' ')
+  [[ -z $hidden ]] || problems+=("canon files ignored by .gitignore (never committed; fresh clones fail integrity): $hidden— add '!<path>' lines to .gitignore")
+fi
+
+# --- vendored or shared framework integrity -------------------------------------------
+cdir=$(ci_dir)
+if [[ -f "$cdir/MANIFEST.sha256" ]]; then
   if have sha256sum; then sumcmd=(sha256sum); else sumcmd=(shasum -a 256); fi
   # SOURCE is installer-written per-install state (source/ref/version for update),
   # not canon content, so it is excluded from the extras check by design.
-  extra=$(cd .ci && comm -13 <(awk '{print $2}' MANIFEST.sha256 | sort) \
+  extra=$(cd "$cdir" && comm -13 <(awk '{print $2}' MANIFEST.sha256 | sort) \
             <(find . -type f ! -name MANIFEST.sha256 ! -name SOURCE | sort) | tr '\n' ' ')
   if [[ -n $extra ]]; then
     problems+=(".ci/ contains files not in the framework manifest: $extra— put project additions in .ci-local/, not .ci/")
   fi
-  if bad=$(cd .ci && "${sumcmd[@]}" -c MANIFEST.sha256 --quiet 2>&1); then
-    ok+=(".ci integrity $(cat .ci/VERSION 2>/dev/null)")
+  if bad=$(cd "$cdir" && "${sumcmd[@]}" -c MANIFEST.sha256 --quiet 2>&1); then
+    ok+=(".ci integrity $(cat "$cdir/VERSION" 2>/dev/null)")
   else
     problems+=(".ci/ was modified locally — never edit .ci/; adapt via Taskfile.yml vars, .ci-config or .ci-local/. Restore with .ci/bin/update. Details: $(tr '\n' ' ' <<<"$bad")")
+  fi
+  if [[ -f .aidoc/harness.lock.json ]]; then
+    lock_sha=$(jq -r '.ci_manifest_sha256 // empty' .aidoc/harness.lock.json 2>/dev/null)
+    actual_sha=$("${sumcmd[@]}" "$cdir/MANIFEST.sha256" | awk '{print $1}')
+    if [[ -n $lock_sha && $lock_sha != "$actual_sha" ]]; then
+      problems+=(".aidoc/harness.lock.json ci_manifest_sha256 ($lock_sha) does not match $cdir/MANIFEST.sha256 ($actual_sha)")
+    elif [[ -n $lock_sha ]]; then
+      ok+=("harness.lock.json attested")
+    fi
   fi
 else
   problems+=(".ci/MANIFEST.sha256 missing — cannot verify framework integrity. Restore with .ci/bin/update (or reinstall) — never run CI on an unverifiable .ci/")
@@ -143,6 +180,22 @@ else
   warnings+=("git hooks not installed — run 'task setup' (or 'lefthook install')")
 fi
 [[ -f AGENTS.md ]] || warnings+=("AGENTS.md missing — agents will not know the protocol")
+
+# --- host runners sharing this user's mise data dir (#40) -----------------------------------
+# A plain actions/runner install under this user (~/actions-runner*/ with a .runner file) runs
+# jdx/mise-action against the same ~/.local/share/mise as local `task ci`; concurrent installs make
+# local checks fail at random ("Text file busy"). Each runner's .env must point MISE_DATA_DIR (and
+# MISE_CACHE_DIR) at a runner-only dir.
+dev_mise=${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}
+shared=()
+for rd in "${CI_RUNNER_HOME:-$HOME}"/actions-runner*/; do
+  [[ -f $rd.runner ]] || continue
+  rdata=$(sed -n 's/^MISE_DATA_DIR=//p' "$rd.env" 2>/dev/null | tail -1)
+  [[ -n $rdata && ${rdata%/} != "${dev_mise%/}" ]] || shared+=("${rd%/}")
+done
+if (( ${#shared[@]} )); then
+  warnings+=("host runners share your mise data dir (${#shared[@]}): ${shared[*]##*/} — set MISE_DATA_DIR/MISE_CACHE_DIR in each runner .env (SERVER_CI_GUIDE: host runners)")
+fi
 
 # --- per-repo governance (failures surface as warnings, never problems) ------------------
 gov_out=$(bash "$(dirname "${BASH_SOURCE[0]}")/governance-check" --json 2>/dev/null); gov_rc=$?

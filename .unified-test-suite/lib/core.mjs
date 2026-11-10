@@ -15,6 +15,23 @@ export const VENDOR_DIR = '.unified-test-suite';
 export const CONFIG_FILE = 'unified-test-suite.config.json';
 export const LOCK_FILE = 'unified-test-suite.lock.json';
 
+export function resolveVendorDir() {
+  const local = path.join(ROOT, VENDOR_DIR);
+  if (existsSync(local)) return local;
+  const harness = process.env.AIOPS_HARNESS_ROOT || process.env.AIDOC_HARNESS_ROOT;
+  if (harness && existsSync(path.join(harness, VENDOR_DIR))) return path.join(harness, VENDOR_DIR);
+  if (existsSync('/opt/aidoc/aiops-harness/.unified-test-suite')) return '/opt/aidoc/aiops-harness/.unified-test-suite';
+  const sibling = path.resolve(ROOT, '..', 'aiops-harness', VENDOR_DIR);
+  if (existsSync(sibling)) return sibling;
+  return CANON_DIR;
+}
+
+export function generatedDir(dir = VENDOR_DIR) {
+  if (process.env.UTS_GENERATED_DIR) return path.resolve(ROOT, process.env.UTS_GENERATED_DIR);
+  if (!existsSync(path.join(ROOT, dir))) return path.join(ROOT, '.aidoc', 'cache', 'uts', 'generated');
+  return path.join(ROOT, dir, 'generated');
+}
+
 export const RUNNERS = ['go', 'pytest', 'node-test', 'node-command', 'steps', 'playwright', 'command', 'sdd-lint', 'journeys'];
 /** Names that would collide with canon tasks (test:<name>) or CLI words. Applies to layers, groups and gates. */
 export const RESERVED_NAMES = ['layer', 'layers', 'report', 'clean', 'changed', 'gate', 'group', 'local', 'setup', 'doctor', 'stack', 'db'];
@@ -122,6 +139,8 @@ export function globToRegExp(glob) {
     } else if (c === '?') re += '[^/]';
     else if (c === '{') {
       const end = glob.indexOf('}', i);
+      // An unmatched `{` is a literal character; jumping to end (-1) used to restart the loop forever.
+      if (end === -1) { re += escapeRe(c); continue; }
       re += '(?:' + glob.slice(i + 1, end).split(',').map(escapeRe).join('|') + ')';
       i = end;
     } else re += escapeRe(c);

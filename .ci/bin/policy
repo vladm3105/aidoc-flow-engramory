@@ -81,7 +81,8 @@ if [[ -n $hits ]]; then
   sed 's/^/  /' <<<"$hits"
   fail=1
 fi
-todo=$(grep -E '(TODO|FIXME|XXX|HACK)' <<<"$added" | grep -vE '(TODO|FIXME|XXX|HACK)[(:[:space:]]*[^#]*(#[0-9]+|https?://)' || true)
+# Word-anchored: a mktemp template (XXXXXX) is not an XXX marker (#38).
+todo=$(grep -E '\b(TODO|FIXME|XXX|HACK)\b' <<<"$added" | grep -vE '\b(TODO|FIXME|XXX|HACK)\b[(:[:space:]]*[^#]*(#[0-9]+|https?://)' || true)
 if [[ -n $todo ]]; then
   echo "POLICY WARNING: new TODO/FIXME without an issue reference (#N or URL):"
   sed 's/^/  /' <<<"$todo"
@@ -96,7 +97,7 @@ fi
 
 # --- 3. Deleted tests ------------------------------------------------------------------
 tests_re='(^|/)(tests?|__tests__|spec|specs|testdata)/|(^|/)test_[^/]*\.py$|_test\.(go|py)$|\.(test|spec)\.[cm]?[jt]sx?$|(^|/)tests/[^/]*\.rs$'
-deleted=$(git diff --diff-filter=D --name-only "$base" -- . | grep -E "$tests_re" || true)
+deleted=$(git diff --diff-filter=D --name-only "$base" -- . | grep -vE '^\.(ci|unified-test-suite|agents)/' | grep -E "$tests_re" || true)
 if [[ -n $deleted ]]; then
   if [[ ${ALLOW_TEST_DELETION:-0} == 1 ]]; then
     echo "POLICY NOTE: test deletion allowed by ALLOW_TEST_DELETION=1:"; sed 's/^/  /' <<<"$deleted"

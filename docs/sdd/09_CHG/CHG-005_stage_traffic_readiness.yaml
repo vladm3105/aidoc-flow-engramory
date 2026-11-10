@@ -78,3 +78,99 @@ seed_scope:
   layer: 9
   affected_documents:
     - "docs/sdd/09_CHG/CHG-005_stage_traffic_readiness.yaml"
+
+decision:
+  decision_id: "DEC-CHG-005"
+  title: "Remediate Engramory for LiteLLM ambient gateway live traffic"
+  status: "Ratified"
+  context: "Stage traffic requires LiteLLM embedding adapter, 384-dim HNSW vector indexing, reflection persistence, knowledge ingestion CLI, and worker daemon."
+  choice: "Execute 5-phase remediation plan (PLAN-005) under C3 direct change governance."
+  consequences: "Enables ambient recall and reflection traffic in staging without breaking existing ports/adapters contracts."
+  alternatives_considered:
+    - option: "Defer vector indexing and worker runner to cloud rollout"
+      rationale_rejected: "Blocks live stage verification with platform-litellm-laya."
+
+impact_assessment:
+  affected_layers:
+    - layer: "CODE"
+      artifacts:
+        - "src/engramory/adapters/dev/llm_litellm.py"
+        - "src/engramory/workers/runner.py"
+      impact: "Adds LiteLLM embedding adapter, worker daemon, and HNSW migration 0005."
+  cascade_direction: "lateral"
+  risk_level: "Low"
+
+implementation:
+  steps:
+    - step: "Execute PLAN-005 staging traffic readiness phases 1-5"
+      phase: "iplan_creation"
+      artifact: "plans/PLAN-005_stage-traffic-readiness.md"
+      status: "Completed"
+    - step: "Record CHG-005 governance artifact"
+      phase: "documentation_sync"
+      artifact: "docs/sdd/09_CHG/CHG-005_stage_traffic_readiness.yaml"
+      status: "Completed"
+  artifacts_modified:
+    - id: "CHG-005"
+      file: "docs/sdd/09_CHG/CHG-005_stage_traffic_readiness.yaml"
+      change_type: "created"
+
+verification:
+  checks:
+    - check: "Unit and integration test suite"
+      result: "Pass"
+      method: "task ci"
+
+gate_approval:
+  gate: "GATE-CODE"
+  approved: true
+  approver: "vladm3105"
+  role: "Owner"
+  approval_date: "2026-11-01"
+  evidence: "PR #59 merged with all CI checks passing"
+  approved_scope_files:
+    - "src/engramory/adapters/dev/llm_litellm.py"
+    - "src/engramory/workers/runner.py"
+  conditions: []
+
+rollback_plan:
+  strategy: "revert-commit"
+  steps:
+    - "Revert PR #59 commit on dev branch"
+  estimated_effort: "5m"
+
+emergency_change:
+  emergency_id: null
+  incident_severity: null
+  fix_deployed: null
+  post_mortem_due: null
+  post_mortem_completed: false
+  post_hoc_gate: null
+
+glossary:
+  terms:
+    - term: "HNSW"
+      definition: "Hierarchical Navigable Small World pgvector index for 384-dim embeddings."
+
+creation_checklist:
+  checks:
+    - id: 1
+      check: "Read every file you reference"
+      status: "Pass"
+    - id: 13
+      check: "SDD-first implementation order"
+      status: "Pass"
+    - id: 14
+      check: "CHG scope: governance, not implementation plan"
+      status: "Pass"
+    - id: 15
+      check: "Mandatory formal decision block"
+      status: "Pass"
+
+validation:
+  document_structure:
+    - id_match: "Verified CHG-005 matches filename"
+  decision_block:
+    - decision_present: "Verified DEC-CHG-005 present"
+  scope:
+    - governance_only: "Verified governance record completeness"

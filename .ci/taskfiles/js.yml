@@ -1,4 +1,4 @@
-# aidoc-local-flow-ci language module: JavaScript / TypeScript (Biome · tsc · Vitest · pnpm audit)
+# aidoc-hybrid-ci language module: JavaScript / TypeScript (Biome · tsc · Vitest · pnpm audit)
 # Include per service:  web: { taskfile: .ci/taskfiles/js.yml, dir: apps/web, vars: {...} }
 #
 # Vars (all optional):
@@ -70,7 +70,9 @@ tasks:
     vars: *v
     desc: Known-vulnerability scan of production dependencies
     sources: ['pnpm-lock.yaml', 'package-lock.json', 'package.json']
-    cmds: ['{{.AUDIT}}']
+    # Network-bound: one retry on a transport error, then timeout, never a finding (#37).
+    env: {CI_NET_CMD: '{{.AUDIT}}'}
+    cmds: ['bash "{{.TASKFILE_DIR}}/../bin/netrun"']
 
   where:
     desc: "(framework) print this service's directory — used by change-impact routing"

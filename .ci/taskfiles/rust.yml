@@ -1,4 +1,4 @@
-# aidoc-local-flow-ci language module: Rust (rustfmt · clippy · cargo check · nextest · llvm-cov · cargo-deny)
+# aidoc-hybrid-ci language module: Rust (rustfmt · clippy · cargo check · nextest · llvm-cov · cargo-deny)
 # Include per service:  engine: { taskfile: .ci/taskfiles/rust.yml, dir: services/engine, vars: {...} }
 #
 # Vars (all optional):
@@ -79,7 +79,9 @@ tasks:
     vars: *v
     desc: cargo-deny (advisories, bans, licenses, sources) — needs deny.toml
     sources: ['Cargo.lock', 'deny.toml', '**/Cargo.toml']
-    cmds: [cargo deny check advisories bans licenses sources]
+    # Network-bound: one retry on a transport error, then timeout, never a finding (#37).
+    env: {CI_NET_CMD: 'cargo deny check advisories bans licenses sources'}
+    cmds: ['bash "{{.TASKFILE_DIR}}/../bin/netrun"']
 
   where:
     desc: "(framework) print this service's directory — used by change-impact routing"

@@ -1,4 +1,4 @@
-# Starter lychee config for aidoc-local-flow-ci consumers (inherited from aidoc-flow-ci v4).
+# Starter lychee config for aidoc-hybrid-ci consumers (inherited from the archived aidoc-flow-ci v4).
 # See https://lychee.cli.rs/usage/config/ for the full reference.
 
 # Behavior

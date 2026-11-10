@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# aidoc-local-flow-ci netrun — run a network-bound check under ci_net_run (#37): one retry on a
+# transport error (DNS, dial, TLS, connect timeout), then exit 124 (`timeout`), never a finding.
+#   CI_NET_CMD='uv run pip-audit' netrun
+# The command arrives in CI_NET_CMD (set through Task env:), so a user-overridden AUDIT string is
+# never re-quoted by Task; it runs through `bash -c` as the plain cmd did.
+set -uo pipefail
+# shellcheck source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+[[ -n ${CI_NET_CMD:-} ]] || { echo "netrun: CI_NET_CMD is empty" >&2; exit 2; }
+CI_NET_LABEL=${CI_NET_LABEL:-${CI_NET_CMD%% *}} ci_net_run bash -c "$CI_NET_CMD"

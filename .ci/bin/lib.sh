@@ -3,6 +3,36 @@
 
 ci_root() { git rev-parse --show-toplevel 2>/dev/null; }
 
+# Resolve the shared read-only CI engine root while keeping $(ci_root) as the target worktree.
+# Supports instant fallback via AIOPS_THIN_SPOKE=0 (G-01, SRE-10).
+ci_harness_root() {
+  local r; r=$(ci_root)
+  if [[ "${AIOPS_THIN_SPOKE:-1}" == "0" && ( -d "$r/.ci/bin" || -d "$r/ci/bin" ) ]]; then
+    echo "$r"
+  elif [[ -d "$r/.ci/bin" || -d "$r/ci/bin" ]]; then
+    echo "${AIOPS_HARNESS_ROOT:-${AIDOC_HARNESS_ROOT:-$r}}"
+  elif [[ -n "${AIOPS_HARNESS_ROOT:-}" && -d "${AIOPS_HARNESS_ROOT}/.ci/bin" ]]; then
+    echo "${AIOPS_HARNESS_ROOT}"
+  elif [[ -n "${AIDOC_HARNESS_ROOT:-}" && -d "${AIDOC_HARNESS_ROOT}/.ci/bin" ]]; then
+    echo "${AIDOC_HARNESS_ROOT}"
+  elif [[ -d "/opt/aidoc/aiops-harness/.ci/bin" ]]; then
+    echo "/opt/aidoc/aiops-harness"
+  elif [[ -n "$r" && -d "$r/../aiops-harness/.ci/bin" ]]; then
+    (cd "$r/../aiops-harness" && pwd)
+  else
+    echo "$r"
+  fi
+}
+
+# Path to the active .ci (or ci/) directory inside $(ci_harness_root).
+ci_dir() {
+  local hr; hr=$(ci_harness_root)
+  if [[ -d "$hr/.ci/bin" ]]; then echo "$hr/.ci"
+  elif [[ -d "$hr/ci/bin" ]]; then echo "$hr/ci"
+  else echo "$hr/.ci"
+  fi
+}
+
 # Base branch that changes are compared against (default: main).
 ci_base_branch() { echo "${CI_BASE_BRANCH:-$(ci_config BASE_BRANCH main)}"; }
 
@@ -209,6 +239,11 @@ ci_glob_match() {
 # machine-readable output shapes identical.
 ci_forge() {
   if [[ -n ${CI_FORGE:-} ]]; then echo "$CI_FORGE"; return; fi
+  # Split forge (#48): the integration side is Gitea whenever a `gitea` remote exists;
+  # promotion commands switch to GitHub explicitly (ci_enter_promotion_forge).
+  if [[ $(ci_config PROMOTION_FORGE "") == github ]] && git remote get-url gitea >/dev/null 2>&1; then
+    echo gitea; return
+  fi
   local b remote url
   b=$(git branch --show-current 2>/dev/null)
   remote=$(git config "branch.$b.remote" 2>/dev/null)
@@ -217,9 +252,45 @@ ci_forge() {
   [[ $url == *github.com* ]] && echo github || echo gitea
 }
 
+# Split forge (#48): integration (BASE_BRANCH) on Gitea, promotion (PROMOTION_BRANCHES) on
+# GitHub. On when PROMOTION_FORGE=github and the integration forge (the forge outside any
+# promotion override) is gitea. Default: off — one forge for the whole chain.
+ci_split_forge() {
+  [[ $(ci_config PROMOTION_FORGE "") == github ]] || return 1
+  [[ $(CI_FORGE="" CI_PUSH_REMOTE="" ci_forge) == gitea ]]
+}
+# Remote that carries the promotion branches in split mode (default: github).
+ci_promotion_remote() { ci_config PROMOTION_REMOTE github; }
+# Route the rest of this process to the promotion forge (split mode only): forge_*, ci_forge,
+# ci_push_remote and forge_repo then all resolve to the promotion remote.
+ci_enter_promotion_forge() {
+  ci_split_forge || return 0
+  export CI_FORGE=github CI_PUSH_REMOTE
+  CI_PUSH_REMOTE=$(ci_promotion_remote)
+  git remote get-url "$CI_PUSH_REMOTE" >/dev/null 2>&1 \
+    || { echo "split forge: promotion remote '$CI_PUSH_REMOTE' missing (PROMOTION_REMOTE)" >&2; return 1; }
+  # Pin gh to the promotion repository (gh would otherwise guess among the remotes).
+  GH_REPO=$(forge_repo) || return 1
+  export GH_REPO
+}
+
+# Issue tracker forge (PLAN-007 G1): ISSUE_FORGE=github|gitea; default in split mode is the
+# promotion forge (GitHub keeps the issues), otherwise the active forge. ci_issue_forge prints it;
+# ci_enter_issue_forge routes the current (sub)shell there.
+ci_issue_forge() {
+  local f; f=$(ci_config ISSUE_FORGE "")
+  if [[ -z $f ]]; then if ci_split_forge; then f=github; else f=$(ci_forge); fi; fi
+  echo "$f"
+}
+ci_enter_issue_forge() {
+  [[ $(ci_issue_forge) == github ]] && ci_split_forge && { ci_enter_promotion_forge || return 1; }
+  return 0
+}
+
 # Remote name carrying forge traffic (fetch/push/PRs) for the active forge:
 # the URL-consistent remote, preferring the branch upstream.
 ci_push_remote() {
+  if [[ -n ${CI_PUSH_REMOTE:-} ]]; then echo "$CI_PUSH_REMOTE"; return; fi
   local b remote url
   b=$(git branch --show-current 2>/dev/null)
   remote=$(git config "branch.$b.remote" 2>/dev/null)
@@ -546,7 +617,7 @@ forge_pr_view() {
   local repo pr base_ref tip mb behind=false
   repo=$(forge_repo) || return 1
   pr=$(forge_gitea_pages "repos/$repo/pulls?state=all" 2>/dev/null \
-    | jq --arg b "$1" '[.[] | select(.head.ref == $b)] | first // empty') || return 1
+    | jq --arg b "$1" '[.[] | select(.head.ref == $b or .head.label == $b)] | first // empty') || return 1
   [[ -n $pr ]] || return 1
   base_ref=$(jq -r .base.ref <<<"$pr")
   tip=$(forge_api GET "repos/$repo/branches/$base_ref" 2>/dev/null | jq -r .commit.sha 2>/dev/null)
@@ -584,4 +655,201 @@ forge_contents() {
     return
   fi
   forge_api GET "repos/$1/contents/$2" 2>/dev/null | jq -r .content
+}
+
+# Integration PR heads allowed into BASE_BRANCH (#36). The verify-integration-source job of
+# branch-promotion.yml enforces the same list server-side (a self-test keeps them equal); ship and
+# review check it locally so a bad name fails before the push, not after the PR opens. Applies only
+# where that workflow is installed.
+CI_INTEGRATION_HEADS='feature/* fix/* dependabot/* renovate/* staging'
+ci_integration_head_check() {  # <branch>: 0 ok / not enforced; 1 with a message on stderr
+  local b=$1 pat
+  [[ -f .github/workflows/branch-promotion.yml || -f .gitea/workflows/branch-promotion.yml ]] || return 0
+  for pat in $CI_INTEGRATION_HEADS; do
+    # shellcheck disable=SC2053  # reason: $pat is a glob on purpose
+    [[ $b == $pat ]] && return 0
+  done
+  echo "branch '$b' cannot open an integration PR: heads must match ${CI_INTEGRATION_HEADS// /, } (verify-integration-source refuses others)." >&2
+  echo "  Rename before pushing: git branch -m '$b' 'feature/${b#*/}'" >&2
+  return 1
+}
+
+# Network-bound scanners (#37): run "$@"; when it fails with a transport error (DNS, dial, TLS,
+# connect timeout), retry once after CI_NET_RETRY_DELAY seconds (default 10). Still a transport
+# error: say the tree was NOT scanned and return 124, which `run` reports as `timeout`, blocking
+# but distinct from a finding. Every other result passes through unchanged.
+CI_NET_ERR_RE='no such host|dial (tcp|udp)|i/o timeout|connection refused|connection reset by peer|network is unreachable|temporary failure in name resolution|tls handshake timeout|context deadline exceeded|could not resolve host|getaddrinfo|EAI_AGAIN|ENOTFOUND|ETIMEDOUT|ECONNREFUSED'
+ci_net_run() {
+  local out rc attempt
+  for attempt in 1 2; do
+    out=$(mktemp)
+    "$@" 2>&1 | tee "$out"; rc=${PIPESTATUS[0]}
+    if [[ $rc -ne 0 ]] && grep -qiE "$CI_NET_ERR_RE" "$out"; then
+      rm -f "$out"
+      if [[ $attempt == 1 ]]; then
+        echo "ci: ${CI_NET_LABEL:-$1} hit a network error; retrying once in ${CI_NET_RETRY_DELAY:-10}s" >&2
+        sleep "${CI_NET_RETRY_DELAY:-10}"; continue
+      fi
+      echo "ci: INFRA: ${CI_NET_LABEL:-$1} could not reach its vulnerability database (network/DNS); the tree is NOT scanned." >&2
+      echo "ci: reported as timeout (blocking, not a finding): re-run once the network is back." >&2
+      return 124
+    fi
+    rm -f "$out"; return "$rc"
+  done
+}
+
+# --- OpenTelemetry Collector & Observability Integration ------------------------------------
+
+# Resolves the active OTel Collector HTTP endpoint with a strict 200ms probe.
+# Returns 0 with endpoint on stdout, or 1 if unreachable.
+ci_resolve_otel_endpoint() {
+  local cand candidates=()
+  if [[ ${OTEL_EXPORTER_OTLP_ENDPOINT:-} == "off" || ${OTEL_EXPORTER_OTLP_ENDPOINT:-} == "none" ]]; then
+    return 1
+  fi
+  if [[ -n ${OTEL_EXPORTER_OTLP_ENDPOINT:-} ]]; then
+    candidates=("${OTEL_EXPORTER_OTLP_ENDPOINT}")
+  else
+    # Platform standards: NetBird platform mesh IP, Docker host gateway, and localhost offsets
+    candidates=(
+      "http://10.250.0.1:4318"
+      "http://host.docker.internal:14318"
+      "http://host.docker.internal:4318"
+      "http://127.0.0.1:14318"
+      "http://127.0.0.1:4318"
+    )
+  fi
+  for cand in "${candidates[@]}"; do
+    cand=${cand%/}
+    # Quick probe: any response indicates active listener
+    if curl -s -m 0.2 -o /dev/null "$cand/" 2>/dev/null; then
+      printf '%s' "$cand"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Emits structured CI summary execution logs/metrics to OTel Collector.
+# Autonomy Invariant: Strictly non-blocking, backgrounded, fail-open (never fails caller).
+ci_telemetry_emit() {
+  local root sum_file
+  root=$(ci_root 2>/dev/null) || return 0
+  sum_file="$root/.ci-out/summary.json"
+  [[ -f $sum_file ]] || return 0
+  command -v curl >/dev/null 2>&1 || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+
+  (
+    local ep repo_name git_sha duration_s status fail_count sev_num sev_text body_payload now_ns payload
+    ep=$(ci_resolve_otel_endpoint) || exit 0
+    repo_name=$(basename "$root")
+    git_sha=$(jq -r '.git.sha // "unknown"' "$sum_file" 2>/dev/null || echo "unknown")
+    duration_s=$(jq -r '.duration_s // 0' "$sum_file" 2>/dev/null || echo 0)
+    status=$(jq -r '.status // "unknown"' "$sum_file" 2>/dev/null || echo "unknown")
+    fail_count=$(jq -r '.counts.fail // 0' "$sum_file" 2>/dev/null || echo 0)
+
+    if [[ $status == "fail" ]]; then
+      sev_num=17; sev_text="ERROR"
+    else
+      sev_num=9; sev_text="INFO"
+    fi
+
+    body_payload=$(jq -c . "$sum_file" 2>/dev/null || echo '{"status":"unknown"}')
+    now_ns="$(date +%s)000000000"
+
+    payload=$(jq -n \
+      --arg repo "$repo_name" \
+      --arg svc "ci-${repo_name}" \
+      --arg sha "$git_sha" \
+      --arg now "$now_ns" \
+      --argjson sev_num "$sev_num" \
+      --arg sev_text "$sev_text" \
+      --arg body "$body_payload" \
+      --argjson dur "$duration_s" \
+      --arg st "$status" \
+      --argjson fails "$fail_count" \
+      '{
+        resourceLogs: [{
+          resource: {
+            attributes: [
+              {key: "service.name", value: {stringValue: $svc}},
+              {key: "aidoc.origin.repo", value: {stringValue: $repo}},
+              {key: "git.sha", value: {stringValue: $sha}},
+              {key: "ci.schema", value: {intValue: 1}}
+            ]
+          },
+          scopeLogs: [{
+            logRecords: [{
+              timeUnixNano: $now,
+              severityNumber: $sev_num,
+              severityText: $sev_text,
+              body: {stringValue: $body},
+              attributes: [
+                {key: "ci.duration_s", value: {intValue: $dur}},
+                {key: "ci.status", value: {stringValue: $st}},
+                {key: "ci.counts.fail", value: {intValue: $fails}}
+              ]
+            }]
+          }]
+        }]
+      }')
+
+    curl -sS -X POST "${ep}/v1/logs" \
+      -H "Content-Type: application/json" \
+      --max-time 1 \
+      -d "$payload" >/dev/null 2>&1 || true
+  ) &
+}
+
+# Emits an ad-hoc tagged operational event to OTel Collector.
+ci_telemetry_event() {
+  local tag=$1 sev_text=$2 msg=$3
+  command -v curl >/dev/null 2>&1 || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+
+  (
+    local ep root repo_name now_ns sev_num payload
+    ep=$(ci_resolve_otel_endpoint) || exit 0
+    root=$(ci_root 2>/dev/null || pwd)
+    repo_name=$(basename "$root")
+    now_ns="$(date +%s)000000000"
+    if [[ $sev_text == "ERROR" ]]; then sev_num=17; else sev_num=9; fi
+
+    payload=$(jq -n \
+      --arg repo "$repo_name" \
+      --arg svc "ci-${repo_name}" \
+      --arg tag "$tag" \
+      --arg now "$now_ns" \
+      --argjson sev_num "$sev_num" \
+      --arg sev_text "$sev_text" \
+      --arg msg "$msg" \
+      '{
+        resourceLogs: [{
+          resource: {
+            attributes: [
+              {key: "service.name", value: {stringValue: $svc}},
+              {key: "aidoc.origin.repo", value: {stringValue: $repo}},
+              {key: "tag", value: {stringValue: $tag}}
+            ]
+          },
+          scopeLogs: [{
+            logRecords: [{
+              timeUnixNano: $now,
+              severityNumber: $sev_num,
+              severityText: $sev_text,
+              body: {stringValue: $msg},
+              attributes: [
+                {key: "event.tag", value: {stringValue: $tag}}
+              ]
+            }]
+          }]
+        }]
+      }')
+
+    curl -sS -X POST "${ep}/v1/logs" \
+      -H "Content-Type: application/json" \
+      --max-time 1 \
+      -d "$payload" >/dev/null 2>&1 || true
+  ) &
 }

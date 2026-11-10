@@ -32,6 +32,5 @@ docs/**                                 @vladm3105
 
 # Governance surfaces (specific files — LAST so they win over
 # the broader docs/** and .github/** rules above)
-CLAUDE.md                               @vladm3105
 DECISIONS.md                            @vladm3105
 AGENTS.md                               @vladm3105

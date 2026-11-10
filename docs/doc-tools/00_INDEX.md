@@ -57,6 +57,8 @@ flowchart TD
     IDX --> WF["06_AUTONOMOUS_AGENT_WORKFLOWS_NATS_AND_PAPERCLIP.md<br/>(NATS Drift Events, Paperclip Tasks & Auto-Remediation)"]
     IDX --> PORTAL["07_PORTAL_API_CONTRACTS_AND_DEPLOYMENT_RUNBOOK.md<br/>(Starlight + Scalar Portal, Rootless Compose & Runbooks)"]
     IDX --> INFRA["08_CROSS_PLATFORM_INFRASTRUCTURE_AND_OBSERVABILITY.md<br/>(Cross-Platform Wiring, OTLP, Alerts & OCI/R2 Storage)"]
+    IDX --> BLUEPRINT["09_ENGRAMORY_CONSOLIDATION_AND_EXTENSION_BLUEPRINT.md<br/>(Consolidated Engramory L0 Core & Retired platform-docs)"]
+    IDX --> TECHREF["10_DOCUMENTATION_TOOLS_TECHNICAL_REFERENCE.md<br/>(Vale, Starlight, Scalar, Docling, Engramory & Copybara)"]
 
     ARCH --> SCHEMA
     SCHEMA --> LINT
@@ -66,6 +68,7 @@ flowchart TD
     SEC --> WF
     WF --> PORTAL
     INFRA --> PORTAL
+    BLUEPRINT --> TECHREF
 ```
 
 ### 2.1 Specification Catalog
@@ -77,7 +80,7 @@ flowchart TD
 | **03** | **[`03_LINTING_GATES_AND_DRIFT_ENGINE.md`](03_LINTING_GATES_AND_DRIFT_ENGINE.md)** | • Tier-1 Offline Gate (`<1s`, zero network): `platform-docs lint`, `Vale` (MIT) prose & chunk-independence rule pack, `markdownlint-cli2`, `yamllint`<br/>• Live Command & Endpoint Verifier (validating `aiops-harness` CLI flags, FastMCP tool names, and `127.0.0.1` vs. `10.250.0.1` stage ports)<br/>• Deterministic Code-to-Doc Drift Sensor (`watched_paths` git diff matcher) & 90-day `last_verified` TTL staleness scanner<br/>• Live `tier="green"` Runbook Smoke Execution integrated with `unified-test-suite` (`uts`) |
 | **04** | **[`04_GRAPH_INDEXING_MCP_AND_ENGRAMORY_RAG.md`](04_GRAPH_INDEXING_MCP_AND_ENGRAMORY_RAG.md)** | • Extending `aidoc-context-tools` Embedded Kùzu schema with `RunbookNode`, `RunbookStepNode`, `AlertTriggerNode`, and `ServiceEndpointNode`<br/>• openCypher queries for `<1ms` alert-to-runbook and command-to-playbook slicing<br/>• FastMCP tool definitions (`docs_slice_runbook`, `docs_validate_file`, `docs_check_drift`, `docs_export_llms`, `docs_search_hybrid`)<br/>• Heading-path semantic chunking and hybrid retrieval (`pgvector` HNSW + BM25 RRF) in `aidoc-flow-engramory` |
 
-### 2.2 Security, Workflows & Consolidation Catalog (05–09)
+### 2.2 Security, Workflows & Consolidation Catalog (05–10)
 
 | # | Document | Key Topics Covered |
 | :--- | :--- | :--- |
@@ -85,7 +88,8 @@ flowchart TD
 | **06** | **[`06_AUTONOMOUS_AGENT_WORKFLOWS_NATS_AND_PAPERCLIP.md`](06_AUTONOMOUS_AGENT_WORKFLOWS_NATS_AND_PAPERCLIP.md)** | • Autonomous documentation maintenance & self-healing drift loops<br/>• NATS JetStream subjects (`xp.platform.docs.drift.v1`, `xp.platform.docs.stale.v1`, `xp.platform.docs.indexed.v1`) and JCS-signed CloudEvents<br/>• `aiops-pm` routing and `platform-paperclip` `DOC2C` / `CODE2S` task creation with `$1.50` LiteLLM spend caps<br/>• Execution by `aiops-dev` in isolated Gitea worktrees with 2-pass `task review` |
 | **07** | **[`07_PORTAL_API_CONTRACTS_AND_DEPLOYMENT_RUNBOOK.md`](07_PORTAL_API_CONTRACTS_AND_DEPLOYMENT_RUNBOOK.md)** | • 100% MIT Open-Source Human Supervision Portal built on **Astro Starlight** + **Scalar** (OpenAPI 3.1 / Protobuf / FastMCP reference) + **Mermaid v11**<br/>• Multi-repo aggregator pulling thin-spoke `docs/*.md` and Tier-3 SDD projections<br/>• Rootless Docker Compose deployment in `ns:platform` (`UID 1004`), ports `127.0.0.1:8005` / `10.250.0.1:8000`, and OpenBao Path C sidecar<br/>• Executable operational runbooks for `platform-docs` health checks, index rebuilds, and incident recovery |
 | **08** | **[`08_CROSS_PLATFORM_INFRASTRUCTURE_AND_OBSERVABILITY.md`](08_CROSS_PLATFORM_INFRASTRUCTURE_AND_OBSERVABILITY.md)** | • Cross-platform integration matrix across all `platform-*` repositories (`platform-openbao`, `platform-observability-monitoring`, `platform-litellm-laya`, `platform-temporal`, `platform-superset`, `platform-stage-ops`)<br/>• Outbound OTLP spans/metrics/logs to ClickHouse, HyperDX, and Langfuse<br/>• Production alert rules (`ALT-DOC-001`–`004`) routed via Chatwoot & `aidoc-flow-support-desk`<br/>• Artifact persistence in OCI Object Storage (`stage-docs-bundles`) and Cloudflare R2 Tier B1 off-site backups |
-| **09** | **[`09_ENGRAMORY_CONSOLIDATION_AND_EXTENSION_BLUEPRINT.md`](09_ENGRAMORY_CONSOLIDATION_AND_EXTENSION_BLUEPRINT.md)** | • Architectural evaluation: Extending `aidoc-flow-engramory` (`KnowledgeCore` L0) vs. standalone `platform-docs`<br/>• Alignment with Engramory ADR-08 (*Two Bounded Cores on One Spine*)<br/>• Exact module-by-module extension map for `src/engramory/` (`knowledge.py`, `chunking.py`, `git_sync.py`, `kb_graph.py`, `mcp/server.py`) and migration `0008_runbooks_and_doc_governance.sql`<br/>• Unified **L0 Runbook + L2 Episodic Memory Fusion** for autonomous incident triage |
+| **09** | **[`09_ENGRAMORY_CONSOLIDATION_AND_EXTENSION_BLUEPRINT.md`](09_ENGRAMORY_CONSOLIDATION_AND_EXTENSION_BLUEPRINT.md)** | • Architectural evaluation: Extending `platform-engramory` (`KnowledgeCore` L0) and retiring standalone `platform-docs`<br/>• Alignment with Engramory ADR-08 (*Two Bounded Cores on One Spine*)<br/>• Exact module-by-module extension map for `src/engramory/` (`docs_tools.py`, `portal_builder.py`, `knowledge.py`, `chunking.py`, `git_sync.py`, `kb_graph.py`, `mcp/server.py`) and migration `0008_runbooks_and_doc_governance.sql`<br/>• Unified **L0 Runbook + L2 Episodic Memory Fusion** for autonomous incident triage |
+| **10** | **[`10_DOCUMENTATION_TOOLS_TECHNICAL_REFERENCE.md`](10_DOCUMENTATION_TOOLS_TECHNICAL_REFERENCE.md)** | • Master documentation toolchain inventory (`DOCUMENTATION_TOOL_CATALOG`: 8 `Adopt`, 2 `Trial`, 2 `Hold`)<br/>• Technical reference for `engramory docs`, `Vale` (`AIOpsAgent` rule pack), `Astro Starlight`, `Scalar`, `Docling` + `PyMuPDF` + `BeautifulSoup4`, `Mermaid v11`, `markdownlint-cli2`, `yamllint`, `lychee`, and `aidoc-framework` + `Kùzu`<br/>• Architectural evaluation placing `Copybara` and proprietary SaaS portals (`Mintlify`, `MkDocs Material Insiders`) on **Hold** |
 
 ---
 

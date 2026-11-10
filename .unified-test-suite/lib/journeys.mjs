@@ -187,8 +187,14 @@ export function importEvidence({ layer, reportDir } = {}) {
       const unobserved = card.expect.filter((id) => byId.get(id)?.status !== 'passed' || !String(byId.get(id)?.observed ?? '').trim());
       const timings = Array.isArray(rec.timings) ? rec.timings : [];
       const enforced = card.ears.filter((e) => e.within?.enforce && !e.coveredBy);
-      const broken = enforced.filter((e) => timings.some((t) => t?.ears === e.id && t.ok === false)).map((e) => e.id);
-      const untimed = enforced.filter((e) => !timings.some((t) => t?.ears === e.id)).map((e) => e.id);
+      // A measurement (JOURNEYS.md timings[]: { ears, metric, samples[], unit, bound?, ok? }) has numeric
+      // samples and a boolean verdict; a bound counts as met only by such an entry with ok === true.
+      const filled = (v) => typeof v === 'string' && v.trim() !== '';
+      const measured = (e) => timings.filter((t) => t?.ears === e.id && typeof t.ok === 'boolean'
+        && filled(t.metric) && filled(t.unit)
+        && Array.isArray(t.samples) && t.samples.length > 0 && t.samples.every(Number.isFinite));
+      const broken = enforced.filter((e) => measured(e).some((t) => t.ok === false)).map((e) => e.id);
+      const untimed = enforced.filter((e) => !measured(e).some((t) => t.ok === true)).map((e) => e.id);
       if (broken.length) { verdict = 'failed'; cls = 'product'; note = `enforced time bound exceeded for: ${broken.join(', ')}`; }
       else if (notPassed.length || unobserved.length || untimed.length) {
         verdict = 'inconclusive'; cls = 'test';
@@ -214,12 +220,13 @@ export function importEvidence({ layer, reportDir } = {}) {
   const envs = [...new Set(plans.map((p) => p.environment ?? null))];
   const allowed = (c) => !c.environments.length || envs.length === 0 || envs.includes(null) || envs.some((e) => c.environments.includes(e));
   const missing = [...cards.values()].filter((c) => c.journey && !fresh.has(c.journey) && allowed(c)).sort((a, b) => a.journey.localeCompare(b.journey));
-  if (fresh.size || plans.length) for (const c of missing) {
+  // Even with no fresh record or plan at all, a finished card is unverified, never silently absent.
+  for (const c of missing) {
     blocked++;
     cases.push(`  <testcase classname="journey" name="${xmlEsc(c.journey)}" file="${xmlEsc(c.file)}" line="1" time="0"><skipped message="${xmlEsc('not verified: no fresh evidence for this tree (not run, stale or ignored record)')}"/></testcase>`);
   }
   writeFileSync(path.join(reportDir, 'junit.xml'), `<?xml version="1.0" encoding="UTF-8"?>\n<testsuites><testsuite name="journeys" tests="${cases.length}" failures="${failures}" skipped="${blocked}">\n${cases.join('\n')}\n</testsuite></testsuites>\n`);
-  const miss = fresh.size || plans.length ? missing.map((c) => ({ journey: c.journey, file: c.file, tdd: c.tdd })) : [];
+  const miss = missing.map((c) => ({ journey: c.journey, file: c.file, tdd: c.tdd }));
   writeFileSync(path.join(reportDir, 'journeys.json'), JSON.stringify(redactDeep({ evidenceDir: toPosix(path.relative(ROOT, dir)), fingerprint: fp, environments: envs, used, missing: miss, ignored }), null, 2) + '\n');
   for (const i of ignored) console.log(redact(`ignored ${i.record}: ${i.reason}`));
   const blockedRuns = blocked - miss.length;

@@ -29,6 +29,7 @@ remote=$(ci_push_remote)
 
 [[ -n $branch ]] || die "detached HEAD — check out a feature branch"
 [[ $branch != "$base" ]] || die "do not ship from '$base' — use a feature branch and a PR"
+ci_integration_head_check "$branch" || die "branch name refused (#36)"
 [[ -z $(git status --porcelain) ]] || die "working tree is dirty (incl. untracked files) — commit or stash first"
 if [[ $(ci_forge) == github ]]; then
   command -v gh >/dev/null || die "gh CLI not installed (mise install; gh auth login)"
@@ -78,7 +79,8 @@ if [[ $review_mode == required ]]; then
   round=$(jq -r '"\(.round)/\(.max_rounds)"' "$state_dir/$key.json")
   diff_sha=$(jq -r .diff_sha256 "$state_dir/$key.json")
   issue=$(jq -r '.issue // empty' "$state_dir/$key.json")
-  forge_post_status "$head" success review "Independent review PASS (round $round, $model, diff ${diff_sha:0:12})"
+  forge_post_status "$head" success review "Independent review PASS (round $round, $model, diff ${diff_sha:0:12})" \
+    || die "review post failed"
 fi
 
 body=$(mktemp); trap 'rm -f "$body"' EXIT
@@ -94,13 +96,19 @@ body=$(mktemp); trap 'rm -f "$body"' EXIT
       echo; echo "One-sided: $(jq -r '.one_sided | join(", ")' "$sync_state") — $(jq -r '.justification // ""' "$sync_state")"
     fi
   fi
-  [[ -n $issue ]] && printf '\nCloses #%s\n' "$issue"
+  if [[ -n $issue ]]; then
+    # Split mode: the issue lives on GitHub, so name it cross-repo; the Gitea merge template carries
+    # the PR body into the merge commit and GitHub closes it when the mirror lands on dev (G1).
+    if [[ $(ci_issue_forge) == github ]] && ci_split_forge; then
+      printf '\nCloses %s#%s\n' "$(ci_enter_issue_forge && forge_repo)" "$issue"
+    else printf '\nCloses #%s\n' "$issue"; fi
+  fi
 } >"$body"
 
 if num=$(forge_pr_number 2>/dev/null); then
   forge_pr_comment "$num" "$body" >/dev/null || echo "ship: warning — could not post the audit-trail comment"
 else
-  title=$(git log --reverse --format=%s "$remote/$base..HEAD" | head -n1)
+  title=$(set +o pipefail; git log --reverse --format=%s "$remote/$base..HEAD" 2>/dev/null | head -n1)
   created=$(forge_pr_create "$base" "$branch" "${title:-$branch}" "$body") \
     || die "failed to create the PR on the forge (the branch and signoff are pushed — re-run task ship to retry)"
   num=$(grep -o -E '[0-9]+$' <<<"$created" || true)
@@ -111,6 +119,15 @@ if [[ -f $sync_state ]]; then  # a successful ship ends the conflict episode (at
   jq '.attempts = 0' "$sync_state" >"$sync_state.tmp" && mv "$sync_state.tmp" "$sync_state"
   forge_label_remove "$num" conflict:human >/dev/null 2>&1 || true
 fi
+
+# Verify the forge PR points to the head commit just pushed before arming auto-merge or finishing
+pr_head=""
+for _ in $(seq 1 15); do
+  pr_head=$(forge_pr_view "$branch" 2>/dev/null | jq -r '.headRefOid // empty')
+  [[ -n $pr_head && $pr_head != null && $pr_head == "$head" ]] && break
+  sleep 1
+done
+[[ $pr_head == "$head" ]] || die "forge PR #$num head ($pr_head) does not match local HEAD ($head) — forge has not updated"
 
 if [[ $auto == 1 ]]; then
   method=$(ci_config AUTO_MERGE_METHOD squash)

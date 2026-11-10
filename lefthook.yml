@@ -10,4 +10,7 @@ pre-commit:
 pre-push:
   commands:
     guard:
-      run: if [[ -f scripts/pre_push_guard.sh ]]; then bash scripts/pre_push_guard.sh {remote} {url}; else task ci; fi
+      # lefthook runs this under /bin/sh (dash on Debian/Ubuntu): POSIX `[ ]` only. git passes
+      # the remote/URL as {1}/{2} and the pushed refs on stdin, which the guard reads.
+      use_stdin: true
+      run: if [ -f scripts/pre_push_guard.sh ]; then bash scripts/pre_push_guard.sh {1} {2}; else task ci; fi

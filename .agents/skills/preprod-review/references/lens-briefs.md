@@ -50,8 +50,11 @@ Hunt, in your FILE LIST only:
 - **blast radius of a stolen credential**: what can it do, and for how long?
 - **platform-stack conformance**: does any platform choice (secrets,
   cloud, network, identity, IaC) violate the approved technology stack
-  (see the `platform-standards` rule)? A stack violation is a finding
-  even when the code "works".
+  (see the `platform-standards` rule)? Specifically flag any script, runbook, or
+  workflow that performs manual/direct changes on `stage` containers or configs
+  instead of routing through OpenTofu and declarative configuration management
+  (manual changes are permitted on `dev` only during development/testing/debug).
+  A stack violation is a finding even when the code "works".
 
 **If the artifact is GitHub Actions**, first read
 `github-actions-review.md` — the file next to this one (auth, tokens, triggers), then add:

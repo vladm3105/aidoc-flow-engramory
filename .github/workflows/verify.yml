@@ -16,7 +16,7 @@
 name: verify
 on:
   push:
-    branches: [main]
+    branches: [dev]
     tags: ['v*']
   workflow_dispatch:
   # PROMOTION_PRS (installer: pull_request trigger for promotion PRs, PROMOTION_MODE=pr)
@@ -30,6 +30,7 @@ on:
 
 permissions:
   contents: read
+  checks: read                       # verify-reuse: read the verify result of an identical tree
 
 concurrency:
   group: verify-${{ github.ref }}
@@ -84,7 +85,7 @@ jobs:
           exit 0
 
   verify:
-    runs-on: [self-hosted, ci, ephemeral]
+    runs-on: [self-hosted, ci, ephemeral]  # self-hosted only; install.sh --runner sets the labels
     timeout-minutes: 30
     env:
       GITLEAKS_LOG_OPTS: "--all"      # full-history secret scan on the server
@@ -94,12 +95,37 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           fetch-depth: 0
-      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c  # v2.4.4
-      - run: task doctor
-      - run: task deps
-      - run: task ci-full
+      # Verify each tree once (PLAN-007): a dev->staging merge commit has dev's tree, so the
+      # staging->main PR and the v* tag reuse the result instead of re-running ci-full. Only when
+      # the checked-out tree (the PR merge ref) equals the head tree, i.e. the base did not move.
+      - id: reuse
+        name: Reuse an identical, already verified tree
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          BASE_REF: ${{ github.base_ref || github.event.pull_request.base.ref }}
+        run: |
+          hit=false
+          if [ -n "$BASE_REF" ] && git rev-parse --verify "origin/$BASE_REF" >/dev/null 2>&1; then
+            trusted_helper="$(git show "origin/$BASE_REF:.ci/bin/verify-reuse" 2>/dev/null || true)"
+            if [ -n "$trusted_helper" ] \
+               && [ "$(git rev-parse "HEAD^{tree}")" = "$(git rev-parse "$HEAD_SHA^{tree}")" ] \
+               && parent=$(printf '%s' "$trusted_helper" | bash -s -- "$HEAD_SHA"); then
+              hit=true
+              echo "verify: tree of ${HEAD_SHA:0:12} already verified on ${parent:0:12}; reusing that result"
+            fi
+          fi
+          echo "hit=$hit" >> "$GITHUB_OUTPUT"
+      - if: steps.reuse.outputs.hit != 'true'
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c  # v4.3.0
+      - if: steps.reuse.outputs.hit != 'true'
+        run: task doctor
+      - if: steps.reuse.outputs.hit != 'true'
+        run: task deps
+      - if: steps.reuse.outputs.hit != 'true'
+        run: task ci-full
       - name: Upload CI results (audit trail)
-        if: always()
+        if: always() && steps.reuse.outputs.hit != 'true'
         uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1  # v4.6.1
         with:
           name: ci-results-${{ github.sha }}

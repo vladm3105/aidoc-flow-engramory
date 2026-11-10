@@ -1,15 +1,15 @@
 # =============================================================================
 #  Technical Engine Binding Configuration Template (.aidoc/engine/engine.yaml)
 # =============================================================================
-#  Authority: docs/AIDOC_WORKSTATION_STANDARD.md (framework 0.96.4)
+#  Authority: docs/AIDOC_WORKSTATION_STANDARD.md (framework 0.96.25)
 #  Governs: Active execution engine dispatch, modes (live|verify-only|mock), thresholds
 #
 #  Onboarding default is verify-only (canonical default is live): new projects
 #  verify reviews without spending live execution budget. Switch to live once
-#  the review crew engine is installed and calibrated for the project.
+#  the aiops-harness review engine is calibrated for the project.
 # =============================================================================
 
-engine: "aidoc-flow-langgraph"
+engine: "aiops-harness"
 version: "0.2.0"
 mode: "verify-only" # Options: live | verify-only | mock
 

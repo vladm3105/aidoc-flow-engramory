@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# aidoc-local-flow-ci verify-reuse <sha> — verify each tree once (PLAN-007 recommendation 1).
+# Prints a parent of <sha> whose tree is identical to <sha>'s and whose `verify` check-run
+# (GitHub Actions, this repository) concluded success; exit 0 = reuse that result, 1 = run in full.
+# Sound because the tree is the content, including .ci/ and the workflows: a dev->staging merge
+# commit has dev's tree, so staging->main (and the v* tag on main) re-verify nothing new. Any doubt
+# (no identical parent, API error, no success) means a full run.
+# Env (set by Actions): GITHUB_TOKEN (checks: read), GITHUB_REPOSITORY, GITHUB_API_URL.
+set -uo pipefail
+sha=${1:?usage: verify-reuse <sha>}
+name=${VERIFY_CHECK_NAME:-verify}
+api=${GITHUB_API_URL:-https://api.github.com}
+repo=${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}
+[[ -n ${GITHUB_TOKEN:-} ]] || exit 1
+tree=$(git rev-parse --verify -q "$sha^{tree}") || exit 1
+for parent in $(git rev-list --parents -n1 "$sha" | cut -d' ' -f2-); do
+  [[ $(git rev-parse --verify -q "$parent^{tree}") == "$tree" ]] || continue
+  ok=$(curl -fsS -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github+json" \
+        "$api/repos/$repo/commits/$parent/check-runs?check_name=$name&per_page=100" 2>/dev/null \
+       | jq -r '[.check_runs[]? | select(.app.slug == "github-actions") | .conclusion] | any(. == "success")' 2>/dev/null) \
+    || continue
+  if [[ $ok == true ]]; then echo "$parent"; exit 0; fi
+done
+exit 1

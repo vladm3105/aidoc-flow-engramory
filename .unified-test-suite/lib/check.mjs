@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   ROOT, CANON_DIR, VENDOR_DIR, CONFIG_FILE, RUNNERS, RESERVED_NAMES, NAME_RE, loadConfig, rawConfig, layerSteps, findFiles, repoFiles, readJson,
-  canonVersion, globToRegExp, resultsDir,
+  canonVersion, globToRegExp, resultsDir, generatedDir,
 } from './core.mjs';
 import { loadIndex, bddIdPattern, registryFile, frameworkDir, docsRootRel } from './sdd.mjs';
 import { checkJourneys } from './journeys.mjs';
@@ -117,8 +117,10 @@ export function check({ strict = false, json = false, upstream = null } = {}) {
   if (!cfg.gates.pr) T('gates: no "pr" gate — agents default to `task test:pr` before opening a PR');
 
   // --- wiring
-  const gen = path.join(VENDOR_DIR, 'generated', 'Taskfile.yml');
-  if (!existsSync(gen) || readFileSync(gen, 'utf8') !== renderGenerated(cfg)) E(`${gen} is out of sync with ${CONFIG_FILE} — run \`task uts:gen\` (or node ${VENDOR_DIR}/bin/uts.mjs gen) and commit it`);
+  const genDir = generatedDir();
+  const gen = path.join(genDir, 'Taskfile.yml');
+  const genRel = path.relative(ROOT, gen);
+  if (!existsSync(gen) || readFileSync(gen, 'utf8') !== renderGenerated(cfg)) E(`${genRel} is out of sync with ${CONFIG_FILE} — run \`task uts:gen\` (or node ${VENDOR_DIR}/bin/uts.mjs gen) and commit it`);
   const tf = existsSync('Taskfile.yml') ? readFileSync('Taskfile.yml', 'utf8') : '';
   if (!tf) E('Taskfile.yml missing at repo root');
   else if (!tf.includes(`${VENDOR_DIR}/Taskfile.yml`) || !/flatten:\s*true/.test(tf)) E(`Taskfile.yml must include ${VENDOR_DIR}/Taskfile.yml with flatten: true`);
@@ -131,8 +133,7 @@ export function check({ strict = false, json = false, upstream = null } = {}) {
   const tl = spawnSync('task', ['--list-all', '--json'], { encoding: 'utf8' });
   if (tl.error) notes.push('task not installed — Task wiring not verified');
   else if (tl.status !== 0) E(`task cannot load the Taskfile: ${(tl.stderr || tl.stdout).trim().split('\n').slice(-1)[0]}`);
-  const genDir = path.join(VENDOR_DIR, 'generated');
-  if (existsSync(genDir)) for (const f of readdirSync(genDir)) if (f !== 'Taskfile.yml') E(`${genDir}/${f}: unexpected file (only Taskfile.yml is generated)`);
+  if (existsSync(genDir)) for (const f of readdirSync(genDir)) if (f !== 'Taskfile.yml') E(`${path.relative(ROOT, genDir)}/${f}: unexpected file (only Taskfile.yml is generated)`);
 
   // --- adoption TODOs
   const stackLayers = names.filter((n) => cfg.layers[n].needsStack);

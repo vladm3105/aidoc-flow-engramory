@@ -40,6 +40,7 @@ people who were not in the room.
    | library / service | public API surface, config and defaults, migration steps, the release or deploy script |
    | infrastructure | the changed resources, IAM/permission boundaries, the state and rollback path |
    | **any of them** | the governance surfaces — CHANGELOG / ROADMAP / decisions log / handoff, or the repo's declared equivalents (here: `git log`, PR bodies, tag notes) |
+
 2. **Fan out five lenses in parallel** (one dispatch, five agents — see below).
    Each gets a *scoped* brief and returns a ranked report. Running them in one
    turn is the point: they finish together and don't inherit each other's

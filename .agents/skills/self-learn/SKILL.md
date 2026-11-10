@@ -7,10 +7,11 @@ description: >-
 # Self-learn
 
 A lesson learned twice and written nowhere will be learned a third time. This
-skill is the shared loop over the mimocode memory system (project memory,
-session checkpoint, `recall`, `memory-hygiene`): where the active repository
-declares its own learning spec or store, that declaration is authoritative for
-categories, qualification, and file paths, and this skill defers to it.
+skill is the shared loop over the platform memory and learning system (project
+memory, session checkpoint, `recall`, `memory-hygiene`, `aidoc-flow-engramory`,
+and `flow-trajectory-logging`): where the active repository declares its own
+learning spec or store, that declaration is authoritative for categories,
+qualification, and file paths, and this skill defers to it.
 
 The loop has three modes. Run only the mode the situation calls for.
 
@@ -119,7 +120,7 @@ constraint. Rules:
 2. **Cite the learning** in the update.
 3. **Keep updates small** — one rule or sentence per learning.
 4. Critical rules violated 2+ times need multi-location enforcement (learnings
-   + project memory + `AGENTS.md` + governance doc) — a single
+   - project memory + `AGENTS.md` + governance doc) — a single
    location does not hold. Rules without an enforcement mechanism (lint,
    validation, pre-commit check) stay advisory.
 5. **Pass the owning repo's authorization gate first.** Governance writes go

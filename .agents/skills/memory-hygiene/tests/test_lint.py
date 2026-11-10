@@ -80,6 +80,22 @@ def test_fix_rewrites_link_and_backs_up(tmp_path):
     assert glob.glob(str(tmp_path / ".backups" / "lint-fix-*.tar.gz"))
 
 
+def test_fix_leaves_ambiguous_alias_unresolved(tmp_path):
+    # Two memories share the drifted name "shared": the alias is ambiguous.
+    write(tmp_path, "first.md", "---\nname: shared\n---\nbody\n")
+    write(tmp_path, "second.md", "---\nname: shared\n---\nbody\n")
+    write(tmp_path, "idx.md", "---\nname: idx\n---\nsee [[shared]]\n")
+    write(
+        tmp_path,
+        "MEMORY.md",
+        "- [A](first.md) — hook\n- [B](second.md) — hook\n- [C](idx.md) — hook\n",
+    )
+    proc = run_lint(tmp_path, "--fix")
+    assert "[[shared]]" in (tmp_path / "idx.md").read_text(encoding="utf-8")
+    assert proc.returncode == 1, proc.stdout
+    assert "shared" in proc.stdout
+
+
 def test_fix_never_touches_content_defect(tmp_path):
     write(tmp_path, "note.md", "---\nname: note\n---\nbody\n")
     before = "- [Title](note.md) — hook\nfact one\nfact two\nfact three\nfact four\nfact five\n"

@@ -4,10 +4,16 @@ import { createHash } from 'node:crypto';
 import {
   readFileSync, writeFileSync, existsSync, readdirSync, statSync, mkdirSync, cpSync, rmSync, mkdtempSync, appendFileSync, chmodSync,
 } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
-import { ROOT, CANON_DIR, VENDOR_DIR, CONFIG_FILE, LOCK_FILE, loadConfig, readJson, canonVersion, sh } from './core.mjs';
+import { ROOT, CANON_DIR, VENDOR_DIR, CONFIG_FILE, LOCK_FILE, loadConfig, readJson, canonVersion, resolveVendorDir, generatedDir } from './core.mjs';
+
+/** `git -C <dir> ...args` without a shell (a checkout path is data, never shell syntax); '' on failure, like sh(). */
+const git = (dir, ...args) => {
+  const r = spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8' });
+  return r.status === 0 ? r.stdout.trim() : '';
+};
 
 const GENERATED = 'generated';
 const notGenerated = (base) => (src) => { const rel = path.relative(base, src).split(path.sep).join('/'); return rel !== GENERATED && !rel.startsWith(`${GENERATED}/`); };
@@ -23,7 +29,7 @@ export function fetchCanon(from, ref = null, { allowDirty = false } = {}) {
   const isUrl = /^[a-z]+:\/\//.test(from) || from.startsWith('git@');
   let src = isUrl ? null : path.resolve(from);
   let tmp = null;
-  if (!isUrl && !ref && !allowDirty && existsSync(path.join(src, '.git')) && sh(`git -C ${JSON.stringify(src)} status --porcelain -- canon CHANGELOG.md`) !== '') {
+  if (!isUrl && !ref && !allowDirty && existsSync(path.join(src, '.git')) && git(src, 'status', '--porcelain', '--', 'canon', 'CHANGELOG.md') !== '') {
     throw new Error(`${from} has uncommitted changes under canon/ — commit them, pass --ref <tag>, or --allow-dirty`);
   }
   if (isUrl || ref) {
@@ -103,7 +109,7 @@ export function renderGenerated(cfg) {
 
 export function gen({ dir = VENDOR_DIR, quiet = false } = {}) {
   const cfg = loadConfig();
-  const file = path.join(ROOT, dir, GENERATED, 'Taskfile.yml');
+  const file = path.join(generatedDir(dir), 'Taskfile.yml');
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, renderGenerated(cfg));
   if (!quiet) console.log(`uts gen: wrote ${path.relative(ROOT, file)} (${Object.keys(cfg.layers).length} layers, ${Object.keys(cfg.groups ?? {}).length} groups, ${Object.keys(cfg.gates ?? {}).length} gates)`);
@@ -125,7 +131,7 @@ export function init({ target, force = false, profile = 'fullstack' }) {
   rmSync(vendor, { recursive: true, force: true });
   cpSync(CANON_DIR, vendor, { recursive: true, filter: notGenerated(CANON_DIR) });
   makeExecutable(vendor);
-  writeLock(proj, vendor, { source: repoRoot, ref: null, commit: sh(`git -C ${JSON.stringify(repoRoot)} rev-parse HEAD`) || null });
+  writeLock(proj, vendor, { source: repoRoot, ref: null, commit: git(repoRoot, 'rev-parse', 'HEAD') || null });
 
   const profileFile = path.join(templates, 'profiles', `${profile}.json`);
   if (!existsSync(profileFile)) throw new Error(`unknown profile "${profile}" (have: ${readdirSync(path.join(templates, 'profiles')).map((f) => f.replace('.json', '')).join(', ')})`);
@@ -188,8 +194,11 @@ export function writeLock(proj, vendor, { source, ref, commit }) {
 }
 
 export function verifyLock() {
-  const vendor = path.join(ROOT, VENDOR_DIR);
-  const lock = readJson(path.join(ROOT, LOCK_FILE), null);
+  const vendor = resolveVendorDir();
+  const lockPath = existsSync(path.join(ROOT, LOCK_FILE))
+    ? path.join(ROOT, LOCK_FILE)
+    : path.join(path.dirname(vendor), LOCK_FILE);
+  const lock = readJson(lockPath, null);
   if (!lock) return { ok: false, errors: [`${LOCK_FILE} missing — vendored canon cannot be verified (run \`uts sync\`)`] };
   const actual = hashTree(vendor);
   const errors = [];
@@ -219,7 +228,7 @@ export function sync({ from, ref = null, force = false, allowDirty = false }) {
   cpSync(srcCanon, vendor, { recursive: true, filter: notGenerated(srcCanon) });
   makeExecutable(vendor);
   ensureGitattributes(ROOT);
-  const commit = sh(`git -C ${JSON.stringify(src)} rev-parse HEAD`) || null;
+  const commit = git(src, 'rev-parse', 'HEAD') || null;
   // Changelog entries newer than the previous version (read before the temp clone is removed).
   let notes = '';
   const clPath = path.join(src, 'CHANGELOG.md');

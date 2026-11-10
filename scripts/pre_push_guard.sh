@@ -49,23 +49,27 @@ while read -r local_ref local_oid remote_ref _remote_oid; do
   # `git push <remote> HEAD:<branch>` reports the local side as HEAD.
   [[ "$local_branch" == "HEAD" ]] && local_branch="$(git branch --show-current 2>/dev/null || echo HEAD)"
 
-  # Deleting remote branches is handled separately
-  if [[ "$local_oid" == "0000000000000000000000000000000000000000" ]]; then
-    continue
-  fi
-
-  # 1. Branch Protection Guard: no direct pushes from a protected branch.
+  # 1. Branch Protection Guard. A protected destination (BASE_BRANCH + PROMOTION_BRANCHES) is
+  #    only ever updated by a one-hop promotion and never deleted from a workstation. Which branch
+  #    is checked out is irrelevant: `git push origin HEAD:dev` from a feature branch, or any other
+  #    local ref pushed to a protected branch, is a direct push all the same.
   if [[ " $chain " == *" $remote_branch "* ]]; then
+    if [[ "$local_oid" == "0000000000000000000000000000000000000000" ]]; then
+      echo "::error::Deleting protected branch '$remote_branch' is strictly forbidden!" >&2
+      exit 1
+    fi
     if is_promotion "$local_branch" "$remote_branch"; then
       echo "pre-push: promotion push ($local_branch -> $remote_branch) detected — branch protection exempt."
       continue
     fi
-    current_branch="$(git branch --show-current 2>/dev/null || echo "$local_branch")"
-    if [[ " $chain " == *" $current_branch "* ]]; then
-      echo "::error::Direct push to protected branch '$remote_branch' is strictly forbidden!" >&2
-      echo "::error::You must develop on a dedicated feature/* or fix/* branch in a worktree and submit a PR." >&2
-      exit 1
-    fi
+    echo "::error::Direct push to protected branch '$remote_branch' is strictly forbidden!" >&2
+    echo "::error::You must develop on a dedicated feature/* or fix/* branch in a worktree and submit a PR." >&2
+    exit 1
+  fi
+
+  # Deleting an unprotected remote branch needs no further checks.
+  if [[ "$local_oid" == "0000000000000000000000000000000000000000" ]]; then
+    continue
   fi
 
   # 2. Audit trail: delegated after the loop (one verdict per push).
@@ -92,13 +96,15 @@ if [[ -f "scripts/secret_scan.py" ]]; then
     exit 1
   }
 fi
-if command -v task >/dev/null 2>&1; then
-  echo "pre-push: executing fast inner loop (task check)..."
-  task check || {
-    echo "::error::'task check' failed locally. Fix failures before pushing." >&2
-    exit 1
-  }
+if ! command -v task >/dev/null 2>&1; then
+  echo "::error::'task' is not on PATH, so the local gate cannot run. Install the pinned toolchain (mise install) and push again." >&2
+  exit 1
 fi
+echo "pre-push: executing fast inner loop (task check)..."
+task check || {
+  echo "::error::'task check' failed locally. Fix failures before pushing." >&2
+  exit 1
+}
 
 echo "pre-push: all pre-flight guards passed."
 exit 0

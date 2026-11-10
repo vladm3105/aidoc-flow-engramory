@@ -242,7 +242,8 @@ push_targets_main() { # <segment>
 # target repo's branch, not "" (which the old cwd-only lookup produced, and
 # which used to mean "allow"). Prints the branch or nothing.
 resolve_push_branch() { # <canonical segment> <cwd>
-  local seg="$1" cwd="$2" tok skip=0 prev="" dir="" gitdir=""
+  local seg="$1" cwd="$2" tok skip=0 prev=""
+  local -a sel=()
   set -f
   # shellcheck disable=SC2086
   set -- $seg
@@ -251,24 +252,26 @@ resolve_push_branch() { # <canonical segment> <cwd>
   while [ $# -gt 0 ]; do
     tok=$1; shift
     if [ "$skip" -eq 1 ]; then
-      case "$prev" in -C) dir=$tok ;; --git-dir) gitdir=$tok ;; esac
+      case "$prev" in -C|--git-dir|--work-tree) sel+=("$prev" "$tok") ;; esac
       skip=0; continue
     fi
     case "$tok" in
-      -C|--git-dir) prev=$tok; skip=1 ;;
-      --git-dir=*) gitdir=${tok#--git-dir=} ;;
-      -c|--exec-path|--work-tree|--namespace|--super-prefix|--config-env|--attr-source)
+      -C|--git-dir|--work-tree) prev=$tok; skip=1 ;;
+      --git-dir=*|--work-tree=*) sel+=("$tok") ;;
+      -c|--exec-path|--namespace|--super-prefix|--config-env|--attr-source)
         prev=""; skip=1 ;;
       -*) ;;
       *) break ;; # subcommand: nothing past it changes which repo this is
     esac
   done
-  if [ -n "$dir" ] && [ -d "$dir" ]; then
-    git -C "$dir" branch --show-current 2>/dev/null || true
-  elif [ -n "$gitdir" ]; then
-    git --git-dir "$gitdir" branch --show-current 2>/dev/null || true
-  elif [ -n "$cwd" ] && [ -d "$cwd" ]; then
-    git -C "$cwd" branch --show-current 2>/dev/null || true
+  # Hand git the same ordered repository-selection options, from the payload cwd:
+  # successive -C arguments are cumulative (`-C outer -C inner` is outer/inner), so
+  # rebuilding a single directory could inspect the wrong repository. If git cannot
+  # resolve them the result is empty, which the caller denies (fail closed).
+  if [ -n "$cwd" ] && [ -d "$cwd" ]; then
+    (cd "$cwd" && git ${sel[@]+"${sel[@]}"} branch --show-current 2>/dev/null) || true
+  else
+    git ${sel[@]+"${sel[@]}"} branch --show-current 2>/dev/null || true
   fi
 }
 

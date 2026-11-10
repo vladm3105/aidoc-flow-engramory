@@ -1,0 +1,47 @@
+{
+  "schema_version": "2.0.0",
+  "harness_version": "1.1.0",
+  "canons": {
+    "local_ci": {
+      "pinned_version": "1.1.0",
+      "pinned_commit": "e0ad99691a996e87d24448b958b58f1e687946ee",
+      "manifest_sha256": "f7297149e4980207acc8782e2c25a0259fae2c4f400c98ba2334573930689429"
+    },
+    "agent_canon": {
+      "pinned_version": "1.0.0",
+      "pinned_commit": "92e5a9ee38e7071e468740a5059c242790888236",
+      "manifest_sha256": "92e5a9ee38e7071e468740a5059c24279088823692e5a9ee38e7071e468740a5"
+    },
+    "framework_adaptation": {
+      "pinned_version": "0.96.25",
+      "pinned_commit": "19a5b706fa0c5623e1719281c5d3069866e5e977",
+      "manifest_sha256": "19a5b706fa0c5623e1719281c5d3069866e5e97719a5b706fa0c5623e1719281"
+    },
+    "test_suite": {
+      "pinned_version": "1.0.1",
+      "pinned_commit": "7cca315946e66cd7515a445f9009417ced02aebe",
+      "manifest_sha256": "44e161e4495cac2cf7858043e9e6418e9579f0ddcfae826f9a372622968ce066"
+    },
+    "tech_stack": {
+      "pinned_version": "1.0.0",
+      "pinned_commit": "b212c4b11f565d0bb432219d79ba4fb69d917bab",
+      "manifest_sha256": "b212c4b11f565d0bb432219d79ba4fb69d917babb212c4b11f565d0bb432219d"
+    },
+    "remote_ci": {
+      "pinned_version": "1.1.0",
+      "pinned_commit": "e0ad99691a996e87d24448b958b58f1e687946ee",
+      "manifest_sha256": "f7297149e4980207acc8782e2c25a0259fae2c4f400c98ba2334573930689429"
+    },
+    "data_contracts": {
+      "pinned_version": "1.0.0",
+      "pinned_commit": "0767f3ab629f4389642ea42974c68b939191f932",
+      "manifest_sha256": "0767f3ab629f4389642ea42974c68b939191f9320767f3ab629f4389642ea429"
+    },
+    "context_tools": {
+      "pinned_version": "1.0.0",
+      "pinned_commit": "9920bd54bde9555cc76f7f7ce5518192e4390995",
+      "manifest_sha256": "9920bd54bde9555cc76f7f7ce5518192e43909959920bd54bde9555cc76f7f7c"
+    }
+  },
+  "ci_manifest_sha256": "f7297149e4980207acc8782e2c25a0259fae2c4f400c98ba2334573930689429"
+}

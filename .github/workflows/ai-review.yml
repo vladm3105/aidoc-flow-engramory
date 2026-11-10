@@ -58,4 +58,8 @@ jobs:
       # trust_config_ref: main
       # NOTE: this override does NOT yet reach the composition gate, which reads
       # the consumer repo's own .github/ai-review/config.json@main (FT-6).
-    secrets: inherit  # pragma: allowlist secret
+    secrets:
+      APP_REVIEWER_1_ID: ${{ secrets.APP_REVIEWER_1_ID }}
+      APP_REVIEWER_1_KEY: ${{ secrets.APP_REVIEWER_1_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
