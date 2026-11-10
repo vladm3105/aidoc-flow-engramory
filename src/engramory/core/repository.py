@@ -114,10 +114,11 @@ class Repository:
                 await conn.close()
 
     async def add_episode(self, episode: Episode) -> str:
-        """Persist idempotently by content hash within scope (BDD.01.03.c900).
+        """Persist idempotently by content hash or event_id within scope (BDD.01.03.c900).
 
         Returns the episode id — the existing row's id on duplicate submission.
         """
+        params = _episode_params(episode)
         async with self._conn() as conn:
             row = await (
                 await conn.execute(
@@ -127,11 +128,10 @@ class Repository:
                          content_raw, content_hash, metadata)
                     VALUES (%(agent_id)s, %(project_id)s, %(domain_id)s, %(tenant_id)s,
                             %(kind)s, %(content_raw)s, %(content_hash)s, %(metadata)s)
-                    ON CONFLICT (tenant_id, agent_id, coalesce(project_id, ''), content_hash)
-                        DO NOTHING
+                    ON CONFLICT DO NOTHING
                     RETURNING id
                     """,
-                    _episode_params(episode),
+                    params,
                 )
             ).fetchone()
             if row is not None:
@@ -140,11 +140,22 @@ class Repository:
                 await conn.execute(
                     """
                     SELECT id FROM episodes
-                    WHERE tenant_id = %(tenant_id)s AND agent_id = %(agent_id)s
-                      AND coalesce(project_id, '') = coalesce(%(project_id)s, '')
-                      AND content_hash = %(content_hash)s
+                    WHERE tenant_id = %(tenant_id)s
+                      AND (
+                        (
+                            agent_id = %(agent_id)s
+                            AND coalesce(project_id, '') = coalesce(%(project_id)s, '')
+                            AND content_hash = %(content_hash)s
+                        )
+                        OR (
+                            %(event_id)s::text IS NOT NULL
+                            AND metadata ? 'event_id'
+                            AND metadata->>'event_id' = %(event_id)s
+                        )
+                      )
+                    LIMIT 1
                     """,
-                    _episode_params(episode),
+                    params,
                 )
             ).fetchone()
             if existing is None:  # unreachable: episodes are never hard-deleted
@@ -294,21 +305,19 @@ class Repository:
             ).fetchall()
             return [row["feedback"] for row in rows]
 
-    async def get_agent_profile(self, agent_id: str) -> AgentProfile | None:
-        """L3 identity row, or None when the agent has no profile yet.
-
-        NOTE: agent_profiles is keyed by agent_id alone (no tenant column) —
-        acceptable only under the single-tenant dev tier; revisit with the
-        gateway (PLAN-002 Phase 1.3 stated assumption).
-        """
+    async def get_agent_profile(
+        self, agent_id: str, *, tenant_id: str = "default"
+    ) -> AgentProfile | None:
+        """L3 identity row scoped by (tenant_id, agent_id), or None when absent."""
         async with self._conn() as conn:
             row = await (
                 await conn.execute(
                     """
-                    SELECT agent_id, display_name, standing_preferences
-                    FROM agent_profiles WHERE agent_id = %(agent_id)s
+                    SELECT tenant_id, agent_id, display_name, standing_preferences
+                    FROM agent_profiles
+                    WHERE tenant_id = %(tenant_id)s AND agent_id = %(agent_id)s
                     """,
-                    {"agent_id": agent_id},
+                    {"tenant_id": tenant_id, "agent_id": agent_id},
                 )
             ).fetchone()
             if row is None:
@@ -317,20 +326,23 @@ class Repository:
                 agent_id=row["agent_id"],
                 display_name=row["display_name"],
                 standing_preferences=row["standing_preferences"] or {},
+                tenant_id=row["tenant_id"],
             )
 
     async def upsert_agent_profile(self, profile: AgentProfile) -> None:
-        """Create/update the L3 identity row (updated_at kept by trigger)."""
+        """Create/update the L3 identity row scoped by (tenant_id, agent_id)."""
         async with self._conn() as conn:
             await conn.execute(
                 """
-                INSERT INTO agent_profiles (agent_id, display_name, standing_preferences)
-                VALUES (%(agent_id)s, %(display_name)s, %(standing_preferences)s)
-                ON CONFLICT (agent_id) DO UPDATE
+                INSERT INTO agent_profiles
+                    (tenant_id, agent_id, display_name, standing_preferences)
+                VALUES (%(tenant_id)s, %(agent_id)s, %(display_name)s, %(standing_preferences)s)
+                ON CONFLICT (tenant_id, agent_id) DO UPDATE
                     SET display_name = EXCLUDED.display_name,
                         standing_preferences = EXCLUDED.standing_preferences
                 """,
                 {
+                    "tenant_id": profile.tenant_id,
                     "agent_id": profile.agent_id,
                     "display_name": profile.display_name,
                     "standing_preferences": json.dumps(dict(profile.standing_preferences)),
@@ -571,19 +583,19 @@ class Repository:
         chunk_size = 100
         section_id_map: dict[tuple[str, str, str, int], str] = {}
 
-        for i in range(0, len(unique_sections), chunk_size):
-            chunk = unique_sections[i : i + chunk_size]
-            params: dict[str, Any] = {
-                "tenants": [sec.tenant_id for sec in chunk],
-                "projects": [sec.project_id for sec in chunk],
-                "domains": [sec.domain_id for sec in chunk],
-                "scopes": [sec.scope for sec in chunk],
-                "doc_ids": [sec.doc_id for sec in chunk],
-                "citations": [sec.citation for sec in chunk],
-                "texts": [sec.text for sec in chunk],
-                "versions": [sec.version for sec in chunk],
-            }
-            async with self._conn() as conn:
+        async with self._conn() as conn:
+            for i in range(0, len(unique_sections), chunk_size):
+                chunk = unique_sections[i : i + chunk_size]
+                params: dict[str, Any] = {
+                    "tenants": [sec.tenant_id for sec in chunk],
+                    "projects": [sec.project_id for sec in chunk],
+                    "domains": [sec.domain_id for sec in chunk],
+                    "scopes": [sec.scope for sec in chunk],
+                    "doc_ids": [sec.doc_id for sec in chunk],
+                    "citations": [sec.citation for sec in chunk],
+                    "texts": [sec.text for sec in chunk],
+                    "versions": [sec.version for sec in chunk],
+                }
                 rows = await (
                     await conn.execute(
                         """
@@ -633,12 +645,20 @@ class Repository:
 
         return section_id_map
 
-    async def delete_kb_sections_for_doc(self, tenant_id: str, doc_id: str) -> int:
-        """Delete all kb_sections for a document within a tenant."""
+    async def delete_kb_sections_for_doc(
+        self, tenant_id: str, doc_id: str, *, project_id: str | None = None
+    ) -> int:
+        """Delete all kb_sections for a document within a tenant (and optional project_id)."""
         async with self._conn() as conn:
             res = await conn.execute(
-                "DELETE FROM kb_sections WHERE tenant_id = %(t)s AND doc_id = %(d)s RETURNING id",
-                {"t": tenant_id, "d": doc_id},
+                """
+                DELETE FROM kb_sections
+                WHERE tenant_id = %(t)s
+                  AND doc_id = %(d)s
+                  AND (%(p)s::text IS NULL OR project_id = %(p)s)
+                RETURNING id
+                """,
+                {"t": tenant_id, "d": doc_id, "p": project_id},
             )
             rows = await res.fetchall()
             return len(rows)
@@ -756,7 +776,7 @@ class Repository:
                               (
                                   %(scope)s::text = 'space'
                                   AND (
-                                      scope = 'space'
+                                      scope IN ('domain', 'space')
                                       OR (
                                           %(project_id)s::text IS NOT NULL
                                           AND project_id = %(project_id)s
@@ -768,10 +788,8 @@ class Repository:
                                   AND (
                                       (
                                           scope = 'domain'
-                                          AND (
-                                              %(domain_id)s::text IS NULL
-                                              OR domain_id = %(domain_id)s
-                                          )
+                                          AND domain_id IS NOT NULL
+                                          AND domain_id = %(domain_id)s
                                       )
                                       OR scope = 'space'
                                       OR (
@@ -812,7 +830,7 @@ class Repository:
                               (
                                   %(scope)s::text = 'space'
                                   AND (
-                                      scope = 'space'
+                                      scope IN ('domain', 'space')
                                       OR (
                                           %(project_id)s::text IS NOT NULL
                                           AND project_id = %(project_id)s
@@ -824,10 +842,8 @@ class Repository:
                                   AND (
                                       (
                                           scope = 'domain'
-                                          AND (
-                                              %(domain_id)s::text IS NULL
-                                              OR domain_id = %(domain_id)s
-                                          )
+                                          AND domain_id IS NOT NULL
+                                          AND domain_id = %(domain_id)s
                                       )
                                       OR scope = 'space'
                                       OR (
@@ -1685,14 +1701,20 @@ class Repository:
                   AND (
                       (
                           %(scope)s IN ('agent', 'project')
-                          AND (%(project_id)s::text IS NULL OR d.project_id = %(project_id)s)
+                          AND d.scope IN ('agent', 'project', 'space')
+                          AND (
+                              %(project_id)s::text IS NULL
+                              OR d.project_id = %(project_id)s
+                              OR d.scope = 'space'
+                          )
                       )
                       OR (
                           %(scope)s = 'domain'
                           AND (
                               (
                                   d.scope = 'domain'
-                                  AND (%(domain_id)s::text IS NULL OR d.domain_id = %(domain_id)s)
+                                  AND d.domain_id IS NOT NULL
+                                  AND d.domain_id = %(domain_id)s
                               )
                               OR d.scope = 'space'
                               OR (
@@ -1704,7 +1726,7 @@ class Repository:
                       OR (
                           %(scope)s = 'space'
                           AND (
-                              d.scope = 'space'
+                              d.scope IN ('domain', 'space')
                               OR (
                                   %(project_id)s::text IS NOT NULL
                                   AND d.project_id = %(project_id)s
@@ -1738,11 +1760,16 @@ class Repository:
                     """
                     SELECT id, agent_id, project_id, domain_id, tenant_id, kind,
                            content_raw, metadata
-                    FROM episodes
-                    WHERE tenant_id = %(tenant_id)s
-                      AND (%(project_id)s::text IS NULL OR project_id = %(project_id)s::text)
-                    ORDER BY created_at ASC, id ASC
-                    LIMIT %(limit)s
+                    FROM (
+                        SELECT id, agent_id, project_id, domain_id, tenant_id, kind,
+                               content_raw, metadata, ts
+                        FROM episodes
+                        WHERE tenant_id = %(tenant_id)s
+                          AND (%(project_id)s::text IS NULL OR project_id = %(project_id)s::text)
+                        ORDER BY ts DESC, id DESC
+                        LIMIT %(limit)s
+                    ) recent_ep
+                    ORDER BY ts ASC, id ASC
                     """,
                     {
                         "tenant_id": tenant_id,
@@ -1768,6 +1795,9 @@ class Repository:
 
 
 def _episode_params(episode: Episode) -> dict[str, Any]:
+    event_id_val = (
+        episode.metadata.get("event_id") if isinstance(episode.metadata, Mapping) else None
+    )
     return {
         "agent_id": episode.agent_id,
         "project_id": episode.project_id,
@@ -1777,6 +1807,7 @@ def _episode_params(episode: Episode) -> dict[str, Any]:
         "content_raw": episode.content_raw,
         "content_hash": episode.content_hash,
         "metadata": json.dumps(dict(episode.metadata)),
+        "event_id": str(event_id_val) if event_id_val else None,
     }
 
 

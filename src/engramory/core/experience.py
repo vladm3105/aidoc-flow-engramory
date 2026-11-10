@@ -281,11 +281,13 @@ class ExperienceEvent:
         envelope (payload, origin, project, producer) through inspect_memory_write()
         and enforces MAX_EXPERIENCE_CONTENT_BYTES = 65536.
         """
-        raw_text = (
+        repo_part = f" repo={self.origin.repo}" if self.origin is not None else ""
+        body_part = (
             self.summary.strip()
             if (self.summary and self.summary.strip())
-            else f"[{self.kind}] {json.dumps(dict(self.payload), sort_keys=True)}"
+            else json.dumps(dict(self.payload), sort_keys=True)
         )
+        raw_text = f"[{self.kind}] event_id={self.event_id}{repo_part} {body_part}"
         metadata_envelope = json.dumps(
             {
                 "project": self.project,
@@ -322,6 +324,7 @@ class ExperienceEvent:
         meta: dict[str, Any] = {
             "event_id": self.event_id,
             "event_kind": self.kind,
+            "producer": self.producer,
             "occurred_at": self.occurred_at,
             "payload_type": self.payload_type,
             "payload": dict(self.payload),

@@ -79,7 +79,7 @@ Engramory is designed **agent-first**:
 
 The unified access surface means **all agents (Project Executors, Operations Assistant, CI runners)** interact through consistent tool contracts. The ports layer means **backends swap per environment** with zero code changes.
 
-The **Knowledge core** and **Memory core** are two *bounded cores of one platform*, not two projects — they share the spine (Postgres, scope/tenant model, gateway, ports) and are separated by schema, write-governance, lifecycle, and tool namespace. See [CORES.md](CORES.md) and [ADR-08](../sdd/05_ADR/ADR-08_two_bounded_cores.yaml).
+The **Knowledge core** and **Memory core** are two *bounded cores of one platform*, not two projects — they share the spine (Postgres, scope/tenant model, gateway, ports) and are separated by schema, write-governance, lifecycle, and tool namespace. See [CORES.md](CORES.md) and [ADR-08](sdd/05_ADR/ADR-08_two_bounded_cores.yaml).
 
 ---
 

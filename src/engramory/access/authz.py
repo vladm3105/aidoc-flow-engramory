@@ -18,6 +18,8 @@ KNOWN_ACTIONS = frozenset(
         "memory_add",
         "memory_feedback",
         "memory_forget",
+        "memory_ingest_event",
+        "memory_learning_health",
         "agent_profile_get",
         "knowledge_ingest",
         "knowledge_search",

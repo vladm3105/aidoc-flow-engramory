@@ -2,7 +2,7 @@
 
 > **Document Version:** 1.0  
 > **Status:** Draft / Proposed  
-> **Canonical References:** [ADR-01 (PostgreSQL Spine)](../sdd/05_ADR/ADR-01_postgres_spine.yaml), [ADR-02 (Ports & Adapters)](../sdd/05_ADR/ADR-02_ports_and_adapters.yaml), [ADR-03 (Neo4j Graph Engine)](../sdd/05_ADR/ADR-03_graph_engine.yaml), [ADR-05 (Rebuildable Projections)](../sdd/05_ADR/ADR-05_canonical_memory.yaml), [PLAN-006](../plans/PLAN-006_neo4j-graph-engine-integration.md)
+> **Canonical References:** [ADR-01 (PostgreSQL Spine)](sdd/05_ADR/ADR-01_postgres_spine.yaml), [ADR-02 (Ports & Adapters)](sdd/05_ADR/ADR-02_ports_and_adapters.yaml), [ADR-03 (Neo4j Graph Engine)](sdd/05_ADR/ADR-03_graph_engine.yaml), [ADR-05 (Rebuildable Projections)](sdd/05_ADR/ADR-05_canonical_memory.yaml), [PLAN-006](../plans/PLAN-006_neo4j-graph-engine-integration.md)
 
 ---
 
@@ -12,7 +12,7 @@ Engramory serves as the shared memory and knowledge core for agentic systems acr
 
 Per **ADR-03**, Engramory adopts **Neo4j Community Edition (CE)** in development and staging (with an unblocked path to Neo4j Aura in cloud environments) as its dedicated graph engine behind [`GraphPort`](../src/engramory/ports/graph.py).
 
-### The Prime Invariant: Rebuildable Projection ([ADR-01](../sdd/05_ADR/ADR-01_postgres_spine.yaml) / [ADR-05](../sdd/05_ADR/ADR-05_canonical_memory.yaml))
+### The Prime Invariant: Rebuildable Projection ([ADR-01](sdd/05_ADR/ADR-01_postgres_spine.yaml) / [ADR-05](sdd/05_ADR/ADR-05_canonical_memory.yaml))
 
 > **CRITICAL ARCHITECTURAL RULE:**  
 > **PostgreSQL is the single canonical source of truth.**  

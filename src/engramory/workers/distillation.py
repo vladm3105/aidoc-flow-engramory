@@ -115,6 +115,9 @@ async def reflect(
 _PROVENANCE_PASSTHROUGH_KEYS = (
     "event_id",
     "event_kind",
+    "producer",
+    "occurred_at",
+    "payload_type",
     "origin",
     "trace_id",
     "effectiveness_score",

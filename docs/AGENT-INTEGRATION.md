@@ -2,7 +2,7 @@
 
 > How an AI coding agent of any vendor uses Engramory as its memory, through
 > the `engramory` CLI (ADR-10 dev/CI face; contract:
-> `../sdd/06_SPEC/SPEC-07_cli_face.yaml`). Companion: worked first-memory walk
+> `sdd/06_SPEC/SPEC-07_cli_face.yaml`). Companion: worked first-memory walk
 > in [`AGENT-QUICKSTART.md`](AGENT-QUICKSTART.md); the Claude reference Skill
 > at `../skills/engramory-memory/SKILL.md`.
 

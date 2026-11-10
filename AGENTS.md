@@ -29,14 +29,14 @@ It provides L0 knowledge base + L1 short-term + L2 long-term distilled + L3 per-
 - `src/engramory/workers/` — reflection + consolidation (the distillation loop).
 - `db/migrations/` — SQL schema.
 - `config/` — per-project / per-domain YAML config on the shared core.
-- `sdd/` — SDD lifecycle artifacts (BRD→IPLAN); `sdd/05_ADR/` = canonical implementing ADRs.
-- `roadmap/` — canonical MVP cycle plan (MVP-1..8).
+- `docs/sdd/` — SDD lifecycle artifacts (BRD→IPLAN→CHG); `docs/sdd/05_ADR/` = canonical implementing ADRs.
+- `plans/` — verified implementation plans (`PLAN-001`..`PLAN-021`).
 - `docs/` — architecture, memory design, conceptual ADRs (`docs/adr/`), research.
 
 ## Before you finish
 
-Run `make lint test`. Record non-trivial design choices as an ADR: canonical
-implementing decisions go in `sdd/05_ADR/`; conceptual/descriptive records live
+Run `task check` and `task ci`. Record non-trivial design choices as an ADR: canonical
+implementing decisions go in `docs/sdd/05_ADR/`; conceptual/descriptive records live
 in `docs/adr/`.
 
 <!-- agents-canon:begin -->

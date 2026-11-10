@@ -159,3 +159,18 @@ def neo4j_adapter() -> Iterator[Any]:
         )
     adapter = Neo4jGraphAdapter(uri=uri, auth=auth)
     yield adapter
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Automatically tag integration/e2e/conformance tests with `@pytest.mark.integration`."""
+    integration_dirs = ("integration", "e2e", "conformance")
+    for item in items:
+        fspath_str = str(item.path)
+        parts = Path(fspath_str).parts
+        fixturenames = getattr(item, "fixturenames", ())
+        if (
+            any(d in parts for d in integration_dirs)
+            or "pg_dsn" in fixturenames
+            or "neo4j_adapter" in fixturenames
+        ):
+            item.add_marker(pytest.mark.integration)

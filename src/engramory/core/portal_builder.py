@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from engramory.core.docs_tools import (
+    _is_sdd_doc_path,
     _is_within_root,
     _scrub_manifest_text,
     parse_markdown_document,
@@ -23,7 +24,8 @@ from engramory.core.models import ValidationError
 
 def _synthesize_starlight_frontmatter(raw_text: str, *, fallback_stem: str) -> str:
     """Ensure Markdown has YAML frontmatter with JSON-escaped `title` and `description`."""
-    if raw_text.lstrip().startswith("---\n"):
+    stripped = raw_text.lstrip()
+    if stripped.startswith("---\n") or stripped.startswith("---\r\n"):
         return raw_text
 
     resolved_title = fallback_stem
@@ -64,7 +66,8 @@ def stage_portal_bundle(
 
     docs_dir = confined_repo / "docs"
     scan_root = docs_dir if docs_dir.is_dir() else confined_repo
-    md_files = sorted(scan_root.rglob("*.md")) if scan_root.is_dir() else []
+    raw_md_files = sorted(scan_root.rglob("*.md")) if scan_root.is_dir() else []
+    md_files = [f for f in raw_md_files if not _is_sdd_doc_path(f, confined_repo)]
 
     staged_files: list[str] = []
     scrubbed_count = 0

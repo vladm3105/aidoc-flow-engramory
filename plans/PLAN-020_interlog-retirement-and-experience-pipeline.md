@@ -13,11 +13,13 @@
 ## 1. Context & Architectural Motivation
 
 `$WORKSPACE_ROOT/aidoc-flow-interlog` was designed in July 2026 as an early three-in-one bridge before the platform planes existed:
+
 1. **Private application logging** (`.interlog/private.log` via a custom `interlog` Python SDK).
 2. **Operational monitoring conventions** (`docs/standards/MONITORING.md` and a custom `MonitoringProvider` protocol).
 3. **Cross-agent experience exchange to feed Engramory** (`docs/standards/DATA-INTERCHANGE.md` and `docs/standards/FEEDBACK-ARCS.md`) via **Phase C `GitTransport`** (`src/interlog/sync.py`), which cloned `aidoc-flow-interlog` into `.interlog/outbox/.clone`, wrote one JSON file per event under `events/<project>/<YYYY-MM>/<event_id>.json`, and executed a 5-attempt `git fetch && git rebase && git push` loop against `main`.
 
 An architectural audit across the workspace confirmed that:
+
 - `aidoc-flow-interlog/events/` contains **zero production events**, and `registries/producers.json` lists all three producers as `"status": "planned"`.
 - `aiops-agent-support` explicitly retired Interlog in founder-directed `ADR-0026_disable-interlog.md` (Issue #110), citing unnecessary cross-repo registry promotion gates, duplicate identifier contracts, and Git push contention under multi-agent concurrency.
 - The three responsibilities of `aidoc-flow-interlog` are now owned by purpose-built platform services:
@@ -25,6 +27,7 @@ An architectural audit across the workspace confirmed that:
   - **Plane 2 — Agent Episodic Memory, Distillation & Event Transport:** `platform-engramory` (`AccessSurface` MCP/CLI + `EventsPort` + `workers/distillation.py`) over `platform-nats` (NATS JetStream).
 
 However, **four high-value domain contracts** from `aidoc-flow-interlog` must be preserved and consolidated into `platform-engramory` and `platform-observability-monitoring` before `aidoc-flow-interlog` is formally archived:
+
 1. **Deterministic UUIDv5 Event/Episode Deduplication (`derive_experience_event_id`):** Deriving `event_id = uuid5(EXPERIENCE_EVENT_ID_NS, ...)` over canonical identity inputs so retried NATS messages or repeated CI/agent milestones map deterministically to the same episode without duplicate L1/L2 memory rows.
 2. **Mandatory `OriginProvenance` Contract (`docs/standards/FEEDBACK-ARCS.md` §2):** Requiring every milestone experience event and distilled memory to carry `origin` (`repo` + at least one of `commit`, `pr`, `plan_id`, `chg_id`, or `run_id`, plus optional W3C `trace_id`).
 3. **Canonical 9 Agent Milestone Event Kinds (`registries/event-kinds.json`):** `plan.authored`, `review.verdict`, `execution.completed`, `gate.failed`, `decision.recorded`, `lesson.proposed`, `feedback.received`, `feedback.routed`, and `feedback.quarantined`.
@@ -224,7 +227,7 @@ flowchart LR
 | **Cross-Tenant Event Injection or Poison-Pill Batch Stall in Worker (Spoofing / DoS)** | `ingest_experience_event(..., enforce_tenant_id=tenant_id)` enforces `ADR-07` tenant isolation when `tenant_id` is scoped, and `run_worker_loop()` wraps each drained event in a per-event `try ... except (ValidationError, MemoryPoisoningError, ValueError)` guard so one bad event cannot block the remaining batch or `reflect()`. | Unit test in `tests/unit/test_experience_pipeline.py` verifying a batch containing 1 poisoned/cross-tenant event and 1 valid event ingests and reflects the valid event. |
 | **Event Replay / Duplicate Distillation Flooding (DoS / Repudiation)** | `ExperienceEvent` derives a deterministic UUIDv5 `event_id` over canonical identity fields (`derive_experience_event_id`) and embeds `event_id` into `Episode.content_raw`, binding `Episode.content_hash` to `event_id` so `uq_episodes_idempotency` (`db/migrations/0003_reconcile_contracts.sql:25-26`) deduplicates replays in PostgreSQL. | Unit test verifying duplicate event ingestion returns the same `episode_id` and creates at most 1 `Memory` row on `reflect()`. |
 | **Unbounded Event Payload Resource Exhaustion (DoS)** | Both `ExperienceEvent.to_episode()` and `NatsEventsAdapter.publish()` enforce `MAX_CONTENT_BYTES = 65536` (`src/engramory/access/surface.py:50`) and reject non-UTF-8 / P14 dangerous Unicode payloads. | Unit test asserting `ValidationError` / `ValueError` on `>65536`-byte event payloads. |
-| **ClickHouse Init Failure from Missing Exporter Tables (Availability)** | Analytical views in `init-db.sql` and `001_hyperdx_tables.sql` use `CREATE OR REPLACE VIEW` over `merge('hyperdx', '^(otel_logs|hyperdx_sessions)$') WHERE _table = 'otel_logs'` so `hyperdx_sessions` provides the shared OTel column schema at bootstrap before `otelcol-contrib` creates `otel_logs`, while preserving `CREATE TABLE` count == 1. | `uv run pytest tests/test_telemetry_pipeline.py` in `platform-observability-monitoring`. |
+| **ClickHouse Init Failure from Missing Exporter Tables (Availability)** | Analytical views in `init-db.sql` and `001_hyperdx_tables.sql` use `CREATE OR REPLACE VIEW` over `merge('hyperdx', '^(otel_logs\|hyperdx_sessions)$') WHERE _table = 'otel_logs'` so `hyperdx_sessions` provides the shared OTel column schema at bootstrap before `otelcol-contrib` creates `otel_logs`, while preserving `CREATE TABLE` count == 1. | `uv run pytest tests/test_telemetry_pipeline.py` in `platform-observability-monitoring`. |
 
 ---
 
@@ -293,4 +296,3 @@ flowchart LR
 - **Lenses Applied:** Google (Design Doc Invariants, SRE Reliability & ClickHouse View Bootstrap Schema Resolution), AWS (Idempotency, Worker Lifecycle & Per-Event Error Isolation), Microsoft (Defense-in-Depth, Schema Backward Compatibility & CI Gate Integrity).
 - **Verification Summary:** Verified all 8 folded findings from Pass 2 (`C-01`, `M-01`..`M-04`, `m-01`..`m-03`) and Claim 23 (`NEW@pass2` for `tests/conformance/test_adapters.py:92-100`) against the live codebase across `platform-engramory`, `platform-observability-monitoring`, `aiops-agent-pm`, and `aidoc-flow-interlog`. Zero Critical, Major, or Medium findings remain.
 - **Result:** ready
-

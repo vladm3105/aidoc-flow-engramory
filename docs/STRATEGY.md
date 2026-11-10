@@ -74,7 +74,7 @@ The native PostgreSQL reflection worker is active out-of-the-box. Any external p
   an adopted `MemoryPort` engine.
 - **Later cycles** (cloud, advanced distillation, domain config, multi-tenancy, observability,
   portability tooling, multi-project ops) remain sketches until the slice proves value; see
-  [../roadmap/ROADMAP.md](../roadmap/ROADMAP.md).
+  [sdd/08_IPLAN/IPLAN-00_index.yaml](sdd/08_IPLAN/IPLAN-00_index.yaml).
 
 ## Retain unchanged
 

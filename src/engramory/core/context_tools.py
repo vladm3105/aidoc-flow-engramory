@@ -420,40 +420,96 @@ class ScopedContractResolver:
         )
 
 
+_TRACEABILITY_UPSTREAM_KEYS = frozenset(
+    {
+        "upstream",
+        "originating_topic",
+        "brd_reference",
+        "prd_reference",
+        "ears_reference",
+        "bdd_reference",
+        "adr_reference",
+        "spec_reference",
+        "tdd_reference",
+    }
+)
+
+
+def _collect_dep_scalars(val: Any, out: list[str]) -> None:
+    """Recursively collect string/int dependency tokens from scalars, lists, or dicts."""
+    if isinstance(val, (str, int)) and not isinstance(val, bool):
+        s = str(val).strip()
+        if s:
+            out.append(s)
+    elif isinstance(val, list):
+        for item in val:
+            if isinstance(item, dict):
+                target = item.get("adr") or item.get("id") or item.get("target")
+                if target:
+                    _collect_dep_scalars(target, out)
+                else:
+                    for sub_v in item.values():
+                        _collect_dep_scalars(sub_v, out)
+            else:
+                _collect_dep_scalars(item, out)
+    elif isinstance(val, dict):
+        for sub_v in val.values():
+            _collect_dep_scalars(sub_v, out)
+
+
 def _extract_yaml_deps(doc: dict[str, Any]) -> list[str]:
-    """Extract dependency IDs from `depends_on`, `trace`, `traceability`, and ADR dependencies."""
+    """Extract dependency IDs from `depends_on`, `trace`, `traceability`, and SDD lineage keys."""
     deps: list[str] = []
-    for key in ("depends_on", "dependencies", "upstream"):
-        raw = doc.get(key)
-        if isinstance(raw, (str, int)):
-            deps.append(str(raw))
-        elif isinstance(raw, list):
-            for item in raw:
-                if isinstance(item, (str, int)):
-                    deps.append(str(item))
-                elif isinstance(item, dict):
-                    target = item.get("adr") or item.get("id") or item.get("target")
-                    if target:
-                        deps.append(str(target))
+    for key in (
+        "depends_on",
+        "dependencies",
+        "upstream",
+        "source_spec",
+        "source_document",
+        "architecture_decision",
+        "brd_reference",
+        "authoring_chg",
+    ):
+        _collect_dep_scalars(doc.get(key), deps)
+
+    doc_ctrl = doc.get("document_control")
+    if isinstance(doc_ctrl, dict):
+        for key in ("source_spec", "source_document", "authoring_chg", "architecture_decision"):
+            _collect_dep_scalars(doc_ctrl.get(key), deps)
+
+    comp_ov = doc.get("component_overview")
+    if isinstance(comp_ov, dict):
+        _collect_dep_scalars(comp_ov.get("architecture_decision"), deps)
 
     rel_dec = doc.get("related_decisions")
     if isinstance(rel_dec, dict):
         for dep in rel_dec.get("dependencies", []) or []:
             if isinstance(dep, dict) and dep.get("adr"):
+                rel_kind = str(dep.get("type") or dep.get("relationship") or "").strip().lower()
+                if rel_kind == "constrains":
+                    continue
                 deps.append(str(dep["adr"]))
 
     for trace_key in ("trace", "traceability"):
         trace = doc.get(trace_key)
         if isinstance(trace, dict):
-            for v in trace.values():
-                if isinstance(v, list):
-                    deps.extend(str(x) for x in v if isinstance(x, (str, int)))
-                elif isinstance(v, (str, int)):
-                    deps.append(str(v))
+            for k, v in trace.items():
+                if k in _TRACEABILITY_UPSTREAM_KEYS:
+                    _collect_dep_scalars(v, deps)
         elif isinstance(trace, list):
-            deps.extend(str(x) for x in trace if isinstance(x, (str, int)))
+            _collect_dep_scalars(trace, deps)
 
-    return list(dict.fromkeys(d.strip() for d in deps if str(d).strip()))
+    self_id = _extract_yaml_node_id(doc)
+    self_canon = _canonical_node_key(self_id) if self_id else ""
+    cleaned: list[str] = []
+    for d in deps:
+        s = str(d).strip()
+        if not s:
+            continue
+        if self_canon and _canonical_node_key(s) == self_canon:
+            continue
+        cleaned.append(s)
+    return list(dict.fromkeys(cleaned))
 
 
 def _extract_yaml_node_id(doc: dict[str, Any]) -> str | None:
@@ -679,7 +735,12 @@ class AidocDependencyGraph:
 
     def scan_workspace(self, root_dir: str | Path) -> int:
         """Scan workspace SDD directories and extract `ArtifactNode`s and `@`-pointers."""
-        resolved_root = Path(root_dir).resolve()
+        raw_root = Path(root_dir)
+        if not raw_root.exists() and raw_root.name == "sdd":
+            alt_root = raw_root.parent / "docs" / "sdd"
+            if alt_root.exists():
+                raw_root = alt_root
+        resolved_root = raw_root.resolve()
         candidate_roots = [
             resolved_root / "sdd",
             resolved_root / "docs" / "sdd",
@@ -728,6 +789,12 @@ class AidocDependencyGraph:
         return loaded_count
 
     def _scan_yaml_file(self, file_path: Path, rel_path: str, dir_layer: str) -> int:
+        if file_path.stem.endswith("-00_index") or re.match(
+            r"^(?:BRD|PRD|EARS|BDD|ADR|SPEC|TDD|IPLAN|CHG|EVAL)-00\b",
+            file_path.stem,
+            re.IGNORECASE,
+        ):
+            return 0
         raw_text = _read_bounded_text(file_path)
         if raw_text is None:
             return 0
@@ -837,6 +904,12 @@ class AidocDependencyGraph:
         return count
 
     def _scan_markdown_file(self, file_path: Path, rel_path: str, dir_layer: str) -> int:
+        if file_path.stem.endswith("-00_index") or re.match(
+            r"^(?:BRD|PRD|EARS|BDD|ADR|SPEC|TDD|IPLAN|CHG|EVAL)-00\b",
+            file_path.stem,
+            re.IGNORECASE,
+        ):
+            return 0
         content = _read_bounded_text(file_path)
         if content is None:
             return 0

@@ -41,6 +41,22 @@ SDD_PREFIXES = (
 )
 
 
+def _resolve_sdd_root(sdd_root: Path | str) -> Path:
+    """Resolve SDD root or layer directory, transparently falling back from `sdd` to `docs/sdd`."""
+    p = Path(sdd_root)
+    if p.exists():
+        return p
+    if p.name == "sdd":
+        alt = p.parent / "docs" / "sdd"
+        if alt.exists():
+            return alt
+    if p.parent.name == "sdd":
+        alt = p.parent.parent / "docs" / "sdd" / p.name
+        if alt.exists():
+            return alt
+    return p
+
+
 def normalize_sdd_id(raw_id: str) -> str:
     """Normalize raw SDD identifiers, hashes, or file stems into canonical IDs."""
     cleaned = raw_id.strip()
@@ -51,17 +67,24 @@ def normalize_sdd_id(raw_id: str) -> str:
         if len(parts) == 2:
             cleaned = parts[1].strip()
 
+    proj_prefix = ""
+    if ":" in cleaned:
+        p_head, p_tail = cleaned.split(":", 1)
+        if p_head and p_tail:
+            proj_prefix = f"{p_head}:"
+            cleaned = p_tail.strip()
+
     upper_cleaned = cleaned.upper()
     for prefix in SDD_PREFIXES:
         if upper_cleaned.startswith(prefix):
             parts = cleaned.split(".")
             if len(parts) >= 2:
-                return f"{parts[0].upper()}-{parts[1]}"
+                return f"{proj_prefix}{parts[0].upper()}-{parts[1]}"
 
     if "_" in cleaned and not cleaned.startswith("0"):
         cleaned = cleaned.split("_")[0]
 
-    return cleaned
+    return f"{proj_prefix}{cleaned}"
 
 
 def extract_sdd_target_ids(raw_value: Any) -> list[str]:
@@ -98,7 +121,7 @@ def extract_adr_graph(
     domain_id: str = "core",
 ) -> tuple[list[GraphEntity], list[GraphRelation]]:
     """Parse ADR YAML files and extract entities and directed dependency relations."""
-    directory = Path(adr_dir)
+    directory = _resolve_sdd_root(adr_dir)
     entities: list[GraphEntity] = []
     relations: list[GraphRelation] = []
 
@@ -113,14 +136,16 @@ def extract_adr_graph(
         except Exception as exc:  # noqa: BLE001  # reason: invalid adr yaml should be logged and skipped rather than crash batch
             logger.warning("Failed to parse %s: %s", file_path, exc)
             continue
+        if not isinstance(data, dict):
+            continue
 
         adr_id = data.get("id")
         title = data.get("title", file_path.stem)
         if not adr_id:
             continue
 
-        status = data.get("document_control", {}).get("status", "Accepted")
-        layer = data.get("metadata", {}).get("layer", 5)
+        status = (data.get("document_control") or {}).get("status", "Accepted")
+        layer = (data.get("metadata") or {}).get("layer", 5)
 
         entity = GraphEntity(
             id=adr_id,
@@ -137,8 +162,10 @@ def extract_adr_graph(
         entities.append(entity)
 
         # Parse dependencies
-        deps = data.get("related_decisions", {}).get("dependencies", [])
+        deps = (data.get("related_decisions") or {}).get("dependencies") or []
         for dep in deps:
+            if not isinstance(dep, dict):
+                continue
             dst_adr = dep.get("adr")
             if not dst_adr:
                 continue
@@ -169,7 +196,7 @@ def extract_sdd_graph(
     namespace_by_project: bool = False,
 ) -> tuple[list[GraphEntity], list[GraphRelation]]:
     """Parse entire SDD corpus across all 10 layers and extract entities & lineage relations."""
-    root_dir = Path(sdd_root)
+    root_dir = _resolve_sdd_root(sdd_root)
     resolved_root = root_dir.resolve()
     entities_map: dict[str, GraphEntity] = {}
     relations_map: dict[tuple[str, str, str], str] = {}  # (src, dst, rel_type) -> rationale
@@ -238,7 +265,11 @@ def extract_sdd_graph(
                 doc_id = stem.split("_")[0] if "_" in stem else stem
 
             doc_id = normalize_sdd_id(str(doc_id))
-            if not doc_id or doc_id in ("README", "HANDOFF", "IMPLEMENTATION"):
+            if (
+                not doc_id
+                or doc_id in ("README", "HANDOFF", "IMPLEMENTATION")
+                or doc_id.endswith("-00")
+            ):
                 continue
 
             entity_type = raw_type
@@ -305,9 +336,9 @@ def extract_sdd_graph(
                     )
 
             # architecture_decision in SPEC
-            arch_dec = data.get("architecture_decision") or data.get("component_overview", {}).get(
-                "architecture_decision"
-            )
+            arch_dec = data.get("architecture_decision") or (
+                data.get("component_overview") or {}
+            ).get("architecture_decision")
             for dst in extract_sdd_target_ids(arch_dec):
                 if dst != doc_id:
                     relations_map[(qualified_doc_id, _qualify_id(dst), "CONSTRAINED_BY")] = (
@@ -331,8 +362,10 @@ def extract_sdd_graph(
                     )
 
             # related_decisions.dependencies in ADR
-            adr_deps = data.get("related_decisions", {}).get("dependencies", [])
+            adr_deps = (data.get("related_decisions") or {}).get("dependencies") or []
             for dep in adr_deps:
+                if not isinstance(dep, dict):
+                    continue
                 dst_adr = dep.get("adr")
                 for dst in extract_sdd_target_ids(dst_adr):
                     if dst != doc_id:
@@ -486,7 +519,7 @@ def resolve_sdd_project_id(
     if explicit_id and explicit_id.strip():
         return explicit_id.strip()
 
-    root_path = Path(sdd_root).resolve()
+    root_path = _resolve_sdd_root(sdd_root).resolve()
     search_dirs: list[Path] = [root_path]
     curr = root_path
     for _ in range(3):
@@ -547,6 +580,8 @@ def resolve_sdd_project_id(
         return config_id
 
     # Fallback to directory name
+    if root_path.name == "sdd" and root_path.parent.name == "docs":
+        return root_path.parent.parent.name
     return root_path.parent.name if root_path.name in ("sdd", "docs") else root_path.name
 
 
@@ -559,16 +594,23 @@ async def ingest_sdd_knowledge_graph(
     project_id: str = "core",
     domain_id: str = "core",
     reconcile: bool = True,
+    namespace_by_project: bool = False,
 ) -> tuple[int, int]:
     """Ingest complete multi-layer SDD corpus into PostgreSQL and project to Neo4j."""
+    sdd_path = _resolve_sdd_root(sdd_root)
     entities, relations = extract_sdd_graph(
-        sdd_root,
+        sdd_path,
         tenant_id=tenant_id,
         project_id=project_id,
         domain_id=domain_id,
+        namespace_by_project=namespace_by_project,
     )
-    sdd_path = Path(sdd_root)
-    repo_candidate = sdd_path.parent if sdd_path.name == "sdd" else sdd_path
+    if sdd_path.name == "sdd" and sdd_path.parent.name == "docs":
+        repo_candidate = sdd_path.parent.parent
+    elif sdd_path.name == "sdd":
+        repo_candidate = sdd_path.parent
+    else:
+        repo_candidate = sdd_path
     if (repo_candidate / "docs").is_dir():
         doc_entities, doc_relations = extract_docs_graph(
             repo_candidate,
@@ -723,7 +765,7 @@ def extract_docs_graph(
     domain_id: str = "default",
 ) -> tuple[list[GraphEntity], list[GraphRelation]]:
     """Extract RUNBOOK, RUNBOOK_STEP, and ALERT entities and relations from docs/**/*.md."""
-    from engramory.core.docs_tools import parse_markdown_document
+    from engramory.core.docs_tools import _is_sdd_doc_path, parse_markdown_document
 
     root = Path(repo_path).resolve()
     bound_root = root if root.is_dir() else root.parent
@@ -736,7 +778,12 @@ def extract_docs_graph(
         if docs_dir.is_dir()
         else sorted(root.glob("*.md"))
     )
-    md_files = [f for f in raw_files if f.resolve().is_relative_to(bound_root.resolve())]
+    md_files = [
+        f
+        for f in raw_files
+        if f.resolve().is_relative_to(bound_root.resolve())
+        and (root.is_file() or not _is_sdd_doc_path(f, bound_root))
+    ]
 
     entities: dict[str, GraphEntity] = {}
     relations: list[GraphRelation] = []
@@ -821,7 +868,7 @@ def extract_docs_graph(
                     dst_id=st.step_uid,
                     rel_type="CONTAINS_STEP",
                     tenant_id=tenant_id,
-                    properties={"step_order": st.step_order},
+                    properties={"project_id": eff_project, "step_order": st.step_order},
                 )
             )
 

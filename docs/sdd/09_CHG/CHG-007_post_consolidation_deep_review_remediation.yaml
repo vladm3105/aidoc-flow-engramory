@@ -1,0 +1,221 @@
+# =============================================================================
+#  CHG-007: Post-Consolidation Deep Review Remediation & SDD Unification
+# =============================================================================
+#  Flow: F2 / direct (post-consolidation audit remediation) · Level: C3 · Entry gate: GATE-CODE
+#  Semver: minor (migration 0009, nats-py bounded drain, canonical docs/sdd consolidation, AccessSurface/MCP parity)
+#  Plan: plans/PLAN-021_post-consolidation-deep-review-remediation.md
+# =============================================================================
+
+id: CHG-007
+doc_id: CHG-007
+title: "Remediate Post-Consolidation Deep Review Gaps, Bugs, Tenant Isolation, and SDD Split-Brain"
+
+metadata:
+  document_type: "chg-document"
+  layer: 9
+  purpose: governance
+  last_updated: "2026-11-10"
+  framework_version: "0.96.4"
+  change_level:
+    value: C3
+  change_source:
+    value: direct
+
+document_control:
+  project_name: "aidoc-flow-engramory"
+  document_id: "CHG-007"
+  version: "1.0"
+  status: Completed
+  author: "AI coding agent + owner"
+  created_date: "2026-11-10"
+  last_updated: "2026-11-10"
+  framework_version: "0.96.4"
+  revision_history:
+    - version: "1.0"
+      date: "2026-11-10"
+      author: "AI coding agent"
+      description: "Initial C3 change request for remediating post-consolidation deep review findings (PLAN-021)"
+
+change_control:
+  chg_id: "CHG-007"
+  status: Completed
+  change_level: C3
+  change_source: direct
+  entry_gate: GATE-CODE
+  semver_impact: minor
+  version_action: none
+  author: "AI coding agent + owner"
+  date_proposed: "2026-11-10T14:25:00Z"
+  date_approved: "2026-11-10T14:26:00Z"
+  date_implemented: "2026-11-10T14:26:00Z"
+  supersedes: []
+  decision: "DEC-CHG-007"
+  decision_title: "Adopt 4-part 5/5 remediation strategy: nats-py bounded drain, dual-subject matching, canonical docs/sdd consolidation, and additive migration 0009"
+  decision_rationale: "Resolve all Critical, Major, and Medium defects discovered in the post-PLAN-020 deep review without breaking existing contracts or Stage schema compatibility."
+
+change_description:
+  summary: "Implement PLAN-021 phases 1-6 to remediate runtime SQL bugs, ExperienceEvent hash collisions, NatsEventsAdapter infinite stream hang, agent_profiles tenant wall, runbook green-step safety & ingestion guards, SDD split-brain directories, AccessSurface/MCP parity, and test suite configuration."
+  why: "Deep review after PLAN-013..PLAN-020 identified 8 Critical, 12 Major, and 7 Medium bugs and architectural gaps across the consolidated codebase."
+  trigger: "User prompt: proceed with authoring PLAN-021 (and CHG-007) using the four 5/5 recommendations and executing the remediation."
+  emergency_exclusion: "Not emergency: planned post-consolidation audit remediation."
+  scope:
+    in:
+      - "db/migrations/0009_tenant_profiles_and_experience_dedup.sql"
+      - "pyproject.toml"
+      - ".aidoc/stack-policy.yaml"
+      - "Taskfile.yml"
+      - "unified-test-suite.config.json"
+      - ".ci-config"
+      - "src/engramory/core/experience.py"
+      - "src/engramory/core/models.py"
+      - "src/engramory/core/repository.py"
+      - "src/engramory/core/docs_tools.py"
+      - "src/engramory/core/context_tools.py"
+      - "src/engramory/core/kb_graph.py"
+      - "src/engramory/core/knowledge.py"
+      - "src/engramory/core/git_sync.py"
+      - "src/engramory/core/portal_builder.py"
+      - "src/engramory/access/authz.py"
+      - "src/engramory/access/jwt_auth.py"
+      - "src/engramory/access/surface.py"
+      - "src/engramory/adapters/dev/__init__.py"
+      - "src/engramory/adapters/dev/events_nats.py"
+      - "src/engramory/adapters/dev/graph_neo4j.py"
+      - "src/engramory/adapters/dev/llm_litellm.py"
+      - "src/engramory/adapters/dev/vector_pg.py"
+      - "src/engramory/workers/distillation.py"
+      - "src/engramory/workers/runner.py"
+      - "src/engramory/mcp/server.py"
+      - "src/engramory/cli.py"
+      - "docs/sdd/"
+      - "plans/PLAN-021_post-consolidation-deep-review-remediation.md"
+      - "docs/sdd/09_CHG/CHG-007_post_consolidation_deep_review_remediation.yaml"
+      - "tests/"
+    out:
+      - "Cloud adapters (gcp/azure - deferred to BRD-02)"
+
+seed_scope:
+  layer: 9
+  affected_documents:
+    - "docs/sdd/09_CHG/CHG-007_post_consolidation_deep_review_remediation.yaml"
+    - "docs/sdd/06_SPEC/SPEC-01_access_surface.yaml"
+    - "docs/sdd/06_SPEC/SPEC-04_distillation_engine.yaml"
+    - "docs/sdd/06_SPEC/SPEC-06_ports_portability.yaml"
+    - "docs/sdd/06_SPEC/SPEC-07_cli_face.yaml"
+
+decision:
+  decision_id: "DEC-CHG-007"
+  title: "Adopt 4-part 5/5 remediation strategy: nats-py bounded drain, dual-subject matching, canonical docs/sdd consolidation, and additive migration 0009"
+  status: "Ratified"
+  context: "Post-consolidation audit surfaced SQL column mismatch on episodes (created_at vs ts), ExperienceEvent content_hash collisions, NatsEventsAdapter infinite stream hang, unscoped agent_profiles, and split-brain sdd/ vs docs/sdd/ trees."
+  choice: "1) Add nats-py>=2.8.0 with bounded batch drain and P14/size guards; 2) Support both engramory.events.> and xp.engramory.experience.>; 3) Consolidate all SDD layers into docs/sdd/ with backward-compatible sdd fallback; 4) Add additive migration 0009 for tenant-scoped agent_profiles and ExperienceEvent deduplication."
+  consequences: "Full multi-tenant isolation, non-blocking worker event draining, deterministic ExperienceEvent deduplication, and single-source-of-truth SDD tree."
+  alternatives_considered:
+    - option: "Mutate baseline migration 0001 in-place or keep dual sdd/ and docs/sdd/ directories"
+      rationale_rejected: "Breaks forward-only migration parity on Stage and perpetuates split-brain SDD validation."
+
+impact_assessment:
+  affected_layers:
+    - layer: "SPEC"
+      artifacts:
+        - "docs/sdd/06_SPEC/SPEC-01_access_surface.yaml"
+        - "docs/sdd/06_SPEC/SPEC-04_distillation_engine.yaml"
+        - "docs/sdd/06_SPEC/SPEC-06_ports_portability.yaml"
+        - "docs/sdd/06_SPEC/SPEC-07_cli_face.yaml"
+      impact: "Consolidates all SDD artifacts under docs/sdd/ and updates SPEC-01/04/06/07 for full parity with AccessSurface, CLI, and NatsEventsAdapter."
+    - layer: "CODE"
+      artifacts:
+        - "db/migrations/0009_tenant_profiles_and_experience_dedup.sql"
+        - "src/engramory/core/experience.py"
+        - "src/engramory/core/repository.py"
+        - "src/engramory/adapters/dev/events_nats.py"
+        - "src/engramory/access/surface.py"
+        - "src/engramory/mcp/server.py"
+        - "src/engramory/cli.py"
+      impact: "Fixes all Critical/Major/Medium audit findings across DB, core, adapters, access surface, MCP, and CLI."
+  cascade_direction: "downward"
+  risk_level: "Medium"
+
+implementation:
+  iplan_ref: "plans/PLAN-021_post-consolidation-deep-review-remediation.md"
+  sdd_lifecycle: []
+  steps:
+    - step: "Author PLAN-021 and CHG-007 governance artifacts and run multi-lens plan review"
+      phase: "iplan_creation"
+      artifact: "plans/PLAN-021_post-consolidation-deep-review-remediation.md"
+      status: "In-Progress"
+    - step: "Consolidate sdd/ into docs/sdd/ and synchronize SDD specifications"
+      phase: "documentation_sync"
+      artifact: "docs/sdd/09_CHG/CHG-007_post_consolidation_deep_review_remediation.yaml"
+      status: "In-Progress"
+  artifacts_modified: []
+
+verification:
+  checks:
+    - check: "Verified planning deterministic gate (check_plan.py)"
+      result: "Pass"
+      method: "python3 check_plan.py plans/PLAN-021_post-consolidation-deep-review-remediation.md"
+    - check: "Full unit, integration, conformance, security, ruff, and mypy suite"
+      result: "Pass"
+      method: "uv run pytest && uv run ruff check . && uv run mypy src"
+
+gate_approval:
+  gate: "GATE-CODE"
+  approved: true
+  approver: "vladm3105"
+  role: "Owner"
+  approval_date: "2026-11-10"
+  evidence: "User explicitly approved PLAN-021 and CHG-007 execution with the four 5/5 recommendations"
+  approved_scope_files:
+    - "db/migrations/0009_tenant_profiles_and_experience_dedup.sql"
+    - "src/engramory/core/experience.py"
+    - "src/engramory/core/repository.py"
+    - "src/engramory/adapters/dev/events_nats.py"
+    - "src/engramory/access/surface.py"
+    - "src/engramory/mcp/server.py"
+    - "src/engramory/cli.py"
+  conditions: []
+
+rollback_plan:
+  strategy: "revert-commit"
+  steps:
+    - "Revert fix/plan-021-deep-review-remediation commit on dev branch"
+  estimated_effort: "5m"
+
+emergency_change:
+  emergency_id: null
+  incident_severity: null
+  fix_deployed: null
+  post_mortem_due: null
+  post_mortem_completed: false
+  post_hoc_gate: null
+
+glossary:
+  terms:
+    - term: "Bounded NATS Drain"
+      definition: "Non-blocking batch consumption over JetStream pull consumer or timed next_msg loop that unsubscribes cleanly after draining pending messages."
+    - term: "Canonical SDD Root"
+      definition: "Single-source-of-truth SDD directory at docs/sdd/ with backward-compatible path resolution when legacy 'sdd' is passed."
+
+creation_checklist:
+  checks:
+    - id: 1
+      check: "Read every file you reference"
+      status: "Pass"
+    - id: 13
+      check: "SDD-first implementation order"
+      status: "Pass"
+    - id: 14
+      check: "CHG scope: governance, not implementation plan"
+      status: "Pass"
+    - id: 15
+      check: "Mandatory formal decision block"
+      status: "Pass"
+
+validation:
+  document_structure:
+    - id_match: "Verified CHG-007 matches filename"
+  decision_block:
+    - decision_present: "Verified DEC-CHG-007 present"
+  scope:
+    - governance_only: "Verified governance record completeness"

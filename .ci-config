@@ -155,11 +155,11 @@ CONFLICT_MAX_ATTEMPTS=2
 # Globs whose conflicts always need a human (class D), besides CI/governance config.
 CONFLICT_HUMAN_PATHS=*/migrations/* migrations/*
 # Append-only files resolved by line-union of both sides (class B).
-CONFLICT_UNION_FILES=CHANGELOG.md
+CONFLICT_UNION_FILES=docs/archive/CHANGELOG.md
 
 # --- Supervisor (task inbox) ---
 # Changelog scanned for Unreleased bullets by the inbox `release-due` check.
-CHANGELOG_PATH=CHANGELOG.md
+CHANGELOG_PATH=docs/archive/CHANGELOG.md
 # Inbox `stuck-pending` threshold: hours the oldest pending Actions run may sit
 # before flagging (hung runners never fail, so nothing else escalates).
 CHECK_STALE_H=2

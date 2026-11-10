@@ -74,7 +74,7 @@ def test_init_scaffolds_config_and_profile(project_dir: Path, pg_dsn: str) -> No
     # init upserts the caller's L3 profile row (PLAN-002 Phase 2.2)
     from engramory.core.repository import Repository
 
-    profile = asyncio.run(Repository(pg_dsn).get_agent_profile("agent-cli"))
+    profile = asyncio.run(Repository(pg_dsn).get_agent_profile("agent-cli", tenant_id="t-cli-init"))
     assert profile is not None
 
 
@@ -345,10 +345,12 @@ def test_worker_start_with_env(
         *,
         llm: Any = None,
         vector: Any = None,
+        events: Any = None,
         interval_sec: Any = None,
         tenant_id: Any = None,
     ) -> int:
         called["repo"] = repo
+        called["events"] = events
         called["interval_sec"] = interval_sec
         called["tenant_id"] = tenant_id
         return 0
@@ -362,6 +364,7 @@ def test_worker_start_with_env(
     assert code == 0
     assert called["tenant_id"] == "t-worker-env"
     assert called["interval_sec"] == 120
+    assert called["events"] is not None
 
 
 def test_graph_reproject_cli(

@@ -23,6 +23,7 @@ membership.
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -374,6 +375,13 @@ class AccessSurface:
                 writer_agent_id=ctx.agent_id,
                 target="episodes",
             )
+            if metadata:
+                inspect_memory_write(
+                    json.dumps(dict(metadata), sort_keys=True),
+                    tenant_id=ctx.tenant_id,
+                    writer_agent_id=ctx.agent_id,
+                    target="episodes:metadata",
+                )
         except MemoryPoisoningError as exc:
             await self._repo.record_audit(
                 tenant_id=ctx.tenant_id,
@@ -422,8 +430,88 @@ class AccessSurface:
         await self._decide(
             ctx, "agent_profile_get", TargetScope(tenant_id=ctx.tenant_id, scope="agent")
         )
-        profile = await self._repo.get_agent_profile(ctx.agent_id)
-        return profile if profile is not None else AgentProfile(agent_id=ctx.agent_id)
+        profile = await self._repo.get_agent_profile(ctx.agent_id, tenant_id=ctx.tenant_id)
+        return (
+            profile
+            if profile is not None
+            else AgentProfile(agent_id=ctx.agent_id, tenant_id=ctx.tenant_id)
+        )
+
+    async def memory_ingest_event(
+        self,
+        ctx: ActorContext,
+        event_data: Mapping[str, Any] | Any,
+        *,
+        scope: str = "project",
+    ) -> dict[str, Any]:
+        """Validate, screen, and persist a structured ExperienceEvent into L1 episodes."""
+        from engramory.core.experience import ExperienceEvent
+
+        await self._decide(
+            ctx, "memory_ingest_event", TargetScope(tenant_id=ctx.tenant_id, scope=scope)
+        )
+        if isinstance(event_data, ExperienceEvent):
+            ev = event_data
+        else:
+            raw_ev = dict(event_data)
+            if not raw_ev.get("tenant_id"):
+                raw_ev["tenant_id"] = ctx.tenant_id
+            ev = ExperienceEvent.from_dict(raw_ev)
+        if ev.tenant_id != ctx.tenant_id:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="memory_ingest_event",
+                allowed=False,
+                reason=f"cross_tenant_event_rejected: {ev.tenant_id}",
+            )
+            raise AuthzError("out_of_scope")
+        try:
+            ep = ev.to_episode()
+        except MemoryPoisoningError as exc:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="memory_ingest_event",
+                allowed=False,
+                reason=f"poisoning_rejected: {exc}",
+            )
+            raise GovernedWriteRejected(str(exc)) from exc
+        ep_id = await self._repo.add_episode(ep)
+        return {
+            "episode_id": ep_id,
+            "event_id": ev.event_id,
+            "kind": ev.kind,
+            "project": ev.project,
+            "producer": ev.producer,
+            "tenant_id": ev.tenant_id,
+        }
+
+    async def memory_learning_health(
+        self,
+        ctx: ActorContext,
+        *,
+        project_id: str | None = None,
+        limit: int = 500,
+        scope: str = "project",
+    ) -> dict[str, Any]:
+        """Compute closed-loop learning health metrics over recent episodes for caller's tenant."""
+        await self._decide(
+            ctx, "memory_learning_health", TargetScope(tenant_id=ctx.tenant_id, scope=scope)
+        )
+        eff_proj = project_id if project_id is not None else ctx.project_id
+        summary = await self._repo.get_learning_health_summary(
+            tenant_id=ctx.tenant_id,
+            project_id=eff_proj,
+            limit=limit,
+        )
+        return {
+            "tenant_id": ctx.tenant_id,
+            "project_id": eff_proj,
+            **summary,
+        }
 
     async def knowledge_ingest(
         self,
@@ -793,6 +881,7 @@ class AccessSurface:
                 hits = await self.memory_search(
                     ctx,
                     query_str,
+                    scope=scope,
                     k=4,
                     token_budget=max(250, token_budget // 4),
                 )

@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from engramory.access.authz import ActorContext
+from engramory.access.poisoning_guard import MemoryPoisoningError
 from engramory.access.surface import AccessSurface, AuthzError, GovernedWriteRejected
 from engramory.adapters.factory import dev_adapters, require_dev_profile
 from engramory.core.kb_graph import ingest_sdd_knowledge_graph, resolve_sdd_project_id
@@ -132,14 +133,18 @@ def _emit(as_json: bool, payload: dict[str, Any], human: str) -> None:
 # ── commands ────────────────────────────────────────────────────────────────
 
 
-def _upsert_profile_best_effort(agent_id: str, dsn: str) -> str:
+def _upsert_profile_best_effort(agent_id: str, dsn: str, tenant_id: str = "default") -> str:
     """L3 profile row: init still succeeds when the store is down — the row
     lands on a later init run (every init retries, including re-runs on an
     existing config)."""
     from engramory.core.models import AgentProfile
 
     try:
-        asyncio.run(Repository(dsn).upsert_agent_profile(AgentProfile(agent_id=agent_id)))
+        asyncio.run(
+            Repository(dsn).upsert_agent_profile(
+                AgentProfile(agent_id=agent_id, tenant_id=tenant_id)
+            )
+        )
     except StoreUnavailable as exc:
         print(f"engramory init: store unreachable, profile deferred: {exc}", file=sys.stderr)
         return "deferred"
@@ -149,7 +154,7 @@ def _upsert_profile_best_effort(agent_id: str, dsn: str) -> str:
 def _cmd_init(args: argparse.Namespace) -> int:
     cfg_path = Path(CONFIG_DIRNAME) / CONFIG_FILENAME
     if cfg_path.exists():
-        profile_state = _upsert_profile_best_effort(args.agent_id, args.dsn)
+        profile_state = _upsert_profile_best_effort(args.agent_id, args.dsn, args.tenant_id)
         _emit(
             args.json,
             {"created": False, "config": str(cfg_path), "profile": profile_state},
@@ -173,7 +178,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
     existing = gitignore.read_text() if gitignore.exists() else ""
     if entry not in existing:
         gitignore.write_text(existing.rstrip("\n") + ("\n" if existing else "") + entry + "\n")
-    profile_state = _upsert_profile_best_effort(args.agent_id, args.dsn)
+    profile_state = _upsert_profile_best_effort(args.agent_id, args.dsn, args.tenant_id)
     _emit(
         args.json,
         {"created": True, "config": str(cfg_path), "profile": profile_state},
@@ -314,8 +319,6 @@ def _cmd_knowledge_ingest(args: argparse.Namespace) -> int:
         return 2
 
     config = _load_config(getattr(args, "config", None))
-    adapters = dev_adapters(config.dsn)
-    repo = Repository(config.dsn)
 
     target_path = Path(args.path)
     if not target_path.exists():
@@ -334,6 +337,9 @@ def _cmd_knowledge_ingest(args: argparse.Namespace) -> int:
     if not files_to_ingest:
         _emit(args.json, {"files": 0, "sections": 0}, "No files found to ingest")
         return 0
+
+    adapters = dev_adapters(config.dsn)
+    repo = Repository(config.dsn)
 
     from engramory.core.extraction.router import SmartExtractionRouter
     from engramory.core.knowledge import KnowledgeCore
@@ -471,14 +477,17 @@ def _cmd_worker_start(args: argparse.Namespace) -> int:
     if not tenant_id and config.path != Path(".env"):
         tenant_id = config.ctx.tenant_id
     interval = args.interval or int(os.getenv("ENGRAMORY_REFLECT_INTERVAL_SEC", "300"))
-    return start_daemon(
-        repo,
-        llm=adapters.llm,
-        vector=adapters.vector,
-        events=adapters.events,
-        interval_sec=interval,
-        tenant_id=tenant_id,
-    )
+    try:
+        return start_daemon(
+            repo,
+            llm=adapters.llm,
+            vector=adapters.vector,
+            events=adapters.events,
+            interval_sec=interval,
+            tenant_id=tenant_id,
+        )
+    finally:
+        asyncio.run(_close_adapters(adapters))
 
 
 def _cmd_profile_get(args: argparse.Namespace) -> int:
@@ -1150,9 +1159,9 @@ def main(argv: list[str] | None = None) -> int:
     except ConfigError as exc:
         print(f"engramory: {exc}", file=sys.stderr)
         return 2
-    # AuthzError/GovernedWriteRejected subclass PermissionError — they MUST
+    # AuthzError/GovernedWriteRejected/MemoryPoisoningError MUST
     # be matched before the fence clause or every deny would exit 2, not 1.
-    except (AuthzError, GovernedWriteRejected) as exc:
+    except (AuthzError, GovernedWriteRejected, MemoryPoisoningError) as exc:
         print(f"engramory: denied: {exc}", file=sys.stderr)
         return 1
     except PermissionError as exc:  # the ADR-10 dev-tier fence
@@ -1497,6 +1506,7 @@ def _cmd_docs_ingest(args: argparse.Namespace) -> int:
 
     from engramory.core.chunking import chunk_markdown
     from engramory.core.docs_tools import (
+        _is_sdd_doc_path,
         _is_within_root,
         parse_markdown_document,
         resolve_confined_repo_path,
@@ -1513,7 +1523,12 @@ def _cmd_docs_ingest(args: argparse.Namespace) -> int:
         if (target / "docs").is_dir()
         else sorted(target.glob("*.md"))
     )
-    md_files = [f for f in raw_files if _is_within_root(f, bound_root)]
+    md_files = [
+        f
+        for f in raw_files
+        if _is_within_root(f, bound_root)
+        and (target.is_file() or not _is_sdd_doc_path(f, bound_root))
+    ]
 
     async def _op(surface: AccessSurface, actor: ActorContext) -> dict[str, Any]:
         eff_actor = (
@@ -1589,10 +1604,10 @@ def _cmd_memory_ingest_event(args: argparse.Namespace) -> int:
 
     raw_str = getattr(args, "event_json", None)
     event_file = getattr(args, "event_file", None)
-    if not raw_str and not event_file:
-        raise ValueError("memory ingest-event requires either --event-json or --event-file")
     if event_file:
         raw_str = Path(event_file).read_text(encoding="utf-8")
+    if not isinstance(raw_str, str) or not raw_str:
+        raise ValueError("memory ingest-event requires either --event-json or --event-file")
     raw_dict = json.loads(raw_str)
     if not isinstance(raw_dict, dict):
         raise ValueError("ExperienceEvent JSON must decode to a JSON object")

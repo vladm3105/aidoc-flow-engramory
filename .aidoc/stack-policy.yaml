@@ -88,6 +88,9 @@ dependencies:
     - name: "neo4j"
       version_constraint: ">=5.26.0"
       approved_features: []
+    - name: "nats-py"
+      version_constraint: ">=2.8.0"
+      approved_features: []
     - name: "psycopg"
       version_constraint: ">=3.2"
       approved_features: ["binary"]

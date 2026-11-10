@@ -270,21 +270,24 @@ def check_token_revocation(
             req = urllib.request.Request(target_url, headers={"User-Agent": "Engramory-Auth/1.0"})
             # nosemgrep  # reason: target_url scheme validated to http/https
             with urllib.request.urlopen(req, timeout=2.0) as resp:  # nosec B310  # reason: scheme ok
-                if resp.status == 200:
-                    import json
+                if resp.status != 200:
+                    raise ValueError(f"Unexpected Security Gate status {resp.status}")
+                import json
 
-                    data = json.loads(resp.read().decode("utf-8"))
-                    revoked_list = data.get("revocations", [])
-                    revoked_set = {r.get("target") for r in revoked_list if isinstance(r, dict)}
-                    if jti and jti in revoked_set:
-                        raise AuthenticationError(
-                            f"Token {jti} has been revoked by platform kill-switch"
-                        )
-                    if agent_id in revoked_set:
-                        raise AuthenticationError(
-                            f"Agent {agent_id} has been revoked by platform kill-switch"
-                        )
-        except urllib.error.URLError as exc:
+                data = json.loads(resp.read().decode("utf-8"))
+                if not isinstance(data, dict):
+                    raise ValueError("Invalid Security Gate revocation response")
+                revoked_list = data.get("revocations", [])
+                revoked_set = {r.get("target") for r in revoked_list if isinstance(r, dict)}
+                if jti and jti in revoked_set:
+                    raise AuthenticationError(
+                        f"Token {jti} has been revoked by platform kill-switch"
+                    )
+                if agent_id in revoked_set:
+                    raise AuthenticationError(
+                        f"Agent {agent_id} has been revoked by platform kill-switch"
+                    )
+        except (urllib.error.URLError, ValueError, OSError) as exc:
             logger.warning("Could not reach Security Gate revocation endpoint: %s", exc)
             if fail_closed:
                 raise AuthenticationError(

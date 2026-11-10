@@ -16,6 +16,7 @@ SRC = Path(__file__).resolve().parents[2] / "src" / "engramory"
 # SDKs that must never appear outside engramory.adapters.
 VENDOR_ROOTS = {
     "redis",
+    "nats",
     "neo4j",
     "boto3",
     "botocore",
