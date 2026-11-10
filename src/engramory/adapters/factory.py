@@ -10,10 +10,11 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from engramory.adapters.dev.events_nats import NatsEventsAdapter
 from engramory.adapters.dev.graph_neo4j import Neo4jGraphAdapter
 from engramory.adapters.dev.llm_litellm import LiteLLMAdapter
 from engramory.adapters.dev.vector_pg import PgVectorAdapter
-from engramory.ports import GraphPort, LLMPort, VectorPort
+from engramory.ports import EventsPort, GraphPort, LLMPort, VectorPort
 
 PROFILES = ("dev", "gcp", "azure")
 
@@ -26,14 +27,20 @@ class AdapterSet:
     vector: VectorPort
     llm: LLMPort
     graph: GraphPort | None = None
+    events: EventsPort | None = None
 
 
-def dev_adapters(dsn: str, neo4j_uri: str | None = None) -> AdapterSet:
+def dev_adapters(
+    dsn: str,
+    neo4j_uri: str | None = None,
+    nats_url: str | None = None,
+) -> AdapterSet:
     return AdapterSet(
         profile="dev",
         vector=PgVectorAdapter(dsn),
         llm=LiteLLMAdapter(),
         graph=Neo4jGraphAdapter(uri=neo4j_uri),
+        events=NatsEventsAdapter(url=nats_url),
     )
 
 

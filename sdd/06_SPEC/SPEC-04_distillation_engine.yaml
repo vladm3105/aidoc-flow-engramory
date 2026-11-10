@@ -63,6 +63,13 @@ data_models:
         - { name: "expired", type: "int", required: true, description: "End-dated facts" }
         - { name: "quarantined", type: "int", required: true, description: "Low-confidence lessons" }
         - { name: "run_id", type: "str", required: true, description: "Observable consolidation_run id" }
+    - name: "ExperienceEvent"
+      type: "dataclass"
+      fields:
+        - { name: "kind", type: "str", required: true, description: "One of the 9 canonical milestone kinds (plan.authored, review.verdict, execution.completed, gate.failed, decision.recorded, lesson.proposed, feedback.received, feedback.routed, feedback.quarantined)" }
+        - { name: "event_id", type: "str", required: false, description: "Deterministic UUIDv5 derived via derive_experience_event_id()" }
+        - { name: "origin", type: "OriginProvenance | None", required: false, description: "Source provenance (repo + commit/pr/plan_id/chg_id/run_id + optional W3C trace_id) propagated into Memory.provenance during reflect()" }
+        - { name: "effectiveness_score", type: "float | None", required: false, description: "Optional closed-loop learning score in [0, 1] overriding default initial confidence 0.6 in reflect()" }
 
 behavior:
   validation_rules:
