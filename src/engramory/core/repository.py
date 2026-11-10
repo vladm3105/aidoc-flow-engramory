@@ -1721,6 +1721,51 @@ class Repository:
             rows = await cur.fetchall()
             return [dict(r) for r in rows]
 
+    async def get_learning_health_summary(
+        self,
+        *,
+        tenant_id: str,
+        project_id: str | None = None,
+        limit: int = 500,
+    ) -> dict[str, Any]:
+        """Compute closed-loop learning health metrics over recent episodes for tenant_id."""
+        from engramory.core.experience import compute_learning_health_metrics
+
+        safe_limit = max(1, min(int(limit), 5000))
+        async with self._conn() as conn:
+            rows = await (
+                await conn.execute(
+                    """
+                    SELECT id, agent_id, project_id, domain_id, tenant_id, kind,
+                           content_raw, metadata
+                    FROM episodes
+                    WHERE tenant_id = %(tenant_id)s
+                      AND (%(project_id)s::text IS NULL OR project_id = %(project_id)s::text)
+                    ORDER BY created_at ASC, id ASC
+                    LIMIT %(limit)s
+                    """,
+                    {
+                        "tenant_id": tenant_id,
+                        "project_id": project_id,
+                        "limit": safe_limit,
+                    },
+                )
+            ).fetchall()
+            episodes = [
+                Episode(
+                    agent_id=row["agent_id"],
+                    content_raw=row["content_raw"],
+                    project_id=row["project_id"],
+                    domain_id=row["domain_id"],
+                    tenant_id=row["tenant_id"],
+                    kind=row["kind"],
+                    metadata=row["metadata"] or {},
+                    id=str(row["id"]),
+                )
+                for row in rows
+            ]
+            return compute_learning_health_metrics(episodes)
+
 
 def _episode_params(episode: Episode) -> dict[str, Any]:
     return {

@@ -183,14 +183,15 @@ def _cmd_init(args: argparse.Namespace) -> int:
 
 
 async def _close_adapters(adapters: Any) -> None:
-    graph = getattr(adapters, "graph", None)
-    if graph is not None and hasattr(graph, "close"):
-        try:
-            res = graph.close()
-            if inspect.isawaitable(res):
-                await res
-        except Exception as exc:  # noqa: BLE001  # reason: adapter cleanup must never mask command outcome
-            logging.getLogger(__name__).debug("Adapter close error ignored: %s", exc)
+    for attr in ("graph", "events"):
+        adapter = getattr(adapters, attr, None)
+        if adapter is not None and hasattr(adapter, "close"):
+            try:
+                res = adapter.close()
+                if inspect.isawaitable(res):
+                    await res
+            except Exception as exc:  # noqa: BLE001  # reason: adapter cleanup must never mask command outcome
+                logging.getLogger(__name__).debug("Adapter close error ignored: %s", exc)
 
 
 def _run_with_surface(
@@ -474,6 +475,7 @@ def _cmd_worker_start(args: argparse.Namespace) -> int:
         repo,
         llm=adapters.llm,
         vector=adapters.vector,
+        events=adapters.events,
         interval_sec=interval,
         tenant_id=tenant_id,
     )
@@ -920,6 +922,28 @@ def _build_parser() -> argparse.ArgumentParser:
         "distill", help="ops: interim reflect pass (episodes -> memories)"
     )
     p_distill.set_defaults(func=_cmd_memory_distill)
+
+    p_ingest_ev = mem_sub.add_parser(
+        "ingest-event",
+        help="ingest a canonical ExperienceEvent (deterministic UUIDv5 + OriginProvenance)",
+    )
+    p_ingest_ev.add_argument("--event-json", default=None, help="inline JSON ExperienceEvent")
+    p_ingest_ev.add_argument("--event-file", default=None, help="path to JSON ExperienceEvent file")
+    p_ingest_ev.add_argument(
+        "--publish-nats",
+        action="store_true",
+        help="also publish the validated event to EventsPort (engramory.events.<kind>)",
+    )
+    p_ingest_ev.set_defaults(func=_cmd_memory_ingest_event)
+
+    p_learn_health = mem_sub.add_parser(
+        "learning-health",
+        help="compute closed-loop learning calibration and repeat-findings metrics",
+    )
+    p_learn_health.add_argument("--project-id", default=None)
+    p_learn_health.add_argument("--limit", type=int, default=500)
+    p_learn_health.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+    p_learn_health.set_defaults(func=_cmd_memory_learning_health)
 
     p_profile = sub.add_parser("profile", help="L3 identity")
     prof_sub = p_profile.add_subparsers(dest="profile_command", required=True)
@@ -1556,3 +1580,82 @@ def _cmd_docs_ingest(args: argparse.Namespace) -> int:
             f"sections_ingested={p['sections_ingested']}"
         ),
     )
+
+
+def _cmd_memory_ingest_event(args: argparse.Namespace) -> int:
+    """Ingest a canonical ExperienceEvent via CLI (and optionally publish to EventsPort)."""
+    from engramory.core.experience import ExperienceEvent
+    from engramory.workers.runner import ingest_experience_event
+
+    raw_str = getattr(args, "event_json", None)
+    event_file = getattr(args, "event_file", None)
+    if not raw_str and not event_file:
+        raise ValueError("memory ingest-event requires either --event-json or --event-file")
+    if event_file:
+        raw_str = Path(event_file).read_text(encoding="utf-8")
+    raw_dict = json.loads(raw_str)
+    if not isinstance(raw_dict, dict):
+        raise ValueError("ExperienceEvent JSON must decode to a JSON object")
+
+    config = _load_config(getattr(args, "config", None))
+    if "tenant_id" not in raw_dict:
+        raw_dict = {**raw_dict, "tenant_id": config.ctx.tenant_id}
+
+    event = ExperienceEvent.from_dict(raw_dict)
+    adapters = dev_adapters(config.dsn)
+    repo = Repository(config.dsn)
+
+    async def _run() -> dict[str, Any]:
+        try:
+            episode_id = await ingest_experience_event(
+                repo,
+                event,
+                enforce_tenant_id=config.ctx.tenant_id,
+            )
+            published_topic: str | None = None
+            if getattr(args, "publish_nats", False) and adapters.events is not None:
+                published_topic = f"engramory.events.{event.kind}"
+                await adapters.events.publish(topic=published_topic, event=event.to_dict())
+            return {
+                "episode_id": episode_id,
+                "event_id": event.event_id,
+                "kind": event.kind,
+                "published_topic": published_topic,
+            }
+        finally:
+            await _close_adapters(adapters)
+
+    payload = asyncio.run(_run())
+    _emit(
+        args.json,
+        payload,
+        f"episode {payload['episode_id']} (event_id={payload['event_id']})",
+    )
+    return 0
+
+
+def _cmd_memory_learning_health(args: argparse.Namespace) -> int:
+    """Compute closed-loop learning effectiveness signals over recent episodes."""
+    config = _load_config(getattr(args, "config", None))
+    repo = Repository(config.dsn)
+    project_id = getattr(args, "project_id", None) or config.ctx.project_id
+    limit = int(getattr(args, "limit", 500))
+    payload = asyncio.run(
+        repo.get_learning_health_summary(
+            tenant_id=config.ctx.tenant_id,
+            project_id=project_id,
+            limit=limit,
+        )
+    )
+    cal = payload["exec_ready_calibration"]
+    rep = payload["repeat_findings"]
+    _emit(
+        args.json,
+        payload,
+        (
+            f"paired_plans={cal['paired_plans']} "
+            f"calibration_mae={cal['calibration_mae']} "
+            f"repeat_findings_rate={rep['repeat_findings_rate']}"
+        ),
+    )
+    return 0

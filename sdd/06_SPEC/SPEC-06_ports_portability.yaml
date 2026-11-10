@@ -73,7 +73,7 @@ interfaces:
     - name: "EventsPort"
       type: "class"
       signature: "class EventsPort(Protocol): ..."
-      description: "Events (Redis Streams|Pub/Sub|Service Bus)."
+      description: "Events (NATS JetStream engramory.events.> via NatsEventsAdapter in dev | Pub/Sub | Service Bus)."
       errors: []
     - name: "MemoryPort"
       type: "class"

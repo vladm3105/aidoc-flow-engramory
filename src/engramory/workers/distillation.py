@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
+from typing import Any
 
-from engramory.core.models import Memory
+from engramory.core.models import Episode, Memory
 from engramory.core.repository import Repository
 from engramory.ports import LLMPort, VectorPort
 
@@ -90,7 +91,8 @@ async def reflect(
                 embedding_dims=len(vec_candidate)
                 if (has_vector and vec_candidate is not None)
                 else None,
-                provenance={"episode_id": episode.id, "distiller": "reflect-v1"},
+                provenance=_build_episode_provenance(episode, distiller="reflect-v1"),
+                confidence=_resolve_episode_confidence(episode),
                 agent_id=episode.agent_id,
                 project_id=episode.project_id,
                 domain_id=episode.domain_id,
@@ -108,3 +110,37 @@ async def reflect(
             created += 1
 
     return created
+
+
+_PROVENANCE_PASSTHROUGH_KEYS = (
+    "event_id",
+    "event_kind",
+    "origin",
+    "trace_id",
+    "effectiveness_score",
+    "calibration_delta",
+)
+
+
+def _build_episode_provenance(episode: Episode, *, distiller: str) -> dict[str, Any]:
+    """Build distilled Memory.provenance preserving OriginProvenance and W3C trace_id."""
+    prov: dict[str, Any] = {"episode_id": episode.id, "distiller": distiller}
+    meta = episode.metadata or {}
+    for key in _PROVENANCE_PASSTHROUGH_KEYS:
+        if key in meta and meta[key] is not None:
+            val = meta[key]
+            prov[key] = dict(val) if isinstance(val, dict) else val
+    return prov
+
+
+def _resolve_episode_confidence(episode: Episode) -> float:
+    """Resolve initial Memory.confidence from episode.metadata['effectiveness_score']."""
+    meta = episode.metadata or {}
+    raw_score = meta.get("effectiveness_score")
+    if (
+        isinstance(raw_score, (int, float))
+        and not isinstance(raw_score, bool)
+        and 0.0 <= float(raw_score) <= 1.0
+    ):
+        return float(raw_score)
+    return 0.6
