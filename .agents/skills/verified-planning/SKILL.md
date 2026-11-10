@@ -12,11 +12,12 @@ skill replaces ritual with two forcing functions.
 
 ## 0. Where the plan lives
 
-A development plan lives in the **owning repo's `plans/`** directory, named per
-that repo's convention (`PLAN-NNN_slug.md`) — never in `docs/superpowers/` and
-never in an aggregator/umbrella repo that holds no development of its own (the
-`aidoc-flow` umbrella is one instance, not the rule). This convention
-takes priority over any generic plan skill's default location.
+A development plan lives in the owning repository's declared planning surface:
+
+- In **SDD-governed repositories** (e.g. `aidoc-context-tools`, `aidoc-flow-iplan-standard`): Layer 08 (`docs/sdd/08_IPLAN/IPLAN-NNN_slug.md`).
+- In **standalone and platform-tooling repositories**: the `plans/` directory (`PLAN-NNN_slug.md`).
+
+A plan never lives in `docs/superpowers/` and never in an aggregator/umbrella repo that holds no development of its own. This convention takes priority over any generic plan skill's default location.
 
 ## 1. Draft with a Claim ledger
 
@@ -25,12 +26,13 @@ signature, a field or key name, an event/enum value, or a behavioral assertion
 ("validator X ignores unknown keys", "the loop reads only Y") — goes in a
 `## Claim ledger` table with the `file:line` you actually opened and read:
 
-| #   | Claim                                 | Symbol           | Citation                                                  |
-| --- | ------------------------------------- | ---------------- | --------------------------------------------------------- |
-| 1   | completion is recorded as a log event | `task_completed` | platforms/hermes/src/iops_hermes/orchestrator/loop.py:223 |
+| #   | Claim                                 | Symbol                  | Citation                    |
+| --- | ------------------------------------- | ----------------------- | --------------------------- |
+| 1   | project route regex matches tenant    | `_CHATWOOT_PROJECT_ROUTE`| services/intake/app.py:136  |
 
 The `#` column is the documented shape; a table without one is also accepted
 (header + separator + rows, claim first) and reports rows by position.
+**Always include the `Symbol` column** containing an exact literal identifier/token that appears within 3 lines (`PROXIMITY = 3`) of the cited `file:line`; a 3-column table (`| # | Claim | Citation |`) fails `check_plan.py` because the parser reads the prose `Claim` cell as `Symbol` when only 2 data columns follow `#`.
 
 A claim you have not verified is written `UNVERIFIED` in the Citation column and
 **cannot survive to ready**. Do not guess a line number — open the file.
@@ -151,14 +153,15 @@ a reviewer a full pass.
   root outside operator control turns the gate's pass/fail into a presence
   oracle for files the author cannot otherwise open.
 
-## 3. Mandatory independent review (the part that actually works)
+## 3. Mandatory independent review (Multi-Lens Subagent Protocol — 3 Reviews Max)
 
-Once the gate is green, dispatch the **`verified-planning-reviewer` agent** (a
-fresh-context subagent). Your own re-read does NOT count. The independence
+Once the gate is green, immediately dispatch the **`verified-planning-reviewer` agent** (a
+fresh-context subagent) to execute a **Multi-Lens Review (up to 3 reviews max)** (`Review 1 -> Fold 1 -> Review 2 -> Fold 2 [-> Review 3 (max) -> Fold 3]`).
+Your own re-read does NOT count as the subagent review. The independence
 contract this rests on — judge ≠ generator, the reviewer never sees your
 reasoning, never re-author the prompt ad hoc — is owned by the `second-opinion`
 skill; this step applies it to plans. If the agent type is unavailable, fall
-back to the `Agent` tool with an explicit `model` rather than reviewing it
+back to the `Agent` tool (`invoke_subagent`) with an explicit `model` rather than reviewing it
 yourself. The gate has already
 proven every citation resolves to a real symbol — the reviewer must **not**
 re-verify existence. Its job is the three things a script cannot do:
@@ -166,7 +169,22 @@ re-verify existence. Its job is the three things a script cannot do:
 1. **Semantic truth** — does each cited symbol actually mean what its claim
    asserts, read in context;
 2. **Completeness** — load-bearing claims missing from the ledger;
-3. **Wrong assumptions** — the adversarial hunt for what the author cannot see.
+3. **Wrong assumptions & Critical/Major/Medium gaps** — the adversarial hunt for what the author cannot see.
+
+### 3.0 Adaptive Multi-Lens Selection (Google, Anthropic, AWS, Microsoft) & 3-Review Max Cap
+
+Because the review loop is capped at **3 subagent reviews max** (`Review -> Fold` per round, minimum 2 passes required by `check_plan.py`, capped at **3 reviews max**), review subagents must exhaustively identify **all Critical, Major, and Medium gaps, issues, conformance traps, and bugs** by selecting the **2–4 most suitable industry lenses/approaches** for the specific plan (do NOT apply all simultaneously; pick the lenses that fit the plan's domain):
+
+- **Google (Design Doc & SRE Rigor):** System invariants, boundary/edge-case verification, SLIs/SLOs, blast-radius containment, rollback safety, hermetic testing, and maintainability/simplicity.
+- **Anthropic (Agentic Systems & Evaluator-Optimizer):** Evaluator-Optimizer independence (`Judge != Generator`), constitutional invariant enforcement, subagent orchestration & context isolation, tool/schema contract precision, untrusted input nonce fencing, and minimal review surface.
+- **AWS (Well-Architected & Operational Excellence):** One-way vs. two-way door decisions, IAM least privilege & zero-trust secret custody, idempotency, distributed SAGA/partial-failure compensation, and Everything-as-Code (OpenTofu / declarative config) convergence.
+- **Microsoft (SDL & STRIDE Threat Modeling):** STRIDE security threat modeling (Spoofing, Tampering, Repudiation, Information Disclosure, DoS, Elevation of Privilege), defense-in-depth, backward-compatible schema/contract evolution, and supply-chain/CI gate integrity.
+
+**Up-to-3-Review Workflow:**
+
+1. **Review 1 (Deep Multi-Lens Audit) $\to$ Fold 1:** Dispatch fresh-context subagent(s) applying the selected lenses to surface all `Critical`, `Major`, and `Medium` gaps with `file:line` evidence. Fold all findings into the plan and `## Claim ledger`, then re-run `check_plan.py`.
+2. **Review 2 (Verification & Residual Gap Audit) $\to$ Fold 2:** Dispatch a second fresh-context subagent review to verify every Fold 1 fix against live source files, confirm no regressions or broken references were introduced, and surface any remaining `Critical`, `Major`, or `Medium` gaps. Fold all Round 2 findings and re-run `check_plan.py`. If Review 2 returned zero findings, mark the plan `ready`.
+3. **Review 3 (Final Convergence Pass — 3 Reviews Max) $\to$ Fold 3:** If Review 2 uncovered gaps that required folding, dispatch a third (and final) fresh-context subagent review to verify Fold 2 and fold any remaining gaps, re-run `check_plan.py`, and mark the plan `ready`.
 
 **Define the unit once: a *pass* is a logged review** recorded as
 `### Pass N - <date>`. At least one pass MUST be dispatched — the
@@ -178,8 +196,8 @@ Mark a dispatched pass `### Pass N - <date> - independent` (`- fallback`
 when the logged fallback was used); a self-review pass carries no marker.
 Fold in findings,
 then re-dispatch until a pass returns **zero load-bearing
-findings** — capped at **3 passes** (a circuit-breaker). If
-pass 3 still has load-bearing findings, STOP and surface the open items to the
+findings** — capped at **3 reviews max** (a circuit-breaker). If
+review 3 still has load-bearing findings after folding, STOP and surface the open items to the
 human instead of dispatching a fourth.
 
 ### 3.1 Fold discipline — the loop only converges if the fold is bounded

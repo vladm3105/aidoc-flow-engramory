@@ -20,7 +20,7 @@ base=$(ci_base_branch)
 # cleanup runs from the main checkout, so resolve the TARGET branch's forge, not the
 # current branch's (a gitea feature branch is cleaned from a github-tracking main).
 if [[ -z ${CI_FORGE:-} ]]; then
-  tremote=$(git config "branch.$target.remote" 2>/dev/null || echo origin)
+  tremote=$(git config "branch.$target.remote" 2>/dev/null || ci_push_remote)
   turl=$(git remote get-url "$tremote" 2>/dev/null || true)
   if [[ -z $turl ]]; then CI_FORGE=$(ci_forge)   # no upstream: the checkout's forge, not a guess
   elif [[ $turl == *github.com* ]]; then CI_FORGE=github

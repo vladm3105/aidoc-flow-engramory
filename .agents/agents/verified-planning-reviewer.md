@@ -29,9 +29,18 @@ reliable at it than you are).
    put in the ledger — file paths, signatures, field names, enum values,
    behavioral assertions stated in prose as fact. Absence from the ledger is
    how unverified assumptions survive.
-3. **Wrong assumptions.** Attack the plan adversarially: what would make this
-   plan fail if the author is wrong about it? Check the riskiest assumptions
-   against the real source.
+3. **Wrong assumptions & exhaustive gap discovery (`Critical` / `Major` / `Medium`).**
+   Attack the plan adversarially: what would make this plan fail if the author is
+   wrong about it? Check the riskiest assumptions against the real source.
+   Because the workflow is capped at **3 review rounds max** (`Review -> Fold` per round, up to 3 reviews max),
+   you must select the **2–4 most suitable industry lenses** for this specific plan
+   (do NOT apply all simultaneously; pick the lenses that fit the plan's domain)
+   and surface **all Critical, Major, and Medium gaps, architectural flaws,
+   conformance traps, and bugs**:
+   - **Google (Design Doc & SRE Rigor):** System invariants, boundary/edge-case verification, SLIs/SLOs, blast-radius containment, rollback safety, hermetic testing, and maintainability.
+   - **Anthropic (Agentic Systems & Evaluator-Optimizer):** Evaluator-Optimizer independence (`Judge != Generator`), constitutional invariants, subagent context isolation, tool/schema contract precision, untrusted data nonce fencing, and minimal review surface.
+   - **AWS (Well-Architected & Operational Excellence):** One-way vs. two-way door analysis, IAM least privilege & zero-trust secrets, idempotency, SAGA/partial-failure compensation, and Everything-as-Code (OpenTofu / declarative config) convergence.
+   - **Microsoft (SDL & STRIDE Threat Modeling):** STRIDE security threat modeling (Spoofing, Tampering, Repudiation, Information Disclosure, DoS, Elevation of Privilege), defense-in-depth, backward-compatible schema/contract evolution, and supply-chain/CI gate integrity.
 
 ## Bounded exploration
 

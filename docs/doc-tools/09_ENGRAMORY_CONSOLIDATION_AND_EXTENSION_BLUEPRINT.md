@@ -170,8 +170,9 @@ CREATE TABLE IF NOT EXISTS kb_runbook_steps (
 5. **`src/engramory/core/llms_export.py` (New):**
    Deterministically compiles `/llms.txt` and `/llms-full.txt` from `kb_documents` + `kb_sections` (or local repo files in offline CLI mode) with Rule D14 secret redaction.
 6. **`src/engramory/cli.py` & `src/engramory/mcp/server.py` (Extend):**
-   - Adds CLI group `engramory docs {lint, check-drift, export-llms, slice-runbook, smoke-run}`.
-   - Adds MCP tools `docs_slice_runbook`, `docs_validate`, `docs_check_drift`, and `docs_export_llms` to `TOOLS_SCHEMA` in `src/engramory/mcp/server.py`.
+   - Adds CLI group `engramory docs {lint, check-drift, export-llms, slice-runbook, smoke-run, ingest, tools, tool-inventory, build-portal}`.
+   - Adds built-in `DOCUMENTATION_TOOL_CATALOG` (`list_documentation_tools` in `src/engramory/core/docs_tools.py`), `stage_portal_bundle` (`src/engramory/core/portal_builder.py`), and the Astro Starlight + Scalar `portal/` scaffold so the standalone `platform-docs` spoke is retired.
+   - Adds MCP tools `docs_slice_runbook`, `docs_validate`, `docs_check_drift`, `docs_export_llms`, `docs_smoke_run`, `docs_tools_inventory`, and `docs_build_portal` to `TOOLS_SCHEMA` in `src/engramory/mcp/server.py`.
 
 ---
 

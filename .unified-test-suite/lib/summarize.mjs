@@ -215,6 +215,8 @@ function parseLayer(cfg, name, L) {
 }
 
 // ------------------------------------------------------------------ main
+const NO_FRESH_JOURNEYS = 'no fresh journey evidence for this tree — run the QA engineer (uts journeys plan → browser-subagent), then re-run this layer; ignored records are listed in journeys.json';
+
 export function summarize({ target = 'report', require = [], since = null, strict: strictArg = false, allowEmpty = false } = {}) {
   const cfg = loadConfig();
   const R = resultsDir(cfg);
@@ -263,7 +265,7 @@ export function summarize({ target = 'report', require = [], since = null, stric
     if (failed.length) { L.status = 'failed'; continue; }
     if (L.counts.total === 0) {
       L.status = 'infra_error';
-      L.reason = Lc.runner === 'steps' ? 'zero steps configured/executed — add steps to this layer or remove it from the gate' : Lc.runner === 'journeys' ? 'no fresh journey evidence for this tree — run the QA engineer (uts journeys plan → browser-subagent), then re-run this layer; ignored records are listed in journeys.json' : `zero tests executed${parsed.errors[0] ? `: ${parsed.errors[0]}` : ''}`;
+      L.reason = Lc.runner === 'steps' ? 'zero steps configured/executed — add steps to this layer or remove it from the gate' : Lc.runner === 'journeys' ? NO_FRESH_JOURNEYS : `zero tests executed${parsed.errors[0] ? `: ${parsed.errors[0]}` : ''}`;
       continue;
     }
     if (meta.exitCode !== 0) {
@@ -272,9 +274,18 @@ export function summarize({ target = 'report', require = [], since = null, stric
         L.failures.push({ layer: name, title: `${Lc.command} failed outside node --test`, file: null, line: null, kind: 'step', message: clip(logTail(name)), bdd: [], reproduce: Lc.command, artifacts: [], retries: null });
       } else if (Lc.runner === 'journeys' && meta.exitCode === 3) {
         L.status = 'infra_error';
-        const why = logTail(name, 12).split('\n').find((l) => l.startsWith('journeys: not verified')) ?? 'blocked runs or cards without fresh evidence';
-        L.reason = `${clip(why.replace(/^journeys: /, ''), 600)} — see journeys.json; re-plan and re-run the missing journeys, file blocked ones as environment issues`;
+        const tail = logTail(name, 12).split('\n');
+        const why = tail.find((l) => l.startsWith('journeys: not verified')) ?? 'blocked runs or cards without fresh evidence';
+        L.reason = tail.some((l) => l.startsWith('journeys: no fresh evidence'))
+          ? NO_FRESH_JOURNEYS
+          : `${clip(why.replace(/^journeys: /, ''), 600)} — see journeys.json; re-plan and re-run the missing journeys, file blocked ones as environment issues`;
       } else { L.status = 'infra_error'; L.reason = `runner exited ${meta.exitCode} with no failing test: ${clip(logTail(name, 8), 600)}`; }
+      continue;
+    }
+    if (L.counts.total === L.counts.skipped) {
+      // The runner claimed success, but skipped testcases ran no assertion: unverified, not passed.
+      L.status = 'infra_error';
+      L.reason = `all ${L.counts.total} test(s) skipped — nothing was verified`;
       continue;
     }
     L.status = 'passed';

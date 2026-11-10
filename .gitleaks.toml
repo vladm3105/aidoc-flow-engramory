@@ -1,10 +1,10 @@
-# Starter .gitleaks.toml for aidoc-local-flow-ci consumers (inherited from aidoc-flow-ci v4).
+# Starter .gitleaks.toml for aidoc-hybrid-ci consumers (rules inherited from the archived aidoc-flow-ci v4).
 #
 # Only needed if you have known false-positives (test fixtures,
 # docs examples, intentional sample values). Otherwise omit — the
 # default gitleaks ruleset works for ~90% of repos.
 
-title = "aidoc-local-flow-ci default (from aidoc-flow-ci v4)"
+title = "aidoc-hybrid-ci default (from aidoc-flow-ci v4)"
 
 [extend]
 # Inherit gitleaks default ruleset (recommended starting point).

@@ -1,4 +1,4 @@
-# aidoc-local-flow-ci language module: Go (gofmt · golangci-lint · go vet · go test -race + cover · govulncheck)
+# aidoc-hybrid-ci language module: Go (gofmt · golangci-lint · go vet · go test -race + cover · govulncheck)
 # Include per service:  gateway: { taskfile: .ci/taskfiles/go.yml, dir: services/gateway, vars: {...} }
 #
 # Vars (all optional):
@@ -74,7 +74,9 @@ tasks:
     vars: *v
     desc: govulncheck
     sources: ['go.mod', 'go.sum', '**/*.go']
-    cmds: ['govulncheck {{.PKGS}}']
+    # Network-bound: one retry on a transport error, then timeout, never a finding (#37).
+    env: {CI_NET_CMD: 'govulncheck {{.PKGS}}'}
+    cmds: ['bash "{{.TASKFILE_DIR}}/../bin/netrun"']
 
   where:
     desc: "(framework) print this service's directory — used by change-impact routing"

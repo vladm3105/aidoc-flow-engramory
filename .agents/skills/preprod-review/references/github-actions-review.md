@@ -7,6 +7,7 @@ doesn't burn its budget rediscovering GHA semantics — and doesn't miss the bug
 that hides behind the semantics it never learned.
 
 ## Table of contents
+
 1. Reusable-workflow topology (read first — everything else depends on it)
 2. Trust boundary & `pull_request_target`
 3. Untrusted-input injection

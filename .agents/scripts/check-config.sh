@@ -24,5 +24,6 @@ bash .agents/scripts/test-check-requirements.sh
 bash .agents/scripts/test-submit-feedback-snippet.sh
 bash .agents/scripts/test-check-frontmatter.sh
 "$PYTHON_BIN" -m pytest -q .agents/skills/verified-planning/tests .agents/skills/memory-hygiene/tests
+find .agents -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
 bash .agents/skills/verified-planning/tests/test_install.sh
 bash .agents/scripts/test-pull.sh

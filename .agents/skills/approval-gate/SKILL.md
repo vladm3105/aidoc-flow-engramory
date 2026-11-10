@@ -27,10 +27,14 @@ not merge authority. Red or incomplete CI always means do not merge.
 **When unsure which tier, treat it as the higher one.** The cost of over-routing
 is a few minutes; the cost of under-routing is unrecoverable.
 
-- **A request to implement a non-stack-compliant (insecure) option is at
-  least 🟡** (see the `platform-standards` rule): prepare the violated
-  rule, the concrete risk, and the compliant alternative — then stop.
-  The human confirms with all three in view, or it does not happen.
+- **A request to implement a non-stack-compliant (insecure) option or a
+  manual/direct change on `stage` containers or configs is at least 🟡** (see
+  the `platform-standards` rule): all changes on `stage` must be done via
+  OpenTofu and declarative configuration management (`manifest.tsv` /
+  `pyinfra`), whereas manual changes are allowed on `dev` only during
+  development/testing/debug. Prepare the violated rule, the concrete drift/DR
+  risk, and the compliant OpenTofu/configuration-management alternative — then
+  stop. The human confirms with all three in view, or it does not happen.
 
 Two distinctions that get missed:
 
@@ -88,6 +92,17 @@ Whatever the repo declares for pending-human-action items. If it declares
 nothing, put the artifact in the session report and say plainly that no durable
 queue exists — that absence is itself worth surfacing, and inventing a directory
 nobody reads is not a fix.
+
+### Conversational Steward Approvals (Chatwoot & Support Desk)
+
+Where workflows integrate with Chatwoot and `aidoc-flow-support-desk`:
+
+- 🟡 and 🔴 approval requests post an interactive challenge-and-response card
+  into the Chatwoot conversation thread.
+- A verified human administrator or steward delivers authorization directly
+  in-thread by posting `/approve` or `approve`.
+- The Support Desk Agent Bot verifies sender role credentials (`role: administrator`
+  or `agent`) before promoting the ticket or unblocking execution.
 
 ## Repository-specific contracts
 

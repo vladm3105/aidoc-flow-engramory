@@ -20,6 +20,11 @@ for r in on-main on-branch; do
   git -C "$TMP/$r" branch -M main
 done
 git -C "$TMP/on-branch" checkout -q -b feat/thing
+# Nested repo for cumulative -C: $TMP/nest/inner parked on main (#268).
+mkdir -p "$TMP/nest"
+git init -q "$TMP/nest/inner"
+git -C "$TMP/nest/inner" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+git -C "$TMP/nest/inner" branch -M main
 
 pass=0; fail=0
 
@@ -183,6 +188,8 @@ check allow "/tmp" "git -C $TMP/on-branch push"
 check deny "/tmp" "git --git-dir $TMP/on-main/.git push"
 check allow "/tmp" "git --git-dir $TMP/on-branch/.git push origin feat/thing"
 check deny "/tmp" "git push"
+check deny "$TMP/on-branch" "git -C $TMP/nest -C inner push"
+check allow "$TMP" "git -C on-branch push"
 
 echo "== rule 2: must NOT block (false-positive guard) =="
 check allow "$TMP/on-main" "git push origin feat/thing"

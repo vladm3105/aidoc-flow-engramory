@@ -978,9 +978,11 @@ class McpServer:
             check_repo_drift,
             export_repo_llms,
             lint_repo,
+            list_documentation_tools,
             resolve_confined_repo_path,
             slice_local_runbooks,
             smoke_run_green_steps,
+            stage_portal_bundle,
         )
 
         scope = str(arguments.get("scope", "project"))
@@ -1034,7 +1036,12 @@ class McpServer:
                 project_id=call_ctx.project_id,
                 enforce_project_boundary=enforce_project,
             )
-            report = lint_repo(target, strict=bool(arguments.get("strict", False)))
+            report = lint_repo(
+                target,
+                strict=bool(arguments.get("strict", False)),
+                require_frontmatter=bool(arguments.get("require_frontmatter", False)),
+                verify_registry=bool(arguments.get("verify_registry", False)),
+            )
             return {"content": [{"type": "text", "text": json.dumps(report, indent=2)}]}
 
         elif name == "docs_check_drift":
@@ -1091,6 +1098,45 @@ class McpServer:
             report = smoke_run_green_steps(
                 target,
                 doc_id=arguments.get("doc_id"),
+                dry_run=dry_run,
+            )
+            return {"content": [{"type": "text", "text": json.dumps(report, indent=2)}]}
+
+        elif name == "docs_tools_inventory":
+            await self._surface._decide(
+                call_ctx,
+                "docs_tools_inventory",
+                TargetScope(tenant_id=call_ctx.tenant_id, scope=scope),
+            )
+            tier_arg = arguments.get("tier")
+            report = list_documentation_tools(tier=str(tier_arg) if tier_arg is not None else None)
+            return {"content": [{"type": "text", "text": json.dumps(report, indent=2)}]}
+
+        elif name == "docs_build_portal":
+            await self._surface._decide(
+                call_ctx,
+                "docs_build_portal",
+                TargetScope(tenant_id=call_ctx.tenant_id, scope=scope),
+            )
+            target = resolve_confined_repo_path(
+                str(arguments.get("repo_path", ".")),
+                project_id=call_ctx.project_id,
+                enforce_project_boundary=enforce_project,
+            )
+            out_dir_arg = arguments.get("output_dir")
+            confined_out = (
+                resolve_confined_repo_path(
+                    str(out_dir_arg),
+                    project_id=call_ctx.project_id,
+                    enforce_project_boundary=enforce_project,
+                )
+                if out_dir_arg is not None
+                else None
+            )
+            dry_run = True if self._auth_enabled else bool(arguments.get("dry_run", True))
+            report = stage_portal_bundle(
+                target,
+                output_dir=confined_out,
                 dry_run=dry_run,
             )
             return {"content": [{"type": "text", "text": json.dumps(report, indent=2)}]}
@@ -1246,6 +1292,9 @@ DOCS_TOOLS_SCHEMA: list[dict[str, Any]] = [
             "properties": {
                 "path": {"type": "string", "default": "."},
                 "strict": {"type": "boolean", "default": False},
+                "require_frontmatter": {"type": "boolean", "default": False},
+                "verify_registry": {"type": "boolean", "default": False},
+                "scope": {"type": "string", "default": "project"},
             },
         },
     },
@@ -1265,6 +1314,7 @@ DOCS_TOOLS_SCHEMA: list[dict[str, Any]] = [
                 "repo_path": {"type": "string", "default": "."},
                 "base_ref": {"type": "string", "default": "HEAD~1"},
                 "head_ref": {"type": "string", "default": "HEAD"},
+                "scope": {"type": "string", "default": "project"},
             },
         },
     },
@@ -1284,6 +1334,7 @@ DOCS_TOOLS_SCHEMA: list[dict[str, Any]] = [
                 "repo_path": {"type": "string", "default": "."},
                 "write": {"type": "boolean", "default": False},
                 "full": {"type": "boolean", "default": False},
+                "scope": {"type": "string", "default": "project"},
             },
         },
     },
@@ -1304,6 +1355,50 @@ DOCS_TOOLS_SCHEMA: list[dict[str, Any]] = [
                 "repo_path": {"type": "string", "default": "."},
                 "doc_id": {"type": "string"},
                 "dry_run": {"type": "boolean", "default": True},
+                "scope": {"type": "string", "default": "project"},
+            },
+        },
+    },
+    {
+        "name": "docs_tools_inventory",
+        "description": (
+            "Return the governed documentation tool inventory (Adopt, Trial, Hold tiers)."
+        ),
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "tier": {
+                    "type": "string",
+                    "enum": ["Adopt", "Trial", "Hold"],
+                    "description": "Optional governance tier filter",
+                },
+                "scope": {"type": "string", "default": "project"},
+            },
+        },
+    },
+    {
+        "name": "docs_build_portal",
+        "description": (
+            "Stage governed docs/*.md into Astro Starlight portal collection with D14 secret "
+            "scrubbing (forces dry_run=true when remote auth is enabled)."
+        ),
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+        },
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "repo_path": {"type": "string", "default": "."},
+                "output_dir": {"type": "string"},
+                "dry_run": {"type": "boolean", "default": True},
+                "scope": {"type": "string", "default": "project"},
             },
         },
     },

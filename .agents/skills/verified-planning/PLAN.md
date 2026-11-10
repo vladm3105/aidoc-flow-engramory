@@ -32,7 +32,7 @@ independently; the master is also the global copy (CLI/Cowork).
 
 **Design:** `DESIGN.md` (beside this file in the skill dir).
 
-**Note on paths:** build tasks operate in the master dir; `$VP` below = `~/.claude/skills/verified-planning`.
+**Note on paths:** build tasks operate in the master dir; `$VP` below = `~/.claude/skills/verified-planning`. `$AIDOC_WORKSPACE` stands for the workspace that holds the aidoc-flow repositories (it was a workstation-specific path in the original run).
 
 ---
 
@@ -720,7 +720,7 @@ Expected: `PASS`.
 - [ ] **Step 1: Install into all six repos**
 
 ```bash
-cd /opt/data/aidoc-flow
+cd $AIDOC_WORKSPACE
 for r in framework iops-framework business operations iplanic knowledge-rag; do
   bash ~/.claude/skills/verified-planning/install.sh "$r"
 done
@@ -796,10 +796,10 @@ Expected: the `check-plan` hook runs and reports the missing `## Claim ledger`
 VP=~/.claude/skills/verified-planning
 python3 -m pytest "$VP/tests/test_check_plan.py" -q     # gate unit tests
 bash "$VP/tests/test_install.sh"                        # installer test
-cd /opt/data/aidoc-flow/iops-framework && \
+cd $AIDOC_WORKSPACE/iops-framework && \
   python3 .claude/skills/verified-planning/check_plan.py plans/PLAN-013_*.md; cd -   # fires on a real plan
 for r in framework iops-framework business operations iplanic knowledge-rag; do
-  python3 -c "import yaml; yaml.safe_load(open('/opt/data/aidoc-flow/$r/.pre-commit-config.yaml'))" && echo "$r ok"; done
+  python3 -c "import yaml; yaml.safe_load(open('$AIDOC_WORKSPACE/$r/.pre-commit-config.yaml'))" && echo "$r ok"; done
 ```
 
 Expected:
@@ -812,11 +812,11 @@ Expected:
 ## Claim ledger
 
 > Load-bearing facts this plan relies on, each citing the `file:line` actually
-> read and **manually verified against `/opt/data/aidoc-flow`** this session.
+> read and **manually verified against `$AIDOC_WORKSPACE`** this session.
 >
 > **This meta-plan is intentionally NOT self-gated.** `check_plan.py` derives the
 > repo root from the plan file's nearest `.git` ancestor; the master lives under
-> `/home/ya/.git`, and the citations point into sibling submodules
+> `$HOME/.git`, and the citations point into sibling submodules
 > (`iops-framework/…`, `knowledge-rag/…`) that are not under that root — so the
 > gate cannot resolve them. That is correct: the gate is for **in-repo** dev
 > plans (cited paths relative to *their own* repo root), not a cross-repo build
@@ -871,7 +871,7 @@ Dispatched after the model was rewritten (master `~/.claude` + `install.sh`, gat
 in the skill dir). Findings (all verified, all folded in):
 
 - **BLOCKER B1 — the meta-plan's caveat was mechanically false.** `repo_root()`
-  derives root from the plan's `.git` ancestor (`/home/ya`, which has `.git`),
+  derives root from the plan's `.git` ancestor (`$HOME`, which has `.git`),
   not cwd, so the cross-repo citations never resolve "from the umbrella root".
   Fix: reframed honestly — this cross-repo build plan is **not self-gated** (the
   gate is for in-repo plans); citations verified by hand.
@@ -885,7 +885,7 @@ in the skill dir). Findings (all verified, all folded in):
   guard + `cp -r tests/.` for robustness.
 - Confirmed-good: test-count arithmetic (13), install.sh ↔ test_install.sh file
   list, hook/CI entry path, no old-model leftovers in build steps, all 7 ledger
-  citations resolve against `/opt/data/aidoc-flow`.
+  citations resolve against `$AIDOC_WORKSPACE`.
 
 ### Pass 4 - 2026-06-07 - independent (final confirming) — no further findings
 

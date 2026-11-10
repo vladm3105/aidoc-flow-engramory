@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # aidoc-local-flow-ci default reviewer client: one OpenAI-compatible chat completion
-# (LiteLLM proxy, OpenRouter, vLLM, Ollama /v1, ...). Invoked by .ci/bin/review in a clean
+# (platform default: the platform-litellm-laya gateway; any LiteLLM/vLLM/Ollama /v1 works). Invoked by .ci/bin/review in a clean
 # environment: prompt on stdin, model text on stdout. No tools, no repo access.
 #   LLM_URL       base URL (…/v1) or full …/chat/completions URL
 #   LLM_API_KEY   Bearer [REDACTED] (optional for local servers)
@@ -17,6 +17,9 @@ jq -n --arg m "$REVIEW_MODEL" --rawfile p "$tmp/prompt" \
   '{model: $m, temperature: 0, messages: [{role: "user", content: $p}]}' >"$tmp/body.json"
 hdr=(-H "Content-Type: application/json")
 [[ -n ${LLM_API_KEY:-} ]] && hdr+=(-H "Authorization: Bearer $LLM_API_KEY")
+[[ -n ${TRACEPARENT:-} ]] && hdr+=(-H "traceparent: $TRACEPARENT")
+hdr+=(-H "x-langfuse-trace-name: ci-self-review")
+hdr+=(-H "x-langfuse-tags: hybrid-ci,review,${REVIEW_MODEL}")
 attempt=1 code=000 rc=0
 while :; do
   rc=0

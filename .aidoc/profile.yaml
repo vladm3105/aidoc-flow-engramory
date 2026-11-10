@@ -18,10 +18,10 @@
 metadata:
   schema_version: "1.1.0"
   authority: "framework/governance/ADAPTATION.md"
-  project_name: "aidoc-flow-engramory"
-  framework_version: "0.96.4"
+  project_name: "platform-engramory"
+  framework_version: "0.96.25"
   framework_path: ".aidoc/framework"
-  last_updated: "2026-10-30"
+  last_updated: "2026-11-09"
 
 # =============================================================================
 #  Adaptation knobs (15 — see ADAPTATION_SURFACE.yaml for the closed set)

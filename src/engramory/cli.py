@@ -1153,26 +1153,78 @@ def _register_docs_subcommands(sub: Any) -> None:
         "lint", help="validate frontmatter, executable code blocks & prose"
     )
     p_lint.add_argument("path", nargs="?", default=".", help="file or directory to lint")
+    p_lint.add_argument(
+        "--repo-path",
+        "--target",
+        dest="repo_path",
+        default=None,
+        help="target file or repository path",
+    )
     p_lint.add_argument("--strict", action="store_true", help="treat warnings as errors")
+    p_lint.add_argument(
+        "--require-frontmatter",
+        action="store_true",
+        help="require deterministic YAML frontmatter on all inspected Markdown files",
+    )
+    p_lint.add_argument(
+        "--verify-registry",
+        action="store_true",
+        help="validate frontmatter endpoints and triggers structure (DOC-REG-001)",
+    )
+    p_lint.add_argument(
+        "--json", action="store_true", default=argparse.SUPPRESS, help="emit JSON output"
+    )
     p_lint.set_defaults(func=_cmd_docs_lint)
 
     p_drift = docs_sub.add_parser(
         "check-drift", help="detect watched_paths git drift & TTL staleness"
     )
-    p_drift.add_argument("--repo-path", default=".", help="repository path (default: .)")
-    p_drift.add_argument("--base-ref", default="HEAD~1", help="git base ref (default: HEAD~1)")
-    p_drift.add_argument("--head-ref", default="HEAD", help="git head ref (default: HEAD)")
+    p_drift.add_argument("path", nargs="?", default=".", help="repository path (default: .)")
+    p_drift.add_argument(
+        "--repo-path",
+        "--target",
+        dest="repo_path",
+        default=None,
+        help="repository path override",
+    )
+    p_drift.add_argument(
+        "--base-ref",
+        "--base",
+        dest="base_ref",
+        default="HEAD~1",
+        help="git base ref (default: HEAD~1)",
+    )
+    p_drift.add_argument(
+        "--head-ref",
+        "--head",
+        dest="head_ref",
+        default="HEAD",
+        help="git head ref (default: HEAD)",
+    )
+    p_drift.add_argument(
+        "--json", action="store_true", default=argparse.SUPPRESS, help="emit JSON output"
+    )
     p_drift.set_defaults(func=_cmd_docs_check_drift)
 
     p_llms = docs_sub.add_parser(
         "export-llms", help="generate deterministic /llms.txt and /llms-full.txt"
     )
-    p_llms.add_argument("--repo-path", default=".", help="repository path (default: .)")
+    p_llms.add_argument("path", nargs="?", default=".", help="repository path (default: .)")
+    p_llms.add_argument(
+        "--repo-path",
+        "--target",
+        dest="repo_path",
+        default=None,
+        help="repository path override",
+    )
     p_llms.add_argument(
         "--write", action="store_true", help="write llms.txt (and llms-full.txt) to disk"
     )
     p_llms.add_argument(
         "--full", action="store_true", help="include full markdown corpus in output"
+    )
+    p_llms.add_argument(
+        "--json", action="store_true", default=argparse.SUPPRESS, help="emit JSON output"
     )
     p_llms.set_defaults(func=_cmd_docs_export_llms)
 
@@ -1180,7 +1232,11 @@ def _register_docs_subcommands(sub: Any) -> None:
         "slice-runbook", help="slice executable runbook steps by doc_id or alert_id"
     )
     p_slice.add_argument(
-        "--repo-path", default=None, help="optional local repository path for offline slicing"
+        "--repo-path",
+        "--target",
+        dest="repo_path",
+        default=None,
+        help="optional local repository path for offline slicing",
     )
     p_slice.add_argument("--doc-id", default=None, help="filter by runbook document id")
     p_slice.add_argument(
@@ -1191,53 +1247,167 @@ def _register_docs_subcommands(sub: Any) -> None:
         "--token-budget", type=int, default=2000, help="token budget (default: 2000)"
     )
     p_slice.add_argument("--format", choices=["json", "markdown"], default="json")
+    p_slice.add_argument(
+        "--json", action="store_true", default=argparse.SUPPRESS, help="emit JSON output"
+    )
     p_slice.set_defaults(func=_cmd_docs_slice_runbook)
 
     p_smoke = docs_sub.add_parser(
         "smoke-run", help="verify and run tier='green' read-only runbook probes"
     )
-    p_smoke.add_argument("--repo-path", default=".", help="repository or file path (default: .)")
+    p_smoke.add_argument(
+        "path", nargs="?", default=".", help="repository or file path (default: .)"
+    )
+    p_smoke.add_argument(
+        "--repo-path",
+        "--target",
+        dest="repo_path",
+        default=None,
+        help="repository or file path override",
+    )
     p_smoke.add_argument("--doc-id", default=None, help="optional document id filter")
     p_smoke.add_argument(
         "--dry-run", action="store_true", help="run bash -n syntax check without executing"
+    )
+    p_smoke.add_argument(
+        "--json", action="store_true", default=argparse.SUPPRESS, help="emit JSON output"
     )
     p_smoke.set_defaults(func=_cmd_docs_smoke_run)
 
     p_ingest = docs_sub.add_parser(
         "ingest", help="ingest governed docs and runbook steps into Postgres"
     )
-    p_ingest.add_argument("--repo-path", default=".", help="repository or file path (default: .)")
+    p_ingest.add_argument(
+        "path", nargs="?", default=".", help="repository or file path (default: .)"
+    )
+    p_ingest.add_argument(
+        "--repo-path",
+        "--target",
+        dest="repo_path",
+        default=None,
+        help="repository or file path override",
+    )
     p_ingest.add_argument("--project-id", default=None, help="override project id")
+    p_ingest.add_argument(
+        "--json", action="store_true", default=argparse.SUPPRESS, help="emit JSON output"
+    )
     p_ingest.set_defaults(func=_cmd_docs_ingest)
+
+    for cmd_name in ("tools", "tool-inventory"):
+        p_tools = docs_sub.add_parser(
+            cmd_name, help="list the governed documentation tool inventory"
+        )
+        p_tools.add_argument(
+            "--tier",
+            choices=["Adopt", "Trial", "Hold"],
+            default=None,
+            help="filter tool inventory by governance tier",
+        )
+        p_tools.add_argument(
+            "--json", action="store_true", default=argparse.SUPPRESS, help="emit JSON output"
+        )
+        p_tools.set_defaults(func=_cmd_docs_tools)
+
+    p_portal = docs_sub.add_parser(
+        "build-portal",
+        help="stage governed docs/*.md into Astro Starlight portal with D14 redaction",
+    )
+    p_portal.add_argument("path", nargs="?", default=".", help="repository path (default: .)")
+    p_portal.add_argument(
+        "--repo-path",
+        "--target",
+        dest="repo_path",
+        default=None,
+        help="repository path override",
+    )
+    p_portal.add_argument(
+        "--output-dir",
+        default=None,
+        help="custom output directory for staged Starlight Markdown",
+    )
+    p_portal.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="validate and count staged files without writing to disk",
+    )
+    p_portal.add_argument(
+        "--json", action="store_true", default=argparse.SUPPRESS, help="emit JSON output"
+    )
+    p_portal.set_defaults(func=_cmd_docs_build_portal)
 
 
 def _cmd_docs_lint(args: argparse.Namespace) -> int:
     from engramory.core.docs_tools import lint_repo, resolve_confined_repo_path
 
-    target = resolve_confined_repo_path(args.path)
-    report = lint_repo(target, strict=bool(args.strict))
+    raw_path = args.repo_path or args.path
+    target = resolve_confined_repo_path(raw_path)
+    report = lint_repo(
+        target,
+        strict=bool(args.strict),
+        require_frontmatter=bool(getattr(args, "require_frontmatter", False)),
+        verify_registry=bool(getattr(args, "verify_registry", False)),
+    )
     summary = (
         f"status={report['status']} files={report['files_checked']} errors={report['error_count']}"
     )
-    _emit(args.json, report, summary)
+    _emit(bool(getattr(args, "json", False)), report, summary)
     return 0 if report["status"] == "ok" else 1
+
+
+def _cmd_docs_tools(args: argparse.Namespace) -> int:
+    from engramory.core.docs_tools import list_documentation_tools
+
+    report = list_documentation_tools(tier=args.tier)
+    lines = [
+        f"{item['tool']} [{item['tier']}] — {item['category']} ({item['license']})"
+        for item in report["tools"]
+    ]
+    _emit(bool(getattr(args, "json", False)), report, "\n".join(lines))
+    return 0
+
+
+def _cmd_docs_build_portal(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    from engramory.core.docs_tools import resolve_confined_repo_path, stage_portal_bundle
+
+    raw_path = args.repo_path or args.path
+    target = resolve_confined_repo_path(raw_path)
+    out_dir = Path(args.output_dir) if args.output_dir else None
+    report = stage_portal_bundle(
+        target,
+        output_dir=out_dir,
+        dry_run=bool(args.dry_run),
+    )
+    summary = (
+        f"status={report['status']} files_staged={report['files_staged']} "
+        f"scrubbed={report['scrubbed_files']}"
+    )
+    _emit(bool(getattr(args, "json", False)), report, summary)
+    return 0
 
 
 def _cmd_docs_check_drift(args: argparse.Namespace) -> int:
     from engramory.core.docs_tools import check_repo_drift, resolve_confined_repo_path
 
-    target = resolve_confined_repo_path(args.repo_path)
+    raw_path = args.repo_path or args.path
+    target = resolve_confined_repo_path(raw_path)
     report = check_repo_drift(target, base_ref=args.base_ref, head_ref=args.head_ref)
-    _emit(args.json, report, f"status={report['status']} findings={report['finding_count']}")
+    _emit(
+        bool(getattr(args, "json", False)),
+        report,
+        f"status={report['status']} findings={report['finding_count']}",
+    )
     return 0 if report["status"] == "ok" else 1
 
 
 def _cmd_docs_export_llms(args: argparse.Namespace) -> int:
     from engramory.core.docs_tools import export_repo_llms, resolve_confined_repo_path
 
-    target = resolve_confined_repo_path(args.repo_path)
+    raw_path = args.repo_path or args.path
+    target = resolve_confined_repo_path(raw_path)
     report = export_repo_llms(target, write_files=bool(args.write), include_full=bool(args.full))
-    _emit(args.json, report, str(report["llms_txt"]).rstrip())
+    _emit(bool(getattr(args, "json", False)), report, str(report["llms_txt"]).rstrip())
     return 0
 
 
@@ -1257,7 +1427,7 @@ def _cmd_docs_slice_runbook(args: argparse.Namespace) -> int:
             token_budget=int(args.token_budget),
             output_format=args.format,
         )
-        _emit(args.json, res, _fmt_human(res))
+        _emit(bool(getattr(args, "json", False)), res, _fmt_human(res))
         return 0
 
     try:
@@ -1283,17 +1453,18 @@ def _cmd_docs_slice_runbook(args: argparse.Namespace) -> int:
             token_budget=int(args.token_budget),
             output_format=args.format,
         )
-        _emit(args.json, res, _fmt_human(res))
+        _emit(bool(getattr(args, "json", False)), res, _fmt_human(res))
         return 0
 
 
 def _cmd_docs_smoke_run(args: argparse.Namespace) -> int:
     from engramory.core.docs_tools import resolve_confined_repo_path, smoke_run_green_steps
 
-    target = resolve_confined_repo_path(args.repo_path)
+    raw_path = args.repo_path or args.path
+    target = resolve_confined_repo_path(raw_path)
     report = smoke_run_green_steps(target, doc_id=args.doc_id, dry_run=bool(args.dry_run))
     summary = f"status={report['status']} passed={report['passed']} failed={report['failed']}"
-    _emit(args.json, report, summary)
+    _emit(bool(getattr(args, "json", False)), report, summary)
     return 0 if report["status"] == "ok" else 1
 
 
@@ -1308,7 +1479,8 @@ def _cmd_docs_ingest(args: argparse.Namespace) -> int:
     )
     from engramory.core.models import KBSection
 
-    target = resolve_confined_repo_path(args.repo_path)
+    raw_path = args.repo_path or args.path
+    target = resolve_confined_repo_path(raw_path)
     bound_root = target if target.is_dir() else target.parent
     raw_files = (
         [target]

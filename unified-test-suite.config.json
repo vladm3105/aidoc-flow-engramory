@@ -1,6 +1,6 @@
 {
   "$schema": "./.unified-test-suite/schemas/config.schema.json",
-  "project": "aidoc-flow-engramory",
+  "project": "platform-engramory",
   "resultsDir": "test-results",
   "layers": {
     "unit": {

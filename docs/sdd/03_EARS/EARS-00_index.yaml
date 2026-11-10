@@ -1,0 +1,17 @@
+# EARS-00_index.yaml — Formal Requirements Index (SDD Layer 03)
+# @brd: BRD.01.01.a001
+# @prd: PRD.01.01.a001
+
+doc_id: EARS-01
+artifact_type: EARS-INDEX
+metadata:
+  schema_version: "1.0"
+  framework_version: "0.96.25"
+  document_type: "ears-registry"
+  artifact_type: "EARS-INDEX"
+  layer: 3
+  last_updated: "2026-11-09"
+elements:
+  - id: "EARS.01.01.a001"
+    title: "Foundational 8-Canon Quality Gates and SDD Governance"
+    canonical_ref: "sdd/03_EARS/EARS-01_engramory_core.yaml"

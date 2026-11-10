@@ -1,0 +1,420 @@
+#!/usr/bin/env bash
+# aidoc-local-flow-ci author self-review heuristic pre-flight.
+#
+# Audits changed implementation files for common security, boundary, and edge-case
+# anti-patterns before committing or submitting to formal review (Pass 0).
+#
+# Rules:
+#   1. Attached CLI configuration / credential options (-K<file>, --config=, -u<creds>)
+#   2. Insecure TLS bypass options (-k, --insecure)
+#   3. Verbose credential leakage (-v, --verbose) in network callers
+#   4. Plaintext HTTP destinations transmitting credentials
+#   5. URL path traversal dot-segments or traversal encodings
+#   6. Fragile workflow YAML regexes missing quoted variants ('on': / "on":)
+#   7. Permissive secret/environment file writes missing explicit mode 0600
+#
+# Path separation:
+#   Test files and negative test fixtures are excluded to prevent false positives.
+#   Inline suppression supported: # self-review-ignore: reason=<why>
+set -uo pipefail
+
+# shellcheck source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+root=$(ci_root) || { echo "self-review: not in a git repo" >&2; exit 2; }
+cd "$root" || exit 2
+
+mode="static"
+base_arg=""
+uncommitted_only=0
+json_out=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --base)
+      base_arg="$2"
+      shift 2
+      ;;
+    --uncommitted)
+      uncommitted_only=1
+      shift
+      ;;
+    --static)
+      mode="static"
+      shift
+      ;;
+    --llm)
+      mode="llm"
+      shift
+      ;;
+    --json)
+      json_out=1
+      shift
+      ;;
+    -h|--help)
+      cat <<EOF
+Usage: self-review [--base <ref>] [--uncommitted] [--static] [--llm] [--json]
+
+Author self-review audit:
+  --base <ref>    Base ref for diff comparison (default: merge-base of base branch)
+  --uncommitted   Check only uncommitted/staged working tree changes
+  --static        Run fast static heuristic audit (default, <100ms)
+  --llm           Run advisory local LLM critique with diff secret redaction
+  --json          Output findings in JSON format
+EOF
+      exit 0
+      ;;
+    *)
+      # Ignore unrecognised arguments to allow flexible task arguments
+      shift
+      ;;
+  esac
+done
+
+# Resolve comparison base
+if [[ $uncommitted_only -eq 1 ]]; then
+  base="HEAD"
+elif [[ -n "$base_arg" ]]; then
+  base="$base_arg"
+else
+  base=$(ci_merge_base)
+  if [[ -z "$base" ]]; then
+    base="HEAD"
+  fi
+fi
+
+if ! git rev-parse --verify --quiet "${base}^{commit}" >/dev/null 2>&1; then
+  echo "self-review: invalid comparison base '$base' (must be a valid commit or ref)" >&2
+  exit 1
+fi
+
+# Exclude test files, fixtures, docs, lockfiles, and framework internals
+is_test_or_excluded() {
+  local f="$1"
+  if [[ "$f" =~ (^|/)(tests?|__tests__|specs?|fixtures?|testdata|mocks?)/ ]] || \
+     [[ "$f" =~ (_test\.[a-zA-Z0-9]+$|^test_|\.test\.[a-zA-Z0-9]+$|\.spec\.[a-zA-Z0-9]+$) ]] || \
+     [[ "$f" =~ \.md$ ]] || \
+     [[ "$f" =~ (^|/)docs/ ]] || \
+     [[ "$f" =~ (^|/)(\.git|\.ci-out|\.ci-review)/ ]] || \
+     [[ "$f" =~ (^|/)\.ci/ ]] || \
+     [[ "$f" =~ (^|/)(self-review|ci/MANIFEST\.sha256)$ ]] || \
+     [[ "$f" =~ (\.lock$|uv\.lock$|Cargo\.lock$|package-lock\.json$) ]]; then
+    return 0
+  fi
+  return 1
+}
+
+# --- Static Heuristics Audit --------------------------------------------------
+run_static() {
+  local findings=()
+  local count=0
+
+  # Collect changed files relative to base (plus untracked files)
+  local files=()
+  local raw_diff_out
+  if ! raw_diff_out=$(git diff --name-only "$base" -- . 2>&1); then
+    echo "self-review: git diff failed against base '$base': $raw_diff_out" >&2
+    return 1
+  fi
+  local raw_untracked_out
+  raw_untracked_out=$(git ls-files --others --exclude-standard)
+  local raw_files
+  raw_files=$( { printf '%s\n' "$raw_diff_out"; printf '%s\n' "$raw_untracked_out"; } | sort -u )
+
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    is_test_or_excluded "$f" && continue
+    [[ -f "$f" ]] || continue
+    files+=("$f")
+  done <<< "$raw_files"
+
+  if [[ ${#files[@]} -eq 0 ]]; then
+    if [[ $json_out -eq 1 ]]; then
+      echo '{"status":"pass","findings":[]}'
+    else
+      echo "self-review: static heuristics pass (no implementation changes)"
+    fi
+    return 0
+  fi
+
+  # Audit added lines in each changed implementation file
+  for f in "${files[@]}"; do
+    # For tracked files, inspect diff added lines; for untracked files, inspect all lines
+    local diff_content
+    if git ls-files --error-unmatch "$f" >/dev/null 2>&1; then
+      if ! diff_content=$(git diff -U0 --no-color --no-ext-diff "$base" -- "$f" 2>&1); then
+        echo "self-review: git diff failed for file '$f' against base '$base': $diff_content" >&2
+        return 1
+      fi
+    else
+      diff_content=$(awk '{print "+" $0}' "$f" 2>/dev/null || true)
+    fi
+
+    local current_line=0
+    while IFS= read -r line; do
+      if [[ "$line" =~ ^\@@\ -[0-9]+(,[0-9]+)?\ \+([0-9]+) ]]; then
+        current_line="${BASH_REMATCH[2]}"
+        continue
+      fi
+
+      [[ "$line" == +* && "$line" != +++* ]] || continue
+      local content="${line:1}"
+      ((current_line++)) || true
+
+      # Check inline suppression: # self-review-ignore: reason=... or // self-review-ignore: reason=...
+      if [[ "$content" =~ self-review-ignore:[[:space:]]*reason= ]]; then
+        continue
+      fi
+
+      # Rule 1: Attached CLI flags in network/curl callers
+      if [[ "$content" =~ (^|[[:space:]])curl[[:space:]]+.*(-[Kk][^[:space:]]|--config=[^[:space:]]|-[uU][^[:space:]]) ]] || \
+         [[ "$content" =~ case[[:space:]]+.*in.*(-[Kk][a-zA-Z0-9_/]|--config=) ]]; then
+        findings+=("${f}:${current_line}: [Lens 4 Security] Attached configuration/credential flag (-K<file>, --config=, -u<creds>) allows injection. Use separate arguments.")
+        ((count++))
+      fi
+
+      # Rule 2: Insecure TLS bypass in network callers / allowlists
+      if [[ "$content" =~ (^|[[:space:]])curl[[:space:]]+.*(-[a-zA-Z]*k|--insecure)([[:space:]]|$) ]] || \
+         [[ "$content" =~ case[[:space:]]+.*in.*(-k|--insecure) ]]; then
+        findings+=("${f}:${current_line}: [Lens 4 Security] Insecure TLS bypass (-k, --insecure) disables certificate verification. Enforce strict HTTPS.")
+        ((count++))
+      fi
+
+      # Rule 3: Verbose logging in authenticated callers
+      if [[ "$content" =~ (^|[[:space:]])curl[[:space:]]+.*(-[a-zA-Z]*v|--verbose)([[:space:]]|$) ]] || \
+         [[ "$content" =~ case[[:space:]]+.*in.*(-v|--verbose) ]]; then
+        findings+=("${f}:${current_line}: [Lens 4 Security] Verbose curl output (-v, --verbose) exposes Authorization tokens on stderr. Disallow verbose tracing in authenticated calls.")
+        ((count++))
+      fi
+
+      # Rule 4: Plaintext HTTP endpoints transmitting credentials
+      if [[ "$content" =~ http://[^[:space:]]+ ]] && [[ "$content" =~ (Authorization|Bearer|token|secret) ]]; then
+        findings+=("${f}:${current_line}: [Lens 4 Security] Plaintext HTTP endpoint transmits sensitive credentials. Require HTTPS.")
+        ((count++))
+      fi
+
+      # Rule 5: Path traversal dot-segments in URL targets
+      if [[ "$content" =~ https?://[^[:space:]]+(\.\./|/\.\.|%2[eEfF]|%5[cC]) ]]; then
+        findings+=("${f}:${current_line}: [Lens 4 Security] Path traversal dot-segments or encoding in URL destination. Reject traversal dot-segments before attaching credentials.")
+        ((count++))
+      fi
+
+      # Rule 6: Fragile workflow trigger matching missing quotes
+      if [[ "$content" =~ awk[[:space:]]+'/\^on:/' ]] || [[ "$content" =~ grep[[:space:]]+.*[\'\"]\^on:[\'\"] ]]; then
+        findings+=("${f}:${current_line}: [Lens 1 Correctness] Workflow trigger matcher searches '^on:' without supporting quoted variants ('on': / \"on\":).")
+        ((count++))
+      fi
+
+      # Rule 7: Secret or environment file writes without explicit 0600 mode
+      if [[ "$content" =~ \>[[:space:]]*\"?\$[A-Za-z0-9_]*ENV_FILE\"? ]] || \
+         [[ "$content" =~ \>[[:space:]]*\"?[^\"\']*\.env\"? ]]; then
+        if [[ ! "$content" =~ (install[[:space:]]+-m[[:space:]]+0600|chmod[[:space:]]+0600) ]]; then
+          # Check whether surrounding block or install is present in the file
+          if ! grep -q -E '(install -m 0600|chmod 0600)' "$f" 2>/dev/null; then
+            findings+=("${f}:${current_line}: [Lens 4 Security] Environment/secret file written via redirection without atomic mode 0600. Existing 0644 files preserve permissions; use install -m 0600.")
+            ((count++))
+          fi
+        fi
+      fi
+
+      # Rule 8: Scheme-less or unvalidated curl destination (e.g. curl evil.example)
+      if [[ "$content" =~ (^|[[:space:]])curl([[:space:]]+-[a-zA-Z0-9_=-]+)*[[:space:]]+([\'\"])?([a-zA-Z0-9_-]+\.[a-zA-Z]{2,}(/[^[:space:]\'\"]*)?)([\'\"[:space:]]|$) ]]; then
+        local dest_cand="${BASH_REMATCH[4]}"
+        if [[ ! "$dest_cand" =~ ^https?:// ]]; then
+          findings+=("${f}:${current_line}: [Lens 4 Security] Scheme-less or unvalidated curl destination '${dest_cand}'. Enforce explicit https:// scheme.")
+          ((count++))
+        fi
+      fi
+    done <<< "$diff_content"
+  done
+
+  if [[ $count -gt 0 ]]; then
+    if [[ $json_out -eq 1 ]]; then
+      local json_findings="["
+      local first=1
+      for fnd in "${findings[@]}"; do
+        [[ $first -eq 0 ]] && json_findings+=","
+        first=0
+        json_findings+=$(jq -n --arg m "$fnd" '$m')
+      done
+      json_findings+="]"
+      echo "{\"status\":\"fail\",\"count\":$count,\"findings\":$json_findings}"
+    else
+      echo "SELF-REVIEW FAIL: $count anti-pattern(s) detected in implementation diff:"
+      for fnd in "${findings[@]}"; do
+        echo "  $fnd"
+      done
+      echo ""
+      echo "Fix the root cause or add inline '# self-review-ignore: reason=<why>' if verified safe."
+    fi
+    return 1
+  fi
+
+  if [[ $json_out -eq 1 ]]; then
+    echo '{"status":"pass","count":0,"findings":[]}'
+  else
+    echo "self-review: static heuristics pass (0 findings)"
+  fi
+  return 0
+}
+
+# --- Optional Local LLM Critique ---------------------------------------------
+run_llm() {
+  local out_dir="$root/.ci-out"
+  mkdir -p "$out_dir"
+  local self_review_file="$out_dir/self-review.md"
+
+  local llm_url="${LLM_URL:-}"
+  local llm_key="${LLM_API_KEY:-}"
+  if [[ -z "$llm_url" && -z "$llm_key" ]]; then
+    echo "self-review: LLM critique skipped (LLM_URL or LLM_API_KEY unset). Advisory only."
+    return 0
+  fi
+
+  echo "self-review: generating redacted diff for local advisory review..."
+  local diff_raw
+  if ! diff_raw=$(git diff "$base" -- . 2>&1); then
+    echo "self-review: git diff failed against base '$base': $diff_raw" >&2
+    return 1
+  fi
+
+  local untracked_diff
+  untracked_diff=$(git ls-files --others --exclude-standard | while IFS= read -r u; do
+    if [[ -f "$u" ]]; then
+      git diff --no-index /dev/null "$u" 2>/dev/null || true
+    fi
+  done)
+  if [[ -n "$untracked_diff" ]]; then
+    if [[ -n "$diff_raw" ]]; then
+      diff_raw=$(printf '%s\n%s\n' "$diff_raw" "$untracked_diff")
+    else
+      diff_raw="$untracked_diff"
+    fi
+  fi
+
+  if [[ -z "$diff_raw" ]]; then
+    echo "self-review: diff is empty; nothing for LLM to critique."
+    return 0
+  fi
+
+  # Redact secrets from diff using gitleaks (fail closed: never transmit unredacted diff to LLM)
+  if ! command -v gitleaks >/dev/null 2>&1; then
+    echo "self-review: gitleaks not installed — refusing to prompt LLM with raw unredacted diff." >&2
+    echo "self-review: install gitleaks to enable local LLM critique." >&2
+    return 1
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "self-review: jq not installed — refusing to prompt LLM because secret redaction report cannot be parsed." >&2
+    echo "self-review: install jq to enable local LLM critique." >&2
+    return 1
+  fi
+
+  local tmp_dir
+  tmp_dir=$(mktemp -d)
+  local tmp_chunk="$tmp_dir/chunk.diff"
+  local tmp_findings="$tmp_dir/findings.json"
+  printf '%s\n' "$diff_raw" > "$tmp_chunk"
+
+  local gl_cfg=()
+  [[ -f "$root/.gitleaks.toml" ]] && gl_cfg=(--config "$root/.gitleaks.toml")
+
+  local gl_rc=0
+  gitleaks detect --no-git --source "$tmp_chunk" "${gl_cfg[@]}" --no-banner --report-format json --report-path "$tmp_findings" >"$tmp_dir/gl.log" 2>&1 || gl_rc=$?
+  if (( gl_rc != 0 && gl_rc != 1 )); then
+    echo "self-review: gitleaks scan failed with execution error (exit $gl_rc): $(cat "$tmp_dir/gl.log" 2>/dev/null)" >&2
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+  if [[ ! -s "$tmp_findings" ]]; then
+    echo "self-review: gitleaks report missing or empty (0 bytes): $(cat "$tmp_dir/gl.log" 2>/dev/null)" >&2
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+
+  if ! jq -e 'type == "array"' "$tmp_findings" >/dev/null 2>"$tmp_dir/jq.err"; then
+    echo "self-review: invalid gitleaks findings report (expected JSON array): $(cat "$tmp_dir/jq.err" 2>/dev/null)" >&2
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+
+  local secrets=()
+  local jq_out
+  if ! jq_out=$(jq -r '.[] | .Secret // empty' "$tmp_findings" 2>"$tmp_dir/jq.err"); then
+    echo "self-review: failed to parse gitleaks findings report: $(cat "$tmp_dir/jq.err" 2>/dev/null)" >&2
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+  while IFS= read -r sec; do
+    [[ -n "$sec" ]] && secrets+=("$sec")
+  done <<< "$jq_out"
+
+  local diff_redacted="$diff_raw"
+  for sec in "${secrets[@]}"; do
+    if [[ -n "$sec" ]]; then
+      local next_redacted
+      if ! next_redacted=$(jq -Rnr --arg t "$diff_redacted" --arg s "$sec" --arg m "[REDACTED]" '$t | split($s) | join($m)' 2>"$tmp_dir/jq.err"); then
+        echo "self-review: failed to redact secret from diff: $(cat "$tmp_dir/jq.err" 2>/dev/null)" >&2
+        rm -rf "$tmp_dir"
+        return 1
+      fi
+      diff_redacted="$next_redacted"
+    fi
+  done
+
+  local prompt_file="$tmp_dir/prompt.txt"
+  cat << 'EOF' > "$prompt_file"
+You are an adversarial author-self-review critique assistant. Analyze the following uncommitted/pre-commit diff for security, correctness, and edge cases. Identify potential vulnerabilities, flag-injection vectors, unvalidated network parameters, and missing tests. Format your response in clear Markdown.
+
+<diff>
+EOF
+  printf '%s\n' "$diff_redacted" >> "$prompt_file"
+  echo "</diff>" >> "$prompt_file"
+
+  # Find reviewer binary / command
+  local reviewer_cmd_cfg="${REVIEW_CMD:-$(ci_config REVIEW_CMD "")}"
+  local reviewer_cmd=""
+  local cdir; cdir=$(ci_dir)
+  if [[ -n "$reviewer_cmd_cfg" ]]; then
+    reviewer_cmd=$(CI_ROOT="$root" eval "echo \"$reviewer_cmd_cfg\"")
+  elif [[ -x "$cdir/bin/review-llm" ]]; then
+    reviewer_cmd="bash \"$cdir/bin/review-llm\""
+  elif [[ -x "$root/.ci/bin/review-llm" ]]; then
+    reviewer_cmd="bash \"$root/.ci/bin/review-llm\""
+  elif [[ -x "$root/ci/bin/review-llm" ]]; then
+    reviewer_cmd="bash \"$root/ci/bin/review-llm\""
+  fi
+
+  if [[ -z "$reviewer_cmd" ]]; then
+    echo "self-review: No reviewer command found (REVIEW_CMD unset, review-llm missing). Advisory skipped." >&2
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+
+  echo "self-review: invoking reviewer ($reviewer_cmd)..."
+  local llm_out="$tmp_dir/llm_out.md"
+  local rc=0
+  ( CI_ROOT="$root" eval "$reviewer_cmd" < "$prompt_file" > "$llm_out" 2>"$tmp_dir/err.log" ) || rc=$?
+  if [[ $rc -ne 0 ]]; then
+    echo "self-review: LLM critique failed (exit $rc): $(cat "$tmp_dir/err.log" 2>/dev/null)" >&2
+    rm -rf "$tmp_dir"
+    return 1
+  fi
+
+  cat << 'EOF' > "$self_review_file"
+# Author Self-Review Advisory Critique
+
+*This advisory critique is generated locally before commit and does not consume review rounds.*
+
+EOF
+  cat "$llm_out" >> "$self_review_file"
+  rm -rf "$tmp_dir"
+  echo "self-review: advisory report saved to .ci-out/self-review.md"
+  return 0
+}
+
+if [[ "$mode" == "llm" ]]; then
+  run_static || true
+  run_llm
+else
+  run_static
+fi

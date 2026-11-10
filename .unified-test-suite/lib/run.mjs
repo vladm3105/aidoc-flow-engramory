@@ -146,12 +146,13 @@ export function selectLayers({ explain = false } = {}) {
     mergeBase ? sh(`git diff --name-only ${mergeBase}`) : '',
     sh('git diff --name-only HEAD'),
     sh('git ls-files --others --exclude-standard'),
-  ].join('\n').split('\n').filter((f) => f && !f.startsWith('.unified-test-suite/')));
+  ].join('\n').split('\n').filter(Boolean));
   const selected = new Set(sel.always ?? []);
   const why = [];
   let fallback = !mergeBase;
   if (fallback) why.push(`no merge-base with ${base} → fallback`);
-  const infra = ['unified-test-suite.config.json', 'unified-test-suite.lock.json', 'Taskfile.yml', ...(sel.fullRunTriggers ?? [])];
+  // The vendored engine changes how every test runs: an engine-only change is suite infrastructure.
+  const infra = ['.unified-test-suite/**', 'unified-test-suite.config.json', 'unified-test-suite.lock.json', 'Taskfile.yml', ...(sel.fullRunTriggers ?? [])];
   for (const file of changed) {
     if (matchesAny(file, infra)) { fallback = true; why.push(`${file} → suite infrastructure → fallback`); continue; }
     const hits = (sel.rules ?? []).filter((r) => matchesAny(file, r.paths));

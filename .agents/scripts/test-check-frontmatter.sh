@@ -68,6 +68,12 @@ rm "$T/.agents/rules/empty.md"
 
 printf '%s\n' '---' 'name: bad' '---' > "$T/.agents/agents/bad.md"
 if run; then no "agent without model fails"; else ok "agent without model fails"; fi
+rm "$T/.agents/agents/bad.md"
+
+mkdir -p "$T/.agents/skills/open"
+printf '%s\n' '---' 'name: open' 'description: valid fields but no closing delimiter' > "$T/.agents/skills/open/SKILL.md"
+if run; then no "frontmatter without a closing --- fails"; else ok "frontmatter without a closing --- fails"; fi
+rm -r "$T/.agents/skills/open"
 
 echo
 echo "passed: $pass   failed: $fail"

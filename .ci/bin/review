@@ -37,15 +37,21 @@ die() { echo "review: $*" >&2; exit 3; }
 mode=$(ci_config REVIEW off)
 # REVIEW_CMD/REVIEW_MODEL pin to the merge-base commit: the reviewer must not be
 # author-controlled per review. Change reviewers by merging .ci-config to the base first.
+cdir=$(ci_dir)
 cmd_cfg=$(ci_config_committed REVIEW_CMD 'bash "$CI_ROOT/.ci/bin/review-llm"')
+if [[ ! -e "$root/.ci" && -d "$root/ci" ]]; then
+  cmd_cfg="${cmd_cfg//\$CI_ROOT\/.ci/\$CI_ROOT\/ci}"
+elif [[ ! -e "$root/.ci" && -d "$cdir" ]]; then
+  cmd_cfg="${cmd_cfg//\$CI_ROOT\/.ci/$cdir}"
+fi
 model=$(ci_config_committed REVIEW_MODEL "")
 rubric=$(ci_config REVIEW_RUBRIC ".ci-review/rubric.md")
 max_rounds=$(ci_config REVIEW_MAX_ROUNDS 3)
-max_bytes=$(ci_config REVIEW_MAX_DIFF_BYTES 150000)
-env_pass=$(ci_list REVIEW_ENV "LLM_URL LLM_API_KEY ANTHROPIC_API_KEY OPENAI_API_KEY")
+max_bytes=$(ci_config REVIEW_MAX_DIFF_BYTES 300000)
+env_pass=$(ci_list REVIEW_ENV "LLM_URL LLM_API_KEY")
 cwd_mode=$(ci_config REVIEW_CWD isolated)
 timeout_s=$(ci_config REVIEW_TIMEOUT 900)
-version=$(cat "$root/.ci/VERSION" 2>/dev/null || echo unknown)
+version=$(cat "$cdir/VERSION" 2>/dev/null || cat "$root/.ci/VERSION" 2>/dev/null || cat "$root/VERSION" 2>/dev/null || echo unknown)
 
 branch=$(git branch --show-current)
 remote=$(ci_push_remote)
@@ -73,6 +79,9 @@ parse_response() {
   local raw=$1 content json
   content=$(cat "$raw")
   [[ $content == *"{"* && $content == *"}"* ]] || return 1
+  if [[ $content == *"</thinking>"* ]]; then
+    content="${content#*</thinking>}"
+  fi
   json="{${content#*\{}"          # from the first "{"
   json="${json%\}*}}"              # to the last "}"
   jq -ce '
@@ -171,12 +180,13 @@ fingerprint
 case $req_kind in
   issue)
     [[ $req_ref =~ ^[0-9]+$ ]] || die "--issue expects a number"
-    if [[ $(ci_forge) == github ]]; then
+    if [[ $(ci_issue_forge) == github ]]; then
       command -v gh >/dev/null || die "gh CLI needed for --issue"
     else
       [[ -n ${GITEA_TOKEN:-} ]] || die "GITEA_TOKEN not set (gitea backend)"
     fi
-    requirements=$(forge_issue_text "$req_ref" 2>/dev/null) \
+    # Issues live on the issue forge (split mode: GitHub), not necessarily where the PR is (G1).
+    requirements=$(ci_enter_issue_forge && forge_issue_text "$req_ref" 2>/dev/null) \
       || die "cannot read issue #$req_ref"
     issue=$req_ref ;;
   file)
@@ -188,17 +198,67 @@ case $req_kind in
     fi ;;
 esac
 req_sha=$(printf '%s' "$requirements" | ci_sha256)
+# Fail before Pass 1 on a head the integration branch would refuse (#36).
+if [[ $branch != "$(ci_base_branch)" ]]; then ci_integration_head_check "$branch" || die "branch name refused (#36)"; fi
+
+# --- REVIEW_EXCLUDE (validated before Pass 1, so a bad setting fails fast): vendored canon copies
+# Read from the merge-base .ci-config only, so a change can never exclude itself from review.
+# Only when the base has no .ci-config at all (the adoption change that installs this framework)
+# does the branch value apply, as it does for every other review setting. The source is recorded.
+excludes=() exclude_source=none ex_raw=""
+if git cat-file -e "$base:.ci-config" 2>/dev/null; then
+  ex_raw=$(git show "$base:.ci-config" | grep -E '^[[:space:]]*REVIEW_EXCLUDE=' | tail -n1 | cut -d= -f2- | tr -d '"')
+  [[ -n $ex_raw && $ex_raw != none ]] && exclude_source=base
+else
+  ex_raw=$(ci_list REVIEW_EXCLUDE "")
+  [[ -n $ex_raw ]] && exclude_source=bootstrap
+fi
+[[ $ex_raw == none ]] && ex_raw=""
+set -f; read -r -a ex_list <<<"$ex_raw"; set +f
+# Allowlist, not a denylist: only the vendored roots of known canons may be excluded, each as
+# its whole subtree. Anything else — project code, CI/governance config (.github/workflows,
+# .ci-local, .ci-review, .aidoc), magic pathspecs, negation, traversal, broad globs — is refused.
+# A new canon adds its root here (in the canon), never in a consumer .ci-config.
+review_exclude_roots=('.agents/**' '.unified-test-suite/**' '.github/actions/**')
+for ex in "${ex_list[@]}"; do
+  ok=0; for r in "${review_exclude_roots[@]}"; do [[ $ex == "$r" ]] && ok=1; done
+  (( ok == 1 )) || die "REVIEW_EXCLUDE: '$ex' is not allowed — only vendored canon roots may be excluded: ${review_exclude_roots[*]}"
+  excludes+=("$ex")
+done
+exclude_specs=(); for ex in "${excludes[@]}"; do exclude_specs+=(":(exclude)$ex"); done
+
+# --- Pass 0: author self-review heuristic pre-flight ----------------------------------------
+self_review_bin="$cdir/bin/self-review"
+[[ ! -x "$self_review_bin" && -x "$root/.ci/bin/self-review" ]] && self_review_bin="$root/.ci/bin/self-review"
+[[ ! -x "$self_review_bin" && -x "$root/ci/bin/self-review" ]] && self_review_bin="$root/ci/bin/self-review"
+if [[ -x "$self_review_bin" ]]; then
+  echo "review: Pass 0 — static self-review heuristics"
+  if ! "$self_review_bin" --base "$base"; then
+    echo "review: Pass 0 FAILED — fix static self-review anti-patterns before running full CI or review" >&2
+    exit 3
+  fi
+fi
 
 # --- Pass 1: deterministic gate -------------------------------------------------------------
 echo "review: Pass 1 — task ci"
 p1_log=$(mktemp); trap 'rm -f "$p1_log"' EXIT
 task ci >"$p1_log" 2>&1; p1_rc=$?
 summary="$root/.ci-out/summary.json"
-[[ $p1_rc -eq 0 && -f $summary ]] || { echo "review: Pass 1 FAILED — fix task ci first (see .ci-out/summary.json)"; exit 3; }
-pass1=$(jq -c '{status, label, sha: .git.sha, checks: (.checks|length), cached: .counts.cached}' "$summary")
+if [[ $p1_rc -ne 0 ]]; then
+  echo "review: Pass 1 FAILED — fix task ci first (see .ci-out/summary.json)"
+  cat "$p1_log" >&2
+  exit 3
+fi
+if [[ -f $summary ]]; then
+  pass1=$(jq -c '{status, label, sha: .git.sha, checks: (.checks|length), cached: .counts.cached}' "$summary")
+else
+  pass1=$(jq -nc --arg sha "$(git rev-parse HEAD)" '{status: "pass", label: "ci", sha: $sha, checks: 0, cached: 0}')
+fi
 
 # --- build review chunks ----------------------------------------------------------------------
-mapfile -t files < <(git diff --name-only "$base" HEAD -- . "${lockfiles[@]}")
+files_out=$(git diff --name-only "$base" HEAD -- . "${lockfiles[@]}" "${exclude_specs[@]}") \
+  || die "git diff failed for the review file list (check REVIEW_EXCLUDE)"
+mapfile -t files <<<"$files_out"; [[ -n $files_out ]] || files=()
 stat=$(git diff --stat=160 "$base" HEAD -- .)
 lock_only=0
 chunks=() cur="" cur_bytes=0 oversized=()
@@ -208,6 +268,7 @@ if [[ ${#files[@]} -eq 0 ]]; then
   # instead of dying here and making the change unshippable under REVIEW=required.
   mapfile -t all_changed < <(git diff --name-only "$base" HEAD -- .)
   [[ ${#all_changed[@]} -gt 0 ]] || die "no reviewable changes between $(ci_base_branch) and HEAD"
+  # Everything outside lockfiles is excluded by REVIEW_EXCLUDE: judged from the stat as well.
   lock_only=1
   chunks=("@LOCKFILE_ONLY@")
 else
@@ -233,6 +294,13 @@ run_reviewer() {  # $1 prompt file, $2 output file
   local wd="$root" envs=() v rc
   [[ $cwd_mode == isolated ]] && wd=$(mktemp -d)
   envs=(PATH="$PATH" HOME="$HOME" LANG="${LANG:-C.UTF-8}" TMPDIR="${TMPDIR:-/tmp}" CI_ROOT="$root" REVIEW_MODEL="$model")
+  if [[ -z ${TRACEPARENT:-} ]]; then
+    local tp_tid tp_sid
+    tp_tid=$(openssl rand -hex 16 2>/dev/null || date +%s%N | sha256sum | head -c 32)
+    tp_sid=$(openssl rand -hex 8 2>/dev/null || date +%s%N | sha256sum | head -c 16)
+    export TRACEPARENT="00-${tp_tid}-${tp_sid}-01"
+  fi
+  envs+=("TRACEPARENT=$TRACEPARENT")
   # The default reviewer (review-llm) needs its HTTP timeout even when a project's
   # REVIEW_ENV drifted; pass it explicitly rather than trusting the allow-list.
   [[ " $env_pass " == *" REVIEW_HTTP_TIMEOUT "* ]] || env_pass+=" REVIEW_HTTP_TIMEOUT"
@@ -314,6 +382,19 @@ else
   inventory="UNAVAILABLE"
 fi
 
+# prior findings for delta review across rounds (anti-flapping / monotonic convergence)
+prev_findings="" prev_round=0
+if [[ -f $state ]] && (( round > 1 )); then
+  prev_round=$(jq -r '.round // 0' "$state" 2>/dev/null || echo 0)
+  prev_f_count=$(jq '.findings | length' "$state" 2>/dev/null || echo 0)
+  if (( prev_f_count > 0 )); then
+    prev_findings=$(jq -r '
+      "Previous review round \(.round) reported the following findings:\n" +
+      ([.findings[] | "- [\(.severity)] \(.path):\(.line) — \(.body) (Suggested fix: \(.fix))"] | join("\n"))
+    ' "$state" 2>/dev/null || true)
+  fi
+fi
+
 results="" responses="[]"
 if [[ ${#oversized[@]} -gt 0 ]]; then
   results=$(jq -nc --arg f "$(printf '%s; ' "${oversized[@]}")" --argjson m "$max_bytes" \
@@ -326,17 +407,37 @@ for i in "${!chunks[@]}"; do
   mapfile -t cfiles <<<"${chunks[$i]%$'\n'}"
   pf=$(mktemp)
   {
-    cat "$root/.ci/review/prompt.md"
+    prompt_file="$cdir/review/prompt.md"
+    [[ -f $prompt_file ]] || prompt_file="$root/.ci/review/prompt.md"
+    [[ -f $prompt_file ]] || prompt_file="$root/ci/review/prompt.md"
+    cat "$prompt_file"
     printf '\n<requirements>\n%s\n</requirements>\n' "$requirements"
     printf '\n<rubric>\n%s\n</rubric>\n' "$(git show "HEAD:$rubric")"
     printf '\n<changed_files>\n%s\n</changed_files>\n' "$stat"
     printf '\n<inventory>\n%s\n</inventory>\n' "$inventory"
+    if (( ${#excludes[@]} > 0 )); then
+      printf '\n<excluded_paths>\n'
+      echo "These paths are vendored copies of canon repositories, reviewed in those repositories."
+      echo "Their diffs are omitted from this prompt by contract (REVIEW_EXCLUDE, source: $exclude_source)."
+      echo "Do not raise findings about them, and do not treat their absence as unverifiable evidence."
+      printf '%s\n' "${excludes[@]}"
+      printf '</excluded_paths>\n'
+    fi
     [[ -z $conflict_ctx ]] || printf '\n<conflict_context>\n%s\n</conflict_context>\n' "$conflict_ctx"
+    if [[ -n $prev_findings ]]; then
+      printf '\n<previous_round_findings round="%s">\n%s\n' "$prev_round" "$prev_findings"
+      echo
+      echo "DELTA VERIFICATION INSTRUCTIONS (ROUND CONVERGENCE):"
+      echo "1. Verify whether the author'\''s new commit has resolved the previous findings listed above."
+      echo "2. Do NOT introduce new minor or medium findings on unchanged code that was present in prior rounds."
+      echo "3. Only raise new findings if the new fix introduced a regression or critical security defect."
+      printf '</previous_round_findings>\n'
+    fi
     printf '\n<diff chunk="%s of %s">\n' "$c" "$n_chunks"
     if [[ ${cfiles[0]:-} == "@LOCKFILE_ONLY@" ]]; then
-      echo "LOCKFILE-ONLY CHANGE: lockfile contents are omitted from prompts by contract."
-      echo "Judge ONLY from <changed_files>: PASS when it shows nothing beyond lockfiles;"
-      echo "any non-lockfile path there is a framework inconsistency — BLOCK it."
+      echo "LOCKFILE-ONLY CHANGE: only lockfiles and/or REVIEW_EXCLUDE vendored paths changed; their contents"
+      echo "are omitted from prompts by contract. Judge ONLY from <changed_files>: PASS when every path there is"
+      echo "a lockfile or under <excluded_paths>; any other path is a framework inconsistency — BLOCK it."
       git diff --name-only "$base" HEAD -- .
     else
       git diff --no-color "$base" HEAD -- "${cfiles[@]}" | redact_text
@@ -371,12 +472,14 @@ jq -n --argjson m "$merged" --arg verdict "$verdict" --argjson capped "$capped" 
   --arg rkind "$req_kind" --arg rref "$req_ref" --arg rhash "$req_sha" --arg issue "$issue" \
   --arg cmd "$cmd_cfg" --arg model "${model:-unspecified}" --arg cwd "$cwd_mode" --argjson pass1 "$pass1" \
   --argjson chunks "$n_chunks" --argjson responses "$responses" --arg ver "$version" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  --argjson unred "$unred_json" '
+  --argjson unred "$unred_json" --arg exsrc "$exclude_source" \
+  --argjson excl "$(printf '%s\n' "${excludes[@]}" | jq -R . | jq -sc 'map(select(length > 0))')" '
   { schema: 1, verdict: $verdict, round_cap_reached: $capped, lockfile_only: $lockonly, round: $round, max_rounds: $max, unredacted: $unred,
     branch: $branch, head: $head, base: $base, diff_sha256: $diff,
     rubric: $rubric, rubric_sha256: $rsha,
     requirements: { kind: $rkind, ref: $rref, sha256: $rhash }, issue: (if $issue == "" then null else ($issue|tonumber) end),
     reviewer: { cmd: $cmd, model: $model, cwd: $cwd },
+    review_exclude: { paths: $excl, source: $exsrc },
     pass1: $pass1, chunks: $chunks, responses: $responses,
     summary: $m.summary, coerced: $m.coerced, findings: $m.findings,
     reviewed_at: $at, framework_version: $ver }' >"$state"
@@ -387,13 +490,14 @@ md="$state_dir/$key.md"
 {
   echo "### Self-review audit trail (aidoc-local-flow-ci $version)"
   echo
-  echo "- **Pass 1 — deterministic gate:** \`task ci\` $(jq -r .status <<<"$pass1") at \`$(jq -r '.sha[0:12]' <<<"$pass1")\` ($(jq -r .checks <<<"$pass1") checks)"
+  echo "- **Pass 1 — deterministic gate:** \`task ci\` $(jq -r .status <<<"$pass1") at \`$(jq -r '.sha[0:12]' <<<"$pass1")\` ($(jq -r 'if .checks > 0 then "\(.checks) checks" else "canon gate" end' <<<"$pass1"))"
   echo "- **Pass 2 — independent review:** **$verdict** · reviewer \`${model:-unspecified}\` (separate process, clean env, $cwd_mode cwd) · round $round/$max_rounds · $n_chunks chunk(s)"
   echo "- **Bound to:** diff sha256 \`${diff_sha:0:16}\` · rubric \`$rubric\` sha256 \`${rubric_sha:0:16}\` · requirements: $req_kind ${req_ref}"
   echo "- **Findings:** $(jq -r '[.findings[]|.severity] | group_by(.) | map("\(length) \(.[0])") | join(", ") | if . == "" then "none" else . end' "$state")"
   [[ $capped == true ]] && echo "- **Round cap reached** — escalated to a human (BLOCK)."
   (( unredacted == 1 )) && echo "- **Redaction bypassed** — reviewer was prompted with the raw diff (REVIEW_ALLOW_UNREDACTED=1)."
-  (( lock_only == 1 )) && echo "- **Lockfile-only change** — judged from the change stat; lockfile contents never enter the prompt."
+  (( lock_only == 1 )) && echo "- **Lockfile/excluded-only change** — judged from the change stat; lockfile and excluded vendored contents never enter the prompt."
+  (( ${#excludes[@]} > 0 )) && echo "- **Excluded from review** (vendored canons, REVIEW_EXCLUDE from $exclude_source): $(printf '`%s` ' "${excludes[@]}")"
   echo
   echo "> $(jq -r .summary "$state")"
   if [[ $(jq '.findings | length' "$state") -gt 0 ]]; then

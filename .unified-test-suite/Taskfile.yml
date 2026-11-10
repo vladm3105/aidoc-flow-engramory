@@ -28,15 +28,19 @@ includes:
     taskfile: ./generated/Taskfile.yml
     flatten: true
     optional: true
+  generated_cache:
+    taskfile: '{{.ROOT_DIR}}/.aidoc/cache/uts/generated/Taskfile.yml'
+    flatten: true
+    optional: true
 
 vars:
   PINNED_TASK_VERSION: 3.53.1   # not TASK_VERSION (reserved builtin)
-  UTS: node .unified-test-suite/bin/uts.mjs
+  UTS: node "{{.TASKFILE_DIR}}/bin/uts.mjs"
 
 env:
   PYTHONDONTWRITEBYTECODE: '1'     # keeps the working-tree fingerprint stable during a run
   TEST_RUN_ID:                     # namespaces test data on unmanaged (shared/staging) stacks
-    sh: echo "run-$(date -u +%Y%m%dT%H%M%S)-$$"
+    sh: echo "${AGENT_INSTANCE_ID:-run}-$(date -u +%Y%m%dT%H%M%S)-$$"
 
 tasks:
   # ───────────────────────────── environment ─────────────────────────────
@@ -75,12 +79,12 @@ tasks:
 
   test:changed:
     desc: Smallest scope for the current diff (config "selection"; unmapped changes fall back) → summary
-    vars:
-      LAYERS: { sh: '{{.UTS}} select --explain' }
     cmds:
-      - echo "test:changed → {{.LAYERS | default "(nothing)"}}"
-      - task: uts:set
-        vars: { LAYERS: '{{.LAYERS}}', TARGET: changed, ALLOW_EMPTY: '1' }
+      # Invalidate BEFORE the selection var is evaluated (in uts:changed-run): a failing
+      # selection must never leave an old verdict behind.
+      - task: uts:invalidate
+        vars: { TARGET: changed }
+      - task: uts:changed-run
 
   test:clean:
     desc: Delete current results (keeps <results>/history/ and <results>/agent-evidence/)
@@ -138,13 +142,31 @@ tasks:
       - task: test:report
         vars: { TARGET: '{{.LAYER}}', REQUIRE: '{{.LAYER}}' }
 
+  uts:changed-run:
+    internal: true
+    vars:
+      LAYERS: { sh: '{{.UTS}} select --explain' }
+    cmds:
+      - echo "test:changed → {{.LAYERS | default "(nothing)"}}"
+      - task: uts:set-run
+        vars: { LAYERS: '{{.LAYERS}}', TARGET: changed, ALLOW_EMPTY: '1' }
+
   uts:set:   # a group or test:changed: no clean, parallel then serial, report on exactly these layers
+    internal: true
+    cmds:
+      # Invalidate BEFORE the PAR/SER plan vars are evaluated (in uts:set-run): a failing
+      # plan must never leave an old verdict behind (same ordering as the generated gates).
+      - task: uts:invalidate
+        vars: { TARGET: '{{.TARGET}}' }
+      - task: uts:set-run
+        vars: { LAYERS: '{{.LAYERS}}', TARGET: '{{.TARGET}}', ALLOW_EMPTY: '{{.ALLOW_EMPTY}}' }
+
+  uts:set-run:
     internal: true
     vars:
       PAR: { sh: '{{.UTS}} plan --layers "{{.LAYERS}}" --parallel' }
       SER: { sh: '{{.UTS}} plan --layers "{{.LAYERS}}" --serial' }
     cmds:
-      - '{{.UTS}} invalidate --target {{.TARGET}}'
       - task: uts:parallel
         vars: { LAYERS: '{{.PAR}}' }
       - for: { var: SER }

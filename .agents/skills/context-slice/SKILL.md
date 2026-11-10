@@ -24,6 +24,7 @@ This skill governs the use of **`aidoc-context-tools` (`aidoc-ctx`)** to extract
 ## 2. Invocation Workflow
 
 ### Step 1: Generate Targeted Context Slice
+
 Before authoring or editing code for a specific IPLAN task or feature:
 
 ```bash
@@ -31,12 +32,14 @@ aidoc-ctx slice --task <TASK_OR_SPEC_ID> --sdd-dir docs/sdd
 ```
 
 Flags:
+
 - `--task <ID>`: Target task identifier (e.g. `IPLAN-AUTH-012` or `SPEC-BILLING-001`).
 - `--sdd-dir <PATH>`: Directory containing SDD layers (default: `docs/sdd`).
 - `--layers <LIST>`: Comma-separated allowed layers (default: `EARS,BDD,ADR,SPEC,TDD`).
 - `-o, --output <FILE>`: Optional path to write context digest.
 
 ### Step 2: Validate Graph Acyclicity
+
 Ensure the local specification graph has no circular dependencies:
 
 ```bash
@@ -44,6 +47,7 @@ aidoc-ctx validate-graph --sdd-dir docs/sdd
 ```
 
 ### Step 3: Run Pre-Commit Anti-Contract Erosion Gate
+
 Before committing changes to git, verify that git diffs do not violate ratified change flow invariants:
 
 ```bash

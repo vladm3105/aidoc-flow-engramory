@@ -10,6 +10,15 @@ An actionable finding must survive the session that found it. Capture it on the
 owning repository's declared backlog surface; never leave it only in chat,
 scratch, a commit message, or a session handoff.
 
+> [!IMPORTANT]
+> **Single Standard Ingress:** For autonomous spoke agents, sandboxed CI runners,
+> and cross-repository defect reporting, use **`submit-feedback-chatwoot`**. That
+> skill routes via the Chatwoot API to `aidoc-flow-support-desk`, which performs
+> automated secret scrubbing, target repo authorization, deduplication, and GitHub
+> issue dispatch. This direct skill (`submit-feedback`) is a maintainer-only path
+> used when direct write credentials to the repository's GitHub tracker are already
+> present in the session.
+
 A finding also has to carry **where it came from**. A defect a real project hit
 and a defect a review pass went looking for read identically once written up,
 and the reader cannot recover the difference. Record it at capture time.

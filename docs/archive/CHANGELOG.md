@@ -4,6 +4,28 @@ All notable changes to Engramory are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+### Added — 2026-11-05 (`PLAN-009`..`PLAN-012`)
+
+- **Release Cutoff Remediation (PLAN-012)**:
+  - Added idempotency guards in `db/migrations/0005_pin_embeddings_hnsw.sql` checking column typmod to prevent downcasting or wiping 1536-dim embeddings.
+  - Implemented `schema_migrations` tracking and migration baseline bootstrapping in `scripts/deploy-stage.sh`.
+  - Added scope boundary validation and audit recording for memory poisoning rejections in `AccessSurface`.
+  - Added tenant and project parameter locking in authenticated MCP server mode to prevent client spoofing.
+  - Added `delete_kb_sections_for_doc` in `Repository` and deletion/rename reconciliation in Git sync engine.
+  - Added composite key `(tenant_id, doc_id, citation, version)` deduplication and mapping for knowledge batch upsert and embedding vectors.
+  - Hardened Docker and Compose configurations with localhost port bindings (`127.0.0.1`), configurable spool directory mounts, and worker Neo4j environment parity.
+- **Authentik OIDC / JWT Security Integration (PLAN-011)**:
+  - Integrated with `platform-security` (Authentik IdP) via JWT token verification, JWKS caching, audience checking, and `ActorContext` propagation.
+  - Added security audit event logging adhering to Interlog spool standard.
+  - Added platform blueprint `blueprints/25-app-engramory.yaml` and compose platform definition `compose.platform.yaml`.
+- **Knowledge Core Ingestion Migration (PLAN-010)**:
+  - Router-based document extraction for Markdown, Python, JSON, and YAML specifications.
+  - Git repository synchronization with differential commit tracking.
+  - Topological SDD lineage graph extraction and Neo4j projection.
+- **Canonical Postgres Graph Schema & Resized Vectors (PLAN-009)**:
+  - Migrated vector dimensions to 1536 for OpenAI and LiteLLM model compatibility.
+  - Added canonical PostgreSQL tables for entities and relations before Neo4j projection.
+
 ### Changed
 
 - **markdown-lint graduated to blocking (PLAN-007 W3)** — adopted the relaxed canon `.markdownlint.json` (disables MD013/MD024/MD036) + a repo-local `MD025.front_matter_title: ""` tuning (the `sdd/**` docs legitimately carry both a frontmatter `title:` and an `# H1`), cleared the residual violations, and flipped `fail-on-findings: false → true`. Cleanups were targeted + meaning-preserving (a blind `--fix` would corrupt prose by misreading literal `+` in wrapped sentences as list markers): reflowed 4 prose-`+` lines, backticked PR-template placeholders, added `text` language to 10 ASCII-diagram code fences, fixed 2 heading-increment skips, merged 2 blockquote splits, escaped literal `|` in 3 table code spans, plus `--fix` for the structural blank-line/fence rules. Arming as a required status check is the separate founder-executed W4 step (FT-11).

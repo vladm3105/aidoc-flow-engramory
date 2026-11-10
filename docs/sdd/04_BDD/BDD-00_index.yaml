@@ -1,0 +1,20 @@
+# BDD-00_index.yaml — Behavior-Driven Acceptance Index (SDD Layer 04)
+# @brd: BRD.01.01.a001
+# @prd: PRD.01.01.a001
+# @ears: EARS.01.01.a001
+
+doc_id: BDD-01
+depends_on:
+  - "EARS-01"
+artifact_type: BDD-INDEX
+metadata:
+  schema_version: "1.0"
+  framework_version: "0.96.25"
+  document_type: "bdd-registry"
+  artifact_type: "BDD-INDEX"
+  layer: 4
+  last_updated: "2026-11-09"
+elements:
+  - id: "BDD.01.01.a001"
+    title: "Foundational 8-Canon Verification Scenarios"
+    canonical_ref: "sdd/04_BDD/BDD-01_engramory_core.yaml"

@@ -4,7 +4,7 @@
 #  Enterprise Platform & Technology Stack Policy Contract Template
 #  Authority: vladm3105/platform-technology-stack (Standard v2.0)
 #  Schema: aidoc.v1.StackPolicyContract (vladm3105/platform-data-contracts)
-#  Canon reference: framework/templates/STACK-POLICY-TEMPLATE.yaml (framework 0.96.4)
+#  Canon reference: framework/templates/STACK-POLICY-TEMPLATE.yaml (framework 0.96.23)
 #
 #  Onboarding extensions vs the canon template (deliberate, keep in sync
 #  with scripts/drift-check.sh): schema_version envelope, enterprise package
@@ -14,7 +14,7 @@
 # =============================================================================
 
 schema_version: "1.0.0"
-tenant_id: "aidoc-flow-engramory"
+tenant_id: "platform-engramory"
 policy_version: "2.0.0"
 
 runtime:
@@ -40,7 +40,7 @@ dependencies:
     - "SSPL"
     - "Commons-Clause"
   # Seed allowlist. Extend per project, but never below the floors enforced by
-  # the stack's own auditor (technology-stack scripts/audit-spoke.py):
+  # the stack's own auditor (platform-technology-stack scripts/audit-spoke.py):
   # python>=3.12, pydantic>=2.8.0 (v1 banned), langgraph>=0.2.0,
   # temporalio>=1.6.0, asyncpg>=0.29.0, nats-py>=2.8.0, ruff>=0.5.0,
   # Node.js>=20. A package absent from the approved stack needs explicit
@@ -70,6 +70,27 @@ dependencies:
     - name: "httpx"
       version_constraint: ">=0.27.0"
       approved_features: []
+    - name: "pyyaml"
+      version_constraint: ">=6.0"
+      approved_features: []
+    - name: "jsonschema"
+      version_constraint: ">=4.20.0"
+      approved_features: []
+    - name: "packaging"
+      version_constraint: ">=24.0"
+      approved_features: []
+    - name: "starlette"
+      version_constraint: ">=0.37.0"
+      approved_features: []
+    - name: "uvicorn"
+      version_constraint: ">=0.30.0"
+      approved_features: []
+    - name: "neo4j"
+      version_constraint: ">=5.26.0"
+      approved_features: []
+    - name: "psycopg"
+      version_constraint: ">=3.2"
+      approved_features: ["binary"]
 
 identity:
   provider: "authentik"

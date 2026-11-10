@@ -77,6 +77,153 @@ BANNED_RETIRED_TOOLS: Mapping[str, str] = {
     "pre-commit": "lefthook",
 }
 
+DOCUMENTATION_TOOL_CATALOG: tuple[dict[str, str], ...] = (
+    {
+        "tool": "engramory docs",
+        "category": "Core Engine & AST Linter",
+        "tier": "Adopt",
+        "gate": "Tier-1 (<1s) + Tier-2 + MCP",
+        "license": "Proprietary-Internal (MIT deps)",
+        "role": (
+            "Parses DocumentFrontmatter & {id, tier, mode} executable runbook steps, enforces "
+            "INV-STEP-01/02, checks git watched_paths drift & TTL staleness, exports /llms.txt, "
+            "and fuses L0 runbooks with L2 episodic memories."
+        ),
+    },
+    {
+        "tool": "vale",
+        "category": "Prose & Chunk-Independence Linter",
+        "tier": "Adopt",
+        "gate": "Tier-1 (<1s)",
+        "license": "MIT",
+        "role": (
+            "Enforces AIOpsAgent chunk-independence rules (.vale.ini & .vale/styles/AIOpsAgent/): "
+            "NoCrossChunkDeictics, NoAmbiguousSubjectStart, BannedRetiredTools, "
+            "DeterministicPortFormat, paired with pure-Python parity in docs_tools.py."
+        ),
+    },
+    {
+        "tool": "@astrojs/starlight",
+        "category": "Human Supervision Web Portal",
+        "tier": "Trial",
+        "gate": "Portal Build",
+        "license": "MIT",
+        "role": (
+            "Aggregates thin-spoke docs/*.md and SDD projections into a zero-JS searchable "
+            "developer portal with native Mermaid v11 and runbook autonomy badges."
+        ),
+    },
+    {
+        "tool": "@scalar/api-reference",
+        "category": "Interactive API & MCP Console",
+        "tier": "Trial",
+        "gate": "Portal Build",
+        "license": "MIT",
+        "role": (
+            "Renders interactive OpenAPI 3.1 specs, JSONSchema contracts, MCP tool schemas, "
+            "and Protobuf HTTP routes inside the Starlight portal."
+        ),
+    },
+    {
+        "tool": "docling + pymupdf + beautifulsoup4",
+        "category": "Multi-Format Ingestion (PDF/DOCX/HTML -> MD)",
+        "tier": "Adopt",
+        "gate": "L0 Ingestion",
+        "license": "MIT / AGPL-optional",
+        "role": (
+            "Extracts PDFs, DOCX, and HTML documents into heading-structured Markdown chunks "
+            "inside platform-engramory's SmartExtractionRouter."
+        ),
+    },
+    {
+        "tool": "mermaid",
+        "category": "Architecture & Sequence Diagrams (C4 / DFD)",
+        "tier": "Adopt",
+        "gate": "Tier-1 + Portal",
+        "license": "MIT",
+        "role": (
+            "Authoritative visualization standard for C4 topologies, sequence diagrams, "
+            "state machines, and ER schemas."
+        ),
+    },
+    {
+        "tool": "markdownlint-cli2",
+        "category": "Markdown Syntax & Formatting Gate",
+        "tier": "Adopt",
+        "gate": "Tier-1 (<1s)",
+        "license": "MIT",
+        "role": (
+            "Fast glob-aware Markdown structure and code-fence linter in lefthook & task check."
+        ),
+    },
+    {
+        "tool": "yamllint",
+        "category": "YAML Schema & Frontmatter Syntax Gate",
+        "tier": "Adopt",
+        "gate": "Tier-1 (<1s)",
+        "license": "GPL-3.0 (CLI tool)",
+        "role": "Lints SDD YAML layers, ADR/CHG records, and configuration manifests.",
+    },
+    {
+        "tool": "lychee",
+        "category": "Offline & External Link Integrity Checker",
+        "tier": "Adopt",
+        "gate": "Tier-1 / Tier-2",
+        "license": "Apache-2.0 / MIT",
+        "role": "Rust link checker verifying relative anchors and external URLs.",
+    },
+    {
+        "tool": "aidoc-framework (sdd_doc_lint) + Embedded Kùzu",
+        "category": "10-Layer SDD & Runbook Graph Engine",
+        "tier": "Adopt",
+        "gate": "Tier-1 / Tier-2",
+        "license": "MIT",
+        "role": (
+            "Validates the 10-layer SDD chain (BRD->EVAL), executes Binary Topological Validation "
+            "(BTV), and slices sub-millisecond openCypher context closures."
+        ),
+    },
+    {
+        "tool": "copybara",
+        "category": "Cross-Repo Code/Doc Sync",
+        "tier": "Hold",
+        "gate": "Prohibited",
+        "license": "Apache-2.0",
+        "role": (
+            "Not used (Hold): JVM Bazel dependency and Starlark transform maintenance overhead; "
+            "replaced by Engramory GitSyncEngine, engramory docs build-portal, and Split-Forge "
+            "Gitea-to-GitHub mirror."
+        ),
+    },
+    {
+        "tool": "mintlify / readme / mkdocs-material-insiders",
+        "category": "Proprietary SaaS / Open-Core Paywalled Portals",
+        "tier": "Hold",
+        "gate": "Prohibited",
+        "license": "Proprietary",
+        "role": (
+            "Banned per INV-DOC-01: proprietary SaaS lock-in or paywalled features; "
+            "use Astro Starlight (MIT) + Scalar (MIT)."
+        ),
+    },
+)
+
+
+def list_documentation_tools(*, tier: str | None = None) -> dict[str, Any]:
+    """Return the governed documentation tool inventory filtered by optional tier."""
+    valid_tiers = {"Adopt", "Trial", "Hold"}
+    if tier is not None and tier not in valid_tiers:
+        raise ValidationError(f"Invalid tool tier '{tier}'; must be one of {sorted(valid_tiers)}")
+    tools = [
+        dict(item) for item in DOCUMENTATION_TOOL_CATALOG if tier is None or item["tier"] == tier
+    ]
+    return {
+        "status": "ok",
+        "count": len(tools),
+        "tools": tools,
+    }
+
+
 # Google SRE defense-in-depth INV-STEP-02 patterns prohibited in tier="green" steps
 _GREEN_BANNED_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (
@@ -755,6 +902,7 @@ def lint_markdown_file(
     *,
     repo_root: Path | None = None,
     require_frontmatter: bool = True,
+    verify_registry: bool = False,
 ) -> list[LintDiagnostic]:
     """Run AI-first chunk-independence, AST, secret, and referential integrity checks on a file."""
     parsed = parse_markdown_document(file_path, repo_root=repo_root)
@@ -775,6 +923,105 @@ def lint_markdown_file(
                 ),
             )
         )
+
+    if verify_registry and parsed.has_frontmatter:
+        if "endpoints" in parsed.frontmatter:
+            endpoints = parsed.frontmatter["endpoints"]
+            if not isinstance(endpoints, dict):
+                diags.append(
+                    LintDiagnostic(
+                        rule_id="DOC-REG-001",
+                        severity="error",
+                        file=rel_path,
+                        line=1,
+                        message="Frontmatter 'endpoints' must be a key-value mapping",
+                        remediation_hint=(
+                            "Define 'endpoints' as a mapping with 'host_loopback' and/or "
+                            "'container_gateway' URLs."
+                        ),
+                    )
+                )
+            else:
+                if "host_loopback" in endpoints:
+                    host_lb = endpoints["host_loopback"]
+                    if not isinstance(host_lb, str) or not re.match(
+                        r"^https?://127\.0\.0\.1:\d+", host_lb
+                    ):
+                        diags.append(
+                            LintDiagnostic(
+                                rule_id="DOC-REG-001",
+                                severity="error",
+                                file=rel_path,
+                                line=1,
+                                message=(
+                                    f"Invalid endpoints.host_loopback '{host_lb}'; must bind to "
+                                    f"explicit host loopback 'http(s)://127.0.0.1:<port>'"
+                                ),
+                                remediation_hint=(
+                                    "Set endpoints.host_loopback to 'http://127.0.0.1:<port>'."
+                                ),
+                            )
+                        )
+                if "container_gateway" in endpoints:
+                    container_gw = endpoints["container_gateway"]
+                    if not isinstance(container_gw, str) or not re.match(
+                        r"^https?://10\.250\.0\.1:\d+", container_gw
+                    ):
+                        diags.append(
+                            LintDiagnostic(
+                                rule_id="DOC-REG-001",
+                                severity="error",
+                                file=rel_path,
+                                line=1,
+                                message=(
+                                    f"Invalid endpoints.container_gateway '{container_gw}'; must "
+                                    f"bind to explicit container gateway 'http(s)://10.250.0.1:<port>'"
+                                ),
+                                remediation_hint=(
+                                    "Set endpoints.container_gateway to 'http://10.250.0.1:<port>'."
+                                ),
+                            )
+                        )
+
+        if "triggers" in parsed.frontmatter:
+            triggers = parsed.frontmatter["triggers"]
+            if not isinstance(triggers, dict):
+                diags.append(
+                    LintDiagnostic(
+                        rule_id="DOC-REG-001",
+                        severity="error",
+                        file=rel_path,
+                        line=1,
+                        message="Frontmatter 'triggers' must be a key-value mapping",
+                        remediation_hint=(
+                            "Define 'triggers' as a mapping containing 'alerts', 'cli_commands', "
+                            "or 'mcp_tools' string lists."
+                        ),
+                    )
+                )
+            else:
+                for trig_key in ("alerts", "cli_commands", "mcp_tools"):
+                    if trig_key in triggers:
+                        trig_val = triggers[trig_key]
+                        if not isinstance(trig_val, list) or not all(
+                            isinstance(x, str) and bool(x.strip()) for x in trig_val
+                        ):
+                            diags.append(
+                                LintDiagnostic(
+                                    rule_id="DOC-REG-001",
+                                    severity="error",
+                                    file=rel_path,
+                                    line=1,
+                                    message=(
+                                        f"Frontmatter 'triggers.{trig_key}' must be a list of "
+                                        f"non-empty strings"
+                                    ),
+                                    remediation_hint=(
+                                        f"Ensure every entry under 'triggers.{trig_key}' is a "
+                                        f"non-empty string."
+                                    ),
+                                )
+                            )
 
     # Check watched_paths glob existence (DEAD_WATCHED_PATH_GLOB)
     if repo_root is not None and parsed.kb_document is not None:
@@ -1013,6 +1260,8 @@ def lint_repo(
     target_path: Path,
     *,
     strict: bool = False,
+    require_frontmatter: bool = False,
+    verify_registry: bool = False,
 ) -> dict[str, Any]:
     """Lint a single Markdown file or all governed docs in a repository."""
     resolved = target_path.resolve()
@@ -1033,10 +1282,21 @@ def lint_repo(
 
     all_diags: list[LintDiagnostic] = []
     for f in files:
-        # Require frontmatter on docs/doc-tools/*.md or when linting an explicit file with
-        # frontmatter
-        req_fm = "doc-tools" in f.parts or f.read_text(encoding="utf-8").startswith("---\n")
-        all_diags.extend(lint_markdown_file(f, repo_root=repo_root, require_frontmatter=req_fm))
+        # Require frontmatter when explicitly requested, on docs/doc-tools/*.md, or when the file
+        # already begins with a YAML frontmatter block
+        req_fm = (
+            require_frontmatter
+            or "doc-tools" in f.parts
+            or f.read_text(encoding="utf-8").startswith("---\n")
+        )
+        all_diags.extend(
+            lint_markdown_file(
+                f,
+                repo_root=repo_root,
+                require_frontmatter=req_fm,
+                verify_registry=verify_registry,
+            )
+        )
 
     # Optional external Vale integration if installed and .vale.ini exists
     vale_bin = shutil.which("vale")
@@ -1085,6 +1345,21 @@ def lint_repo(
     }
 
 
+def run_governed_lint(
+    target_path: Path,
+    *,
+    strict: bool = False,
+    verify_registry: bool = False,
+) -> dict[str, Any]:
+    """Run governed documentation lint requiring deterministic YAML frontmatter on all files."""
+    return lint_repo(
+        target_path,
+        strict=strict,
+        require_frontmatter=True,
+        verify_registry=verify_registry,
+    )
+
+
 def _build_scrubbed_env() -> dict[str, str]:
     """Return a copy of os.environ with all secret/token/DB variables stripped."""
     clean: dict[str, str] = {}
@@ -1109,7 +1384,7 @@ def smoke_run_green_steps(
         if root.is_file()
         else sorted((root / "docs").rglob("*.md"))
         if (root / "docs").is_dir()
-        else []
+        else sorted(root.rglob("*.md"))
     )
     md_files = [f for f in raw_files if _is_within_root(f, bound_root)]
 
@@ -1397,7 +1672,7 @@ def export_repo_llms(
     repo_name = root.name
 
     candidates: list[Path] = []
-    for root_doc in ("README.md", "AGENTS.md"):
+    for root_doc in ("README.md", "AGENTS.md", "portal/README.md"):
         p = root / root_doc
         if p.is_file() and _is_within_root(p, root):
             candidates.append(p)
@@ -1628,7 +1903,7 @@ def slice_local_runbooks(
         if root.is_file()
         else sorted((root / "docs").rglob("*.md"))
         if (root / "docs").is_dir()
-        else sorted(root.glob("*.md"))
+        else sorted(root.rglob("*.md"))
     )
     md_files = [f for f in raw_files if _is_within_root(f, bound_root)]
 
@@ -1677,4 +1952,22 @@ def slice_local_runbooks(
         memories=(),
         token_budget=token_budget,
         output_format=output_format,
+    )
+
+
+def stage_portal_bundle(
+    repo_root: Path,
+    *,
+    output_dir: Path | None = None,
+    dry_run: bool = False,
+    allowed_root: Path | None = None,
+) -> dict[str, Any]:
+    """Re-export `stage_portal_bundle` from `engramory.core.portal_builder`."""
+    from engramory.core.portal_builder import stage_portal_bundle as _stage_portal_bundle
+
+    return _stage_portal_bundle(
+        repo_root,
+        output_dir=output_dir,
+        dry_run=dry_run,
+        allowed_root=allowed_root,
     )

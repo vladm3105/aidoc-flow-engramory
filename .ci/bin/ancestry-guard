@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# aidoc-local-flow-ci ancestry-guard — refuse integration PRs that carry promotion-line history.
+#
+#   ancestry-guard BASE_BRANCH HEAD_REF [HEAD_BRANCH]
+#   env PROMOTION_TARGETS   space-separated promotion branches (e.g. "staging main"); "none" = off
+#   env ANCESTRY_REMOTE     remote holding the branches (default: origin)
+#
+# A feature branch cut from a promotion branch (e.g. main) instead of the integration branch
+# passes every name-based check, yet merging it would carry main-only commits (promotion merge
+# commits, direct fixes) back into the integration branch (issue #8). This guard fails when
+# HEAD_REF contains any commit that is on a promotion branch but not on BASE_BRANCH.
+# The sanctioned back-merge is exempt only when the head IS that promotion branch: HEAD_BRANCH
+# names it AND HEAD_REF is exactly its tip in this repository (a fork branch that merely shares
+# the name is not exempt).
+# Fail closed: a missing base/head ref, or a promotion branch that exists on the remote but cannot
+# be fetched, is an error (exit 2). A promotion branch that does not exist yet is skipped.
+# Workflows run this script from the BASE revision (or, on first rollout, from the canon release
+# fetched via the base's .ci/SOURCE) — never from the PR head (see branch-promotion).
+# Exit 0 clean, 1 promotion-line history found, 2 usage/missing refs.
+set -euo pipefail
+[[ $# -ge 2 ]] || { echo "usage: ancestry-guard BASE_BRANCH HEAD_REF [HEAD_BRANCH]" >&2; exit 2; }
+base=$1 head=$2 head_branch=${3:-}
+targets=${PROMOTION_TARGETS:-none}
+remote=${ANCESTRY_REMOTE:-origin}
+[[ -z $targets || $targets == none ]] && { echo "ancestry-guard: no promotion branches — nothing to check"; exit 0; }
+
+have_ref() { git rev-parse -q --verify "$1^{commit}" >/dev/null; }
+fetch_branch() { git fetch -q "$remote" "+refs/heads/$1:refs/remotes/$remote/$1" 2>/dev/null; }
+
+base_ref="$remote/$base"
+have_ref "$base_ref" || fetch_branch "$base" || true
+have_ref "$base_ref" || { echo "ancestry-guard: base '$base_ref' is not available" >&2; exit 2; }
+have_ref "$head" || { echo "ancestry-guard: head '$head' is not available" >&2; exit 2; }
+head_sha=$(git rev-parse "$head^{commit}")
+
+refs=()
+for t in $targets; do
+  ref="$remote/$t"
+  if ! have_ref "$ref"; then
+    fetch_branch "$t" || true
+    if ! have_ref "$ref"; then
+      # Only a definite "no such branch" (ls-remote --exit-code returns 2) skips it; an
+      # authentication, network or server failure must not read as "not created yet".
+      lr=0; git ls-remote --exit-code --heads "$remote" "$t" >/dev/null 2>&1 || lr=$?
+      case $lr in
+        2) continue ;;   # promotion branch not created yet
+        0) echo "ancestry-guard: promotion branch '$t' exists on '$remote' but could not be fetched" >&2; exit 2 ;;
+        *) echo "ancestry-guard: cannot query '$remote' for promotion branch '$t' (git ls-remote exit $lr)" >&2; exit 2 ;;
+      esac
+    fi
+  fi
+  if [[ $head_branch == "$t" && $head_sha == "$(git rev-parse "$ref^{commit}")" ]]; then
+    echo "ancestry-guard: back-merge of '$t' at its tip — exempt"; exit 0
+  fi
+  refs+=("$t")
+done
+
+bad=0
+for t in "${refs[@]}"; do
+  ref="$remote/$t"
+  leaked=$(comm -12 <(git rev-list "$head_sha" --not "$base_ref" | sort) <(git rev-list "$ref" --not "$base_ref" | sort))
+  if [[ -n $leaked ]]; then
+    n=$(grep -c . <<<"$leaked")
+    echo "::error::the head carries $n commit(s) that are on '$t' but not on '$base': it was cut from '$t' instead of '$base'. Re-create the branch from '$base' and cherry-pick your own commits."
+    while IFS= read -r c; do git log -1 --oneline "$c"; done < <(head -5 <<<"$leaked")
+    bad=1
+  fi
+done
+(( bad == 0 )) && echo "ancestry-guard: '$head' carries no promotion-line history into '$base'"
+exit "$bad"

@@ -1,7 +1,7 @@
 # =============================================================================
 #  Canonical SDD Tasks Template (.aidoc/Taskfile.yml)
 # =============================================================================
-#  Authority: docs/AIDOC_WORKSTATION_STANDARD.md (framework 0.96.4)
+#  Authority: docs/AIDOC_WORKSTATION_STANDARD.md (framework 0.96.25)
 #  Governs: SDD lifecycle execution, linting, review crews, context slicing,
 #           SDD-GRAPH v2.0 validation, and Kùzu acceleration
 #
@@ -17,7 +17,9 @@ version: '3'
 vars:
   SDD_DIR: '{{.SDD_DIR | default "docs/sdd"}}'
   ENGINE_CONFIG: '{{.ENGINE_CONFIG | default ".aidoc/engine/engine.yaml"}}'
-  PYTHONPATH: '{{.PYTHONPATH | default ".aidoc/framework"}}'
+  HARNESS_ROOT: '{{default "../aiops-harness" (env "AIOPS_HARNESS_ROOT")}}'
+  FRAMEWORK_ROOT: '{{default (printf "%s/.aidoc/framework" .HARNESS_ROOT) (env "AIDOC_FRAMEWORK_ROOT")}}'
+  PYTHONPATH: '{{.PYTHONPATH | default (printf "%s:%s:%s/.aidoc/framework:.aidoc/framework" .HARNESS_ROOT .FRAMEWORK_ROOT .ROOT_DIR)}}'
 
 env:
   PYTHONPATH: '{{.PYTHONPATH}}'
@@ -40,19 +42,37 @@ tasks:
         if python3 -c "import aidoc_flow_langgraph" 2>/dev/null; then
           python3 -m aidoc_flow_langgraph.cli.main review --config "{{.ENGINE_CONFIG}}" {{.CLI_ARGS}};
         else
-          echo "sdd:review: engine (aidoc-flow-langgraph) not installed; skipping.";
+          echo "sdd:review: engine (aiops-harness) in scaffold/verify-only mode; skipping.";
         fi
 
   slice:
     desc: "Slice and pack SDD context DAG for LLM prompts (with Kùzu acceleration and native fallback)"
     cmds:
       - >-
-        if python3 -c "import aidoc_context" 2>/dev/null; then
+        if command -v aidoc-ctx >/dev/null 2>&1; then
+          aidoc-ctx slice {{.CLI_ARGS}};
+        elif python3 -c "import aiops_harness.context.cli" 2>/dev/null; then
+          python3 -m aiops_harness.context.cli slice {{.CLI_ARGS}};
+        elif python3 -c "import aidoc_context" 2>/dev/null; then
           python3 -m aidoc_context.cli.main slice {{.CLI_ARGS}};
         elif python3 -c "import sdd_doc_lint" 2>/dev/null; then
           python3 -m sdd_doc_lint --slice {{.CLI_ARGS}};
         else
-          echo "sdd:slice: context tools not available; skipping.";
+          echo "sdd:slice: aiops-harness context tools not available; skipping.";
+        fi
+
+  check-invariants:
+    desc: "Enforce pre-merge AST diff and contract invariants against erosion"
+    cmds:
+      - >-
+        if command -v aidoc-ctx >/dev/null 2>&1; then
+          aidoc-ctx check-invariants --base {{.BASE | default "origin/dev"}} {{.CLI_ARGS}};
+        elif python3 -c "import aiops_harness.context.cli" 2>/dev/null; then
+          python3 -m aiops_harness.context.cli check-invariants --base {{.BASE | default "origin/dev"}} {{.CLI_ARGS}};
+        elif python3 -c "import aidoc_context" 2>/dev/null; then
+          python3 -m aidoc_context.cli.main check-invariants --base {{.BASE | default "origin/dev"}} {{.CLI_ARGS}};
+        else
+          echo "sdd:check-invariants: aiops-harness (aidoc-ctx) not available; skipping.";
         fi
 
   setup-kuzu:
@@ -73,10 +93,14 @@ tasks:
     desc: "Check Kùzu graph engine index status and node/edge metrics"
     cmds:
       - >-
-        if python3 -c "import aidoc_context" 2>/dev/null; then
-          python3 -m aidoc_context.cli.main kuzu-status --root "{{.SDD_DIR}}" {{.CLI_ARGS}};
+        if command -v aidoc-ctx >/dev/null 2>&1; then
+          aidoc-ctx kuzu-status --root "{{.ROOT_DIR}}" {{.CLI_ARGS}};
+        elif python3 -c "import aiops_harness.context.cli" 2>/dev/null; then
+          python3 -m aiops_harness.context.cli kuzu-status --root "{{.ROOT_DIR}}" {{.CLI_ARGS}};
+        elif python3 -c "import aidoc_context" 2>/dev/null; then
+          python3 -m aidoc_context.cli.main kuzu-status --root "{{.ROOT_DIR}}" {{.CLI_ARGS}};
         else
-          echo "sdd:kuzu-status: aidoc-context-tools not installed; skipping (run task sdd:setup-kuzu).";
+          echo "sdd:kuzu-status: aiops-harness (aidoc-ctx) not installed; skipping (run task sdd:setup-kuzu).";
         fi
 
   check:
@@ -92,7 +116,13 @@ tasks:
     cmds:
       - >-
         mkdir -p "{{.SDD_DIR}}/graph";
-        if python3 -c "import sdd_doc_lint" 2>/dev/null; then
+        if command -v aidoc-ctx >/dev/null 2>&1; then
+          aidoc-ctx validate-graph --invariants --root "{{.ROOT_DIR}}" {{.CLI_ARGS}};
+        elif python3 -c "import aiops_harness.context.cli" 2>/dev/null; then
+          python3 -m aiops_harness.context.cli validate-graph --invariants --root "{{.ROOT_DIR}}" {{.CLI_ARGS}};
+        elif python3 -c "import aidoc_context" 2>/dev/null; then
+          python3 -m aidoc_context.cli.main validate-graph --invariants --root "{{.ROOT_DIR}}" {{.CLI_ARGS}};
+        elif python3 -c "import sdd_doc_lint" 2>/dev/null; then
           python3 -m sdd_doc_lint --graph-check "{{.SDD_DIR}}/graph/" {{.CLI_ARGS}};
         else
           echo "sdd:graph-check: sdd_doc_lint not available; skipping.";
@@ -113,7 +143,7 @@ tasks:
     cmds:
       - >-
         if python3 -c "import sdd_doc_lint" 2>/dev/null; then
-          python3 -m sdd_doc_lint --render-pr-impact --base origin/main --head HEAD {{.CLI_ARGS}};
+          python3 -m sdd_doc_lint --render-pr-impact --base origin/dev --head HEAD {{.CLI_ARGS}};
         else
           echo "sdd:delta: sdd_doc_lint not available; skipping.";
         fi
@@ -127,12 +157,30 @@ tasks:
     cmds:
       - >-
         mkdir -p "{{.SDD_DIR}}/graph";
-        if python3 -c "import aidoc_context" 2>/dev/null; then
-          python3 -m aidoc_context.cli.main cypher --query "$SDD_CYPHER_Q" --root "{{.SDD_DIR}}" {{.CLI_ARGS}};
+        if command -v aidoc-ctx >/dev/null 2>&1; then
+          aidoc-ctx cypher --query "$SDD_CYPHER_Q" --root "{{.ROOT_DIR}}" {{.CLI_ARGS}};
+        elif python3 -c "import aiops_harness.context.cli" 2>/dev/null; then
+          python3 -m aiops_harness.context.cli cypher --query "$SDD_CYPHER_Q" --root "{{.ROOT_DIR}}" {{.CLI_ARGS}};
+        elif python3 -c "import aidoc_context" 2>/dev/null; then
+          python3 -m aidoc_context.cli.main cypher --query "$SDD_CYPHER_Q" --root "{{.ROOT_DIR}}" {{.CLI_ARGS}};
         elif python3 -c "import sdd_doc_lint" 2>/dev/null; then
           python3 -m sdd_doc_lint --cypher "$SDD_CYPHER_Q" --graph-path "{{.SDD_DIR}}/graph/" {{.CLI_ARGS}};
         else
           echo "sdd:graph-cypher: graph engines not available; skipping.";
+        fi
+
+  lint-policy:
+    desc: "Validate codebase and lockfiles against .aidoc/stack-policy.yaml"
+    cmds:
+      - >-
+        if command -v aidoc-ctx >/dev/null 2>&1; then
+          aidoc-ctx lint-policy {{.CLI_ARGS}};
+        elif python3 -c "import aiops_harness.context.cli" 2>/dev/null; then
+          python3 -m aiops_harness.context.cli lint-policy {{.CLI_ARGS}};
+        elif python3 -c "import aidoc_context" 2>/dev/null; then
+          python3 -m aidoc_context.cli.main lint-policy {{.CLI_ARGS}};
+        else
+          echo "sdd:lint-policy: aiops-harness (aidoc-ctx) not available; skipping.";
         fi
 
   lake-export:

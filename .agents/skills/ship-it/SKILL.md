@@ -223,10 +223,15 @@ the repository to a clean baseline from the main checkout — a standalone
 obligation, not a parenthetical. Substitute the repo's integration branch,
 remote name, worktree path, and branch name:
 
-1. `git worktree remove <task-worktree> --force` — remove the task worktree
-   (skip when no worktree was used).
+1. `git -C <task-worktree> status --porcelain --untracked-files=all` — the merge
+   carried only what was pushed. If this prints anything, the worktree holds work
+   the PR did not: **keep the worktree and its branch**, report the listed files
+   for an explicit decision, and skip steps 1–3 for it. Otherwise
+   `git worktree remove <task-worktree>` — never `--force`, so git itself refuses a
+   worktree that turned dirty in between (skip when no worktree was used).
 2. `git fetch --prune origin` — prune deleted remote-tracking references.
-3. `git branch -D <feature-branch>` — delete the local branch. `-D`, not
+3. `git branch -D <feature-branch>` — delete the local branch (only after step 1
+   removed a clean worktree, or when none was used). `-D`, not
    `-d`: squash merges rewrite commit SHAs, so the ancestry check behind `-d`
    fails on cleanly merged branches (`error: The branch '...' is not fully
    merged`) and agents abort cleanup or leave the branch behind.

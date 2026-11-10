@@ -16,7 +16,7 @@ jobs:
       CI_TAIL: "200"
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
-      - uses: jdx/mise-action@5a94747513dfd5ea5a3962b53641b61b2d7cbdf6  # v2.1.11
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c  # v4.3.0
       - run: task deps
       - run: task audit
       # Opt-in verified secret scan (set the TRUFLEHOG_VERIFY repo/org variable to 'true';

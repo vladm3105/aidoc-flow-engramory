@@ -284,12 +284,14 @@ git init -q "$tmp/repoO"
 bash "$SRC/install.sh" "$tmp/repoO" >/dev/null 2>&1 \
   || { echo "FAIL: repoO fresh install failed"; exit 1; }
 rm "$tmp/repoO/.agents/skills/verified-planning/check_plan.py"
-chmod a-w "$tmp/repoO/.agents/skills/verified-planning"
+# A dangling symlink into a missing directory: `-e` reports it absent, mkdir -p of the
+# real parent succeeds, and cp then fails writing through it — even as root, where a
+# chmod-based fixture would silently succeed.
+ln -s "$tmp/no-such-dir/check_plan.py" "$tmp/repoO/.agents/skills/verified-planning/check_plan.py"
 if bash "$SRC/install.sh" "$tmp/repoO" >"$tmp/install-O.log" 2>&1; then
-  chmod u+w "$tmp/repoO/.agents/skills/verified-planning"
   echo "FAIL: install with failing copy exited 0"; exit 1
 fi
-chmod u+w "$tmp/repoO/.agents/skills/verified-planning"
+rm "$tmp/repoO/.agents/skills/verified-planning/check_plan.py"
 grep -q 'installed into' "$tmp/install-O.log" \
   && { echo "FAIL: failed install reported success"; exit 1; }
 

@@ -31,16 +31,19 @@
 #                       branch-promotion workflow job (verify-source), unless
 #                       PROMOTION_SOURCE_CHECK=0 — NO bypass, admins included.
 #                       No signoff/review: promotion branches never use local CI.
-#   alfci-promotion-access   PROMOTION_BRANCHES: only bypass actors (admins) may update;
-#                       no force-push, no deletion. PROMOTION_MODE=pr adds "PR required" with
-#                       PROMOTION_APPROVALS approvals (default 0).
-# Repo settings: allow_auto_merge=true when SHIP_AUTONOMOUS_BRANCHES is set; delete_branch_on_merge.
+#   alfci-promotion-access   PROMOTION_BRANCHES: no force-push, no deletion. ff: only bypass actors
+#                       (admins) may update. pr: "PR required" with PROMOTION_APPROVALS approvals
+#                       (default 0) instead of the update restriction (PLAN-007 G3).
+# Repo settings: allow_auto_merge=true when SHIP_AUTONOMOUS_BRANCHES or PROMOTION_AUTONOMOUS is set;
+# delete_branch_on_merge (merged feature branches are pruned; protected branches never are).
+#   alfci-mirror (split forge, GitHub side): BASE_BRANCH copy: no deletion, no force-push.
 # Replaces the ruleset created by `gh signoff install` (delete that one after applying).
 set -euo pipefail
 # shellcheck source=lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 cd "$(ci_root)"
 
+orig_args=("$@")
 apply=0; check=0
 while [[ $# -gt 0 ]]; do case $1 in
   --apply) apply=1; shift ;;
@@ -58,7 +61,10 @@ papprovals=$(ci_config PROMOTION_APPROVALS 0)
 # --- producer guard: every required check needs a local producer ----------------------
 # Job ids are the keys at the FIRST indent level under `jobs:` (any width —
 # YAML indentation is a style choice, not always two spaces).
-producers=" signoff review $(awk 'FNR==1{j=0} /^jobs:/{j=1;ind=-1;next} j&&/^[^[:space:]#]/{j=0} j&&/^ +[A-Za-z0-9_.-]+:/{match($0,/^ +/); n=RLENGTH; if(ind<0) ind=n; if(n==ind){id=$1;sub(/:$/,"",id);print id}}' .github/workflows/*.yml .github/workflows/*.yaml 2>/dev/null | sort -u | tr '\n' ' ' || true) "
+# Split forge (#48): the Gitea side reads .gitea/workflows (Gitea ignores .github/ once it exists).
+wfdir=.github/workflows
+[[ ${RULESETS_SCOPE:-all} == integration && -d .gitea/workflows ]] && wfdir=.gitea/workflows
+producers=" signoff review $(awk 'FNR==1{j=0} /^jobs:/{j=1;ind=-1;next} j&&/^[^[:space:]#]/{j=0} j&&/^ +[A-Za-z0-9_.-]+:/{match($0,/^ +/); n=RLENGTH; if(ind<0) ind=n; if(n==ind){id=$1;sub(/:$/,"",id);print id}}' "$wfdir"/*.yml "$wfdir"/*.yaml 2>/dev/null | sort -u | tr '\n' ' ' || true) "
 unproduced=(); _out=""
 verify_producers() { # $1 = raw checks; sets _out (stripped), appends to unproduced
   local c; _out=""
@@ -70,14 +76,28 @@ verify_producers() { # $1 = raw checks; sets _out (stripped), appends to unprodu
     esac
   done
 }
-verify_producers "$(ci_list RULESET_EXTRA_CHECKS "")"; extra_checked=$_out
-verify_producers "$(ci_config PROMOTION_REQUIRED_CHECKS verify)"; promo_checked=$_out
+# Each split-forge side (#48) guards only its own checks.
+extra_checked=""; promo_checked=""
+if [[ ${RULESETS_SCOPE:-all} != promotion ]]; then
+  verify_producers "$(ci_list RULESET_EXTRA_CHECKS "")"; extra_checked=$_out
+fi
+if [[ ${RULESETS_SCOPE:-all} != integration ]]; then
+  verify_producers "$(ci_config PROMOTION_REQUIRED_CHECKS verify)"; promo_checked=$_out
+fi
 # The one-hop chain (dev->staging, staging->main) is enforced by the branch-promotion
 # workflow; requiring its job makes the policy a gate instead of advice. Guard-enforced
 # like any other check (fail closed when the workflow is missing); PROMOTION_SOURCE_CHECK=0
 # opts out. Space-free job id: the required-checks pipeline is space-delimited.
-if [[ -n $promotions && $(ci_config PROMOTION_SOURCE_CHECK 1) != 0 ]]; then
+if [[ -n $promotions && $(ci_config PROMOTION_SOURCE_CHECK 1) != 0 && ${RULESETS_SCOPE:-all} != integration ]]; then
   verify_producers "verify-source"; promo_checked+=$_out
+fi
+
+# Mirror of verify-source on the integration side (#41): with a promotion chain, the
+# verify-integration-source job (branch prefixes, ancestry guard) gates dev merges by default,
+# fail closed when its workflow is missing; INTEGRATION_SOURCE_CHECK=0 opts out.
+if [[ -n $promotions && $(ci_config INTEGRATION_SOURCE_CHECK 1) != 0 && ${RULESETS_SCOPE:-all} != promotion \
+      && " $extra_checked " != *" verify-integration-source "* ]]; then
+  verify_producers "verify-integration-source"; extra_checked+=$_out
 fi
 
 contexts="signoff"
@@ -97,13 +117,38 @@ if [[ ${#unproduced[@]} -gt 0 ]]; then
   printf 'rulesets: warning — required checks with no local producer: %s\n' "${unproduced[*]}" >&2
 fi
 
+# --- Split forge (#48): integration rules on Gitea, promotion rules on GitHub ------------
+# Run once per side; RULESETS_SCOPE limits each run to its branches. Exit = worst of both.
+scope=${RULESETS_SCOPE:-all}
+if [[ $scope == all ]] && ci_split_forge; then
+  prem=$(ci_promotion_remote)
+  git remote get-url "$prem" >/dev/null 2>&1 || { echo "rulesets: promotion remote '$prem' missing (PROMOTION_REMOTE)" >&2; exit 2; }
+  echo "rulesets: split forge — integration ($base) on gitea, promotion (${promotions:-none}) on github" >&2
+  rc=0
+  RULESETS_SCOPE=integration CI_FORGE=gitea bash "$0" "${orig_args[@]}" || rc=$?
+  if [[ -n $promotions ]]; then
+    RULESETS_SCOPE=promotion CI_FORGE=github CI_PUSH_REMOTE=$prem bash "$0" "${orig_args[@]}" || { r=$?; [[ $r -gt $rc ]] && rc=$r; }
+  fi
+  exit "$rc"
+fi
+[[ $scope == promotion ]] || [[ $scope == integration ]] || [[ $scope == all ]] || { echo "rulesets: bad RULESETS_SCOPE '$scope'" >&2; exit 2; }
+
 # --- Gitea backend: branch protections (PLAN-006 Phase 3) ---------------------------
 # Same inputs, per-branch protections instead of named rulesets. Deletion needs
 # no field (the API refuses to delete a protected branch: 403, verified live).
 if [[ $(ci_forge) == gitea ]]; then
-  branches=("$base")
+  branches=()
+  [[ $scope == promotion ]] || branches=("$base")
+  # Split forge, Gitea side (G9): the promotion branches exist on Gitea only as mirror-only copies for
+  # back-merges (task mirror --pull). Only MIRROR_GITEA_USER may push them; no PR merges into them.
+  mirror_copies=""
+  if [[ $scope == integration ]] && ci_split_forge && [[ -n $promotions ]]; then
+    mirror_copies=$promotions
+    mguser=$(ci_config MIRROR_GITEA_USER "")
+    [[ -n $mguser ]] || echo "rulesets: warning — MIRROR_GITEA_USER unset: the Gitea copies of ${promotions} accept no pushes, so task mirror --pull cannot update them" >&2
+  fi
   # shellcheck disable=SC2206
-  [[ -n $promotions ]] && branches+=($promotions)
+  [[ -n $promotions && $scope != integration ]] && branches+=($promotions)
   pmode=$(ci_config PROMOTION_MODE ff)
   if [[ -n $promotions && $pmode != pr ]]; then
     if [[ $apply == 1 ]]; then
@@ -116,6 +161,18 @@ if [[ $(ci_forge) == gitea ]]; then
     echo "rulesets: note — admin bypass is unexpressible on Gitea; emitting strict protections (nobody bypasses)" >&2
   fi
   protections=()
+  for b in $mirror_copies; do
+    protections+=("$(jq -n --arg b "$b" --arg u "${mguser:-}" '
+      {branch_name: $b, rule_name: $b, enable_push: true,
+       enable_push_whitelist: true, push_whitelist_usernames: ([$u] | map(select(. != ""))),
+       enable_merge_whitelist: true, merge_whitelist_usernames: [],
+       enable_force_push: false, enable_bypass_allowlist: false,
+       required_approvals: 0, enable_approvals_whitelist: false,
+       dismiss_stale_approvals: false,
+       block_on_rejected_reviews: false, block_on_outdated_branch: false,
+       block_admin_merge_override: true,
+       enable_status_check: false, status_check_contexts: []}')")
+  done
   for b in "${branches[@]}"; do
     if [[ $b == "$base" ]]; then
       # shellcheck disable=SC2086
@@ -161,6 +218,10 @@ if [[ $(ci_forge) == gitea ]]; then
         --argjson live "$live" --argjson settings "$gsettings" --argjson repo "$repo_live" '
       def norm_p: { branch_name, rule_name,
         enable_push, enable_force_push, enable_bypass_allowlist,
+        enable_push_whitelist: (.enable_push_whitelist // false),
+        push_whitelist_usernames: ((.push_whitelist_usernames // []) | sort),
+        enable_merge_whitelist: (.enable_merge_whitelist // false),
+        merge_whitelist_usernames: ((.merge_whitelist_usernames // []) | sort),
         required_approvals, enable_approvals_whitelist,
         dismiss_stale_approvals,
         block_on_rejected_reviews, block_on_outdated_branch,
@@ -240,8 +301,23 @@ integration=$(jq -n --argjson inc "$(refs "$base")" --argjson checks "$(checks $
          require_code_owner_review: false, require_last_push_approval: false, required_review_thread_resolution: false }},
       {type: "required_status_checks", parameters: { strict_required_status_checks_policy: false, required_status_checks: $checks }} ] }')
 
-sets=("$integration")
-if [[ -n $promotions ]]; then
+sets=()
+[[ $scope == promotion ]] || sets=("$integration")
+# Split forge: the GitHub copy of BASE_BRANCH is a mirror. It is never deleted or rewritten
+# (PLAN-007); the push restriction to the mirror App comes with phase 2 (G4).
+if [[ $scope == promotion ]] && ci_split_forge; then
+  # G4: with MIRROR_APP_ID the copy is truly read-only: only the mirror GitHub App may update it.
+  mirror_app=$(ci_config MIRROR_APP_ID "")
+  mbypass=$admin_bypass; mrules='[{"type":"deletion"},{"type":"non_fast_forward"}]'
+  if [[ $mirror_app =~ ^[0-9]+$ ]]; then
+    mbypass=$(jq -c --argjson id "$mirror_app" '. + [{actor_id: $id, actor_type: "Integration", bypass_mode: "always"}]' <<<"$admin_bypass")
+    mrules='[{"type":"deletion"},{"type":"non_fast_forward"},{"type":"update","parameters":{"update_allows_fetch_and_merge":false}}]'
+  fi
+  sets+=("$(jq -n --argjson inc "$(refs "$base")" --argjson bypass "$mbypass" --argjson rules "$mrules" '
+    { name: "alfci-mirror", target: "branch", enforcement: "active", bypass_actors: $bypass,
+      conditions: { ref_name: { include: $inc, exclude: [] } }, rules: $rules }')")
+fi
+if [[ -n $promotions && $scope != integration ]]; then
   # shellcheck disable=SC2086
   prefs=$(refs $promotions)
   # shellcheck disable=SC2086
@@ -250,18 +326,24 @@ if [[ -n $promotions ]]; then
     { name: "alfci-promotion-checks", target: "branch", enforcement: "active", bypass_actors: [],
       conditions: { ref_name: { include: $inc, exclude: [] } },
       rules: [ {type: "required_status_checks", parameters: { strict_required_status_checks_policy: false, required_status_checks: $checks }} ] }')")
+  # ff: promotions are pushes, so only bypass actors may update. pr: the pull_request rule already
+  # confines changes to PRs that pass the required checks; an `update` rule on top would block every
+  # promotion merge when nobody bypasses (strict profile) or the merge is autonomous (PLAN-007 G3).
+  access_rule='[{"type":"update","parameters":{"update_allows_fetch_and_merge":false}}]'
   pr_rule='[]'
   if [[ $(ci_config PROMOTION_MODE ff) == pr ]]; then
+    access_rule='[]'
     pr_rule=$(jq -nc --argjson n "$papprovals" '[{type: "pull_request", parameters: { required_approving_review_count: $n,
       dismiss_stale_reviews_on_push: true, require_code_owner_review: false, require_last_push_approval: false, required_review_thread_resolution: false }}]')
   fi
-  sets+=("$(jq -n --argjson inc "$prefs" --argjson bypass "$admin_bypass" --argjson pr "$pr_rule" '
+  sets+=("$(jq -n --argjson inc "$prefs" --argjson bypass "$admin_bypass" --argjson pr "$pr_rule" --argjson access "$access_rule" '
     { name: "alfci-promotion-access", target: "branch", enforcement: "active", bypass_actors: $bypass,
       conditions: { ref_name: { include: $inc, exclude: [] } },
-      rules: ([ {type: "deletion"}, {type: "non_fast_forward"}, {type: "update", parameters: {update_allows_fetch_and_merge: false}} ] + $pr) }')")
+      rules: ([ {type: "deletion"}, {type: "non_fast_forward"} ] + $access + $pr) }')")
 fi
 
-settings=$(jq -n --argjson auto "$([[ -n $(ci_list SHIP_AUTONOMOUS_BRANCHES "") ]] && echo true || echo false)" \
+# Auto-merge on green is on whenever agents may merge (autoship into dev, autopromote into staging).
+settings=$(jq -n --argjson auto "$([[ -n "$(ci_list SHIP_AUTONOMOUS_BRANCHES "")$(ci_list PROMOTION_AUTONOMOUS "")" ]] && echo true || echo false)" \
   '{allow_auto_merge: $auto, delete_branch_on_merge: true}')
 
 if [[ $check == 1 ]]; then
@@ -274,12 +356,21 @@ if [[ $check == 1 ]]; then
   [[ -n $repo_live ]] || { echo "rulesets: cannot read live repo settings: empty response" >&2; exit 2; }
   jq -e . >/dev/null 2>&1 <<<"$live" || { echo "rulesets: cannot read live rulesets: invalid JSON" >&2; exit 2; }
   jq -e . >/dev/null 2>&1 <<<"$repo_live" || { echo "rulesets: cannot read live repo settings: invalid JSON" >&2; exit 2; }
-  # The list call returns complete rulesets (same schema as Get; verified against the
-  # REST reference for "Get all repository rulesets"), so no per-id GETs are needed.
+  # The list call returns summaries only (id, name, target, enforcement, …: no rules,
+  # conditions or bypass_actors), so each alfci-* ruleset is read in full by id (#44).
   # Server-added keys, present in GET but never in PUT/POST payloads, ignored here:
   # id, node_id, source, source_type, current_user_can_bypass, _links, created_at, updated_at.
+  full='[]'
+  while IFS= read -r rs_id; do
+    [[ -n $rs_id ]] || continue
+    one=$(gh api "repos/{owner}/{repo}/rulesets/$rs_id" 2>&1) \
+      || { echo "rulesets: cannot read live ruleset $rs_id: $one" >&2; exit 2; }
+    jq -e 'type == "object"' >/dev/null 2>&1 <<<"$one" \
+      || { echo "rulesets: cannot read live ruleset $rs_id: invalid JSON" >&2; exit 2; }
+    full=$(jq -c --argjson one "$one" '. + [$one]' <<<"$full")
+  done < <(jq -r '.[] | select((.name // "") | startswith("alfci-")) | .id // empty' <<<"$live")
   cmp=$(jq -n --argjson desired "$(printf '%s\n' "${sets[@]}" | jq -sc .)" \
-      --argjson live "$live" --argjson settings "$settings" --argjson repo "$repo_live" '
+      --argjson live "$live" --argjson full "$full" --argjson settings "$settings" --argjson repo "$repo_live" '
     def norm_rs: { name: .name, enforcement: .enforcement,
       conditions: {ref_name: { include: ((.conditions.ref_name.include // []) | sort),
                                 exclude: ((.conditions.ref_name.exclude // []) | sort)}},
@@ -291,17 +382,21 @@ if [[ $check == 1 ]]; then
         | {type, parameters}
         | if .parameters == null or .parameters == {} then del(.parameters) else . end]
         | sort_by(.type)) };
+    # GitHub drops false-default parameters (update_allows_fetch_and_merge: false) from what
+    # it stores (#44): a desired false matches a missing live value (and a missing object).
     def project($d; $l): ($d | type) as $t
       | if $t == "object" then
-          if ($l | type) != "object" then $l
+          if $l == null then project($d; {})
+          elif ($l | type) != "object" then $l
           else reduce ($d | keys_unsorted[]) as $k ({}; .[$k] = project($d[$k]; $l[$k])) end
         elif $t == "array" then
           if ($l | type) != "array" or (($l | length) != ($d | length)) then $l
           else [range(0; ($d | length)) as $i | project($d[$i]; $l[$i])] end
+        elif $d == false and $l == null then false
         else $l end;
     ($desired | map(norm_rs) | sort_by(.name)) as $dn
     | ($dn | map(.name)) as $names
-    | ([$live[] | select(.name as $n | $names | index($n)) | norm_rs] | sort_by(.name)) as $ln
+    | ([$full[] | select(.name as $n | $names | index($n)) | norm_rs] | sort_by(.name)) as $ln
     | project($dn; $ln) as $proj
     | {drift: ($proj != $dn),
        rulesets: [$dn[] as $d | {name: $d.name, status:

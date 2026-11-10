@@ -2,7 +2,7 @@ ignore: |
   .github/actions/
   templates/github/actions/
 # Consumer yamllint profile (inherited from aidoc-flow-ci v4, PLAN-015 M4). Read by the
-# aidoc-local-flow-ci `yaml` check (task check / task ci).
+# aidoc-hybrid-ci `yaml` check (task check / task ci).
 #
 # WHY this ships: without a config, yamllint runs its 80-char default, which
 # floods SDD YAML — BRD/PRD/IPLAN artifacts author long natural-language prose in

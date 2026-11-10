@@ -1,7 +1,6 @@
 # AGENTS.md — working agreement for AI coding agents on Engramory
 
 This file orients any AI agent (Claude Code, Codex, Hermes, custom) working on this repo.
-`CLAUDE.md` points here so all agents share one source of truth.
 
 ## What Engramory is
 
@@ -41,10 +40,10 @@ implementing decisions go in `sdd/05_ADR/`; conceptual/descriptive records live
 in `docs/adr/`.
 
 <!-- agents-canon:begin -->
-<!-- managed by aidoc-flow-agents-config — edits inside this block are overwritten on deploy -->
-## Agent working agreement (aidoc-flow-agents-config)
+<!-- managed by aiops-harness (aidoc-flow-agents-config) — edits inside this block are overwritten on deploy -->
+## Agent working agreement (aiops-harness / aidoc-flow-agents-config)
 
-This repository follows canonical AI agent rules, skills, and governance deployed from **aidoc-flow-agents-config**.
+This repository follows canonical AI agent rules, skills, and governance deployed from **aiops-harness** (`$AIOPS_HARNESS_ROOT/.agents`, consolidating `aidoc-flow-agents-config`). `AGENTS.md` is the single authoritative agent instruction file (`CLAUDE.md` is deprecated and forbidden).
 
 ### Operating rules
 
@@ -59,10 +58,10 @@ This repository follows canonical AI agent rules, skills, and governance deploye
 <!-- agents-canon:end -->
 
 <!-- aidoc-local-flow-ci:begin -->
-<!-- managed by aidoc-local-flow-ci 1.1.0-rc.2 — edits inside this block are overwritten by .ci/bin/update -->
-## CI protocol (aidoc-hybrid-ci)
+<!-- managed by aidoc-local-flow-ci 1.1.0 — edits inside this block are overwritten by .ci/bin/update -->
+## CI protocol (aiops-harness / aidoc-hybrid-ci)
 
-This repository uses the **aidoc-hybrid-ci** hybrid CI framework. Commands, output format and
+This repository uses the **aiops-harness** hybrid CI framework (`$AIOPS_HARNESS_ROOT/.ci`, consolidating `aidoc-hybrid-ci`). Commands, output format and
 rules are identical in every repository and every language. Follow this protocol exactly.
 
 ### Commands
@@ -99,13 +98,13 @@ rules are identical in every repository and every language. Follow this protocol
 3. `task ci` → on failure: read `summary.json`, open the failing log, fix the **root cause**, re-run.
 4. If the same check still fails after **3 genuine fix attempts**: stop. Report the failing check,
    the relevant log excerpt, your hypotheses and what you tried. Do not keep guessing.
-5. Self-review (when `.ci-config` has `REVIEW=required`): commit, then `task review -- --issue <N>`
-   (or `--requirements <committed file>`). The reviewer is independent: never paste your reasoning into
-   the requirements. `REVISE` → fix the findings, commit, review again. `BLOCK` (or the round cap) →
-   stop and report the dissent to the human. Read results with `task review -- --status`.
-   Otherwise, if `AUDIT_TRAIL=required`: the pushed commits need one whose body contains
-   `Multi-agent self-review per OPS-0065 (<agents>): <verdict summary>`. Never write the founder-override
-   phrase (`Self-review skipped per founder OK`) unless the human explicitly authorized it in this session.
+5. Author audit & self-review: run `author-self-review` skill + `task check` before committing.
+   When `.ci-config` has `REVIEW=required`: commit, then `task review -- --issue <N>` (or
+   `--requirements <file>`). Pass 0 runs static heuristics before Pass 1/2. Reviewer is independent:
+   never paste reasoning into requirements. `REVISE` → fix & review; `BLOCK` → stop & report.
+   Otherwise, if `AUDIT_TRAIL=required`: pushed commits need `Multi-agent self-review per OPS-0065
+   (<agents>): <verdict summary>`. Never write founder-override (`Self-review skipped per founder OK`)
+   unless the human explicitly authorized it in this session. Read status: `task review -- --status`.
 6. Done = `task ci` passes (and `task review` is PASS when required). Report "ready to ship" with:
    what changed, why, tests added, and any `warnings`. Then request `task ship` (a human approves it),
    or run `task autoship` where autonomous merging is allowed. After the merge: `task cleanup -- <branch>`.
@@ -132,11 +131,11 @@ commits, never force-push.
 
 ### Hard rules
 
-- Always follow platform standards based on the approved technology stack (`~/devd/technology_stack`).
+- Always follow platform standards based on the approved technology stack (`technology-stack` canon; local checkout at `$TECHNOLOGY_STACK_ROOT`).
   Do not offer or use insecure, deprecated, or unapproved options (such as open public ports without
-  Tailscale / Cloudflare tunnels, unauthenticated Docker socket mounts without `docker-socket-proxy`,
+  NetBird mesh / Cloudflare tunnels, unauthenticated Docker socket mounts without `docker-socket-proxy`,
   un-sandboxed untrusted execution outside gVisor `runsc`, or in-memory mock databases instead of real PostgreSQL).
-  All templates and tooling must be verified against `~/devd/technology_stack`. If a required tool or
+  All templates and tooling must be verified against that technology stack checkout. If a required tool or
   library is missing from the technology stack, you MUST explicitly halt, inform the operator, and request
   instructions on what tool or software to use before proceeding.
 - Never bypass hooks or checks: no `--no-verify`, `git commit -n`, `LEFTHOOK=0`, `SKIP=`,
@@ -144,7 +143,7 @@ commits, never force-push.
 - Never edit `.ci/` (vendored framework, integrity-checked by `task doctor`).
 - Never weaken checks: do not edit `Taskfile.yml`, `.ci-config`, `.ci-local/`, `lefthook.yml`, `mise.toml`,
   `.github/`, `AGENTS.md`, linter/type/coverage configs or thresholds unless the task explicitly asks for it.
-- Use only tools from the approved technology stack (`~/devd/technology_stack`,
+- Use only tools from the approved technology stack (`$TECHNOLOGY_STACK_ROOT`,
   authoritative list: `09-authoritative-platform-technology-stack.md`). Never offer or use insecure
   options. If a needed tool is missing from the stack, stop and ask the operator what tool or
   software to use — never substitute an unapproved tool on your own. In autonomous sessions,
@@ -161,8 +160,11 @@ commits, never force-push.
   observed green (gitea) once the required checks are green — you still never merge by hand.
 - Never force-push (`--force`, `--force-with-lease`, `+refspec`) or rewrite pushed history.
 - Never write real credentials anywhere in the repository.
+- Name branches `feature/<topic>` or `fix/<topic>`: integration PRs are accepted only from `feature/*`,
+  `fix/*`, `dependabot/*`, `renovate/*` and the `staging` back-merge (`chore/`, `docs/`, `ci/` are refused;
+  `task ship` and `task review` check it before pushing).
 - When working in parallel with other agents, use your own git worktree
-  (`git worktree add ../<repo>-<task> -b <branch>`), then run `task setup` there.
+  (`git worktree add ../<repo>-<task> -b feature/<task>`), then run `task setup` there.
 <!-- aidoc-local-flow-ci:end -->
 
 ## Per-repo governance — where state lives
@@ -171,7 +173,8 @@ commits, never force-push.
 |---|---|
 | Handoff | Not adopted — GitHub issues + `plans/NAME-PLAN.md` |
 | TODO / backlog | Not adopted — GitHub issues |
-| Decisions | sdd/05_ADR/ |
+| Decisions | docs/sdd/05_ADR/ |
 | Plans | plans/ |
-| Changelog | CHANGELOG.md + docs/sdd/09_CHG/archive/ |
+| Changelog | Not adopted — GitHub Releases + docs/sdd/09_CHG/archive/ |
 | Roadmap | Not adopted — GitHub Milestones / Issues + `plans/*-PLAN.md` |
+| SDD Graph | `docs/sdd/graph/` (native property-graph slices; validated via `task sdd:graph-check`) |

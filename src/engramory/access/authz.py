@@ -30,6 +30,8 @@ KNOWN_ACTIONS = frozenset(
         "docs_check_drift",
         "docs_export_llms",
         "docs_smoke_run",
+        "docs_tools_inventory",
+        "docs_build_portal",
         "sdd_ingest",
         "sdd_validate_graph",
         "sdd_check_invariants",

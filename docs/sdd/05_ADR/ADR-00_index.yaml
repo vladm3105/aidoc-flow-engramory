@@ -1,18 +1,20 @@
 # ADR-00_index.template.yaml — Architecture Decision Records & Technology Stack Registry
 # SDD Layer 5 — Architectural decision catalog and active project technology registry
+# @ears: EARS.01.01.a001
+# @bdd: BDD.01.01.a001
 #
 # Index template for new projects. Copy to docs/sdd/05_ADR/ADR-00_index.yaml.
 # Updated every time an ADR is created, approved, deprecated, or superseded.
 
 metadata:
   schema_version: "1.0"
-  framework_version: "0.96.4"
+  framework_version: "0.96.25"
   document_type: "adr-registry"
   artifact_type: "ADR-INDEX"
   layer: 5
   total_adrs: 1
   total_technologies: 8
-  last_updated: "2026-10-18"
+  last_updated: "2026-11-09"
 
 # =============================================================================
 # Architecture Decision Records Registry

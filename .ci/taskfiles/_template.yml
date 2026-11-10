@@ -1,5 +1,5 @@
-# aidoc-local-flow-ci language module TEMPLATE — copy to .ci-local/taskfiles/<lang>.yml in a consumer
-# repo (or to ci/taskfiles/<lang>.yml in aidoc-local-flow-ci to make it canonical).
+# aidoc-hybrid-ci language module TEMPLATE — copy to .ci-local/taskfiles/<lang>.yml in a consumer
+# repo (or to ci/taskfiles/<lang>.yml in aidoc-hybrid-ci to make it canonical).
 #
 # Contract (canon: https://github.com/vladm3105/aidoc-hybrid-ci/blob/main/docs/STANDARD.md#32-language-module-contract-citaskfileslangyml-ci-localtaskfileslangyml §3.2)
 # — every module implements ALL eight tasks:

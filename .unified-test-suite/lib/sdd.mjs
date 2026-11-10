@@ -317,6 +317,13 @@ export function sddLint({ layer, reportDir, mode: modeArg } = {}) {
   }
   const errors = findings.filter((f) => f.severity === 'error');
   const warnings = findings.filter((f) => f.severity !== 'error');
+  // A linter that could not run, was killed, or failed without an error finding verified nothing:
+  // report infrastructure failure instead of writing passing document testcases.
+  if (r.error || r.signal || (r.status !== 0 && !errors.length)) {
+    const why = r.error ? `could not run (${r.error.message})` : r.signal ? `was killed by ${r.signal}` : `exited ${r.status} without any error finding`;
+    console.error(`INFRA: sdd_doc_lint ${why}`);
+    return 3;
+  }
   const cases = [];
   const norm = (f) => normFile(f);
   for (const f of errors) {
