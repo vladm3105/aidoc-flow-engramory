@@ -75,6 +75,7 @@ gateway is the authenticated production face and arrives in a later cycle.
 | Doc | Purpose |
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Target architecture, portability matrix, build roadmap |
+| [docs/MULTIMODAL_AND_POSTGRES_BLOB_STORAGE.md](docs/MULTIMODAL_AND_POSTGRES_BLOB_STORAGE.md) | Multimodal ingestion (text, images, audio, `20 GB+` video), PostgreSQL 18 Chunked Blob CAS (`ts_blob_cold`), and Neo4j dual-engine graph architecture (`Rule D14a`/`D14b`, `Decision D17`) |
 | [docs/doc-tools/00_INDEX.md](docs/doc-tools/00_INDEX.md) | AI-first documentation, executable runbooks, drift & `llms.txt` toolchain (`engramory docs`) |
 | [docs/CORES.md](docs/CORES.md) | The two bounded cores (Memory & Knowledge), their boundary, and the shared spine |
 | [docs/STRATEGY.md](docs/STRATEGY.md) | Build strategy & recommendation (build the plane, adopt the engine, lead with evaluation) |
