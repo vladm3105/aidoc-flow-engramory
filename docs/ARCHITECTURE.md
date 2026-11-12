@@ -1,3 +1,19 @@
+---
+id: DOC-ENGRAMORY-ARCHITECTURE
+title: "Engramory Target Architecture & Portability Matrix"
+kind: architecture
+domain: knowledge-core
+namespace: aidoc
+status: active
+autonomy_tier: green
+watched_paths:
+  - "src/engramory/ports/storage.py"
+  - "src/engramory/ports/graph.py"
+  - "src/engramory/ports/vector.py"
+  - "db/migrations/0001_init_memory.sql"
+last_verified: "2026-11-12"
+---
+
 # Engramory — Target Architecture
 
 ## Shared Agent Knowledge & Memory Operating System
@@ -71,9 +87,9 @@ Engramory is designed **agent-first**:
                         │ adapters          │ adapters          │ adapters
                 ┌───────▼──────┐    ┌───────▼───────┐   ┌───────▼──────────┐
                 │  SELF-HOSTED │    │     GCP       │   │     AZURE        │
-                │  Postgres 16 │    │ Cloud SQL /   │   │ Azure DB Flex    │
+                │  Postgres 18 │    │ Cloud SQL /   │   │ Azure DB Flex    │
                 │  + pgvector  │    │ AlloyDB       │   │ (pgvector)       │
-                │  MinIO/Redis │    │ GCS / Vertex  │   │ Blob / OpenAI    │
+                │  PG-CAS/OCI  │    │ GCS / Vertex  │   │ Blob / OpenAI    │
                 └──────────────┘    └───────────────┘   └──────────────────┘
 ```
 
@@ -89,9 +105,9 @@ Each capability is accessed through a port; here are the adapters per environmen
 
 | Capability (Port) | Self-hosted dev (free/OSS) | GCP | Azure |
 |---|---|---|---|
-| **Relational + Vector** (`VectorPort`) | PostgreSQL 16 + **pgvector** (Docker) | Cloud SQL / **AlloyDB** for PostgreSQL (pgvector) | Azure Database for PostgreSQL Flexible Server (pgvector) |
-| **Graph** (`GraphPort`) | **pure Postgres** (edge tables + recursive CTE) for simple needs; **Neo4j Community** (Docker) when real graph is needed | **Neo4j Aura** (managed, on GCP) or pure-Postgres | **Neo4j Aura** (managed, on Azure) or managed Apache AGE |
-| **Object storage** (`StoragePort`) | **MinIO** (S3-compatible) | Cloud Storage (GCS) | Azure Blob Storage |
+| **Relational + Vector** (`VectorPort`) | **PostgreSQL 18** + **pgvector** (Docker) | Cloud SQL / **AlloyDB** for PostgreSQL (pgvector) | Azure Database for PostgreSQL Flexible Server (pgvector) |
+| **Graph** (`GraphPort`, `Decision D17`) | **PostgreSQL 18** (canonical entities/edges + `1–2` hop CTEs) + **Neo4j 5.26 Community** (`Adopt`, `stage-neo4j` / Docker) as needed for multi-hop Cypher, lineage & GraphRAG | **Neo4j Aura** (managed, on GCP) or pure-Postgres | **Neo4j Aura** (managed, on Azure) or managed Apache AGE |
+| **Object & Multimodal Blob storage** (`StoragePort`, `Rule D14a`/`D14b`) | **PostgreSQL 18 Chunked Blob CAS (`PgBlobStorageAdapter` in `TABLESPACE ts_blob_cold` up to `20 GB+`)** or **OCI Object Storage** (`LocalFsBackend` for offline tests; see [MULTIMODAL_AND_POSTGRES_BLOB_STORAGE.md](MULTIMODAL_AND_POSTGRES_BLOB_STORAGE.md)) | Cloud Storage (GCS) or AlloyDB / Cloud SQL Chunked Blob CAS | Azure Blob Storage or Flexible Server Chunked Blob CAS |
 | **Cache / session L1** (`CachePort`) | Redis (Docker) | Memorystore for Redis | Azure Cache for Redis |
 | **LLM + embeddings** (`LLMPort`) | **LiteLLM → Ollama** (local models) | LiteLLM → **Vertex AI Model Garden** | LiteLLM → **Azure OpenAI / AI Foundry** |
 | **Secrets** (`SecretsPort`) | Docker env / SOPS / Infisical | Secret Manager | Azure Key Vault |
@@ -343,7 +359,7 @@ A common point of confusion is whether Engramory requires external RAG framework
 
 | Phase | Goal | Key work | Outcome |
 |---|---|---|---|
-| **0 — Dev foundation** | Cheap self-hosted base | Docker Compose: Postgres(pgvector) · Redis · MinIO · LiteLLM+Ollama · Keycloak · MCP gateway · worker. Define all Ports. | Free local platform, portable by construction |
+| **0 — Dev foundation** | Cheap self-hosted base | Docker Compose: PostgreSQL 18 (`pgvector` + `ts_blob_cold` Chunked Blob CAS) · Valkey/Redis · LiteLLM+Ollama · Neo4j 5.26 (`GraphPort`) · Authentik · MCP gateway · worker. Define all Ports. | Free local platform, portable by construction |
 | **1 — Consolidate** | One platform | Port RAC's MCP tools/parsers onto the unified core; RAC becomes the **per-project domain-config layer** (each project = one config; Trading is just one example); everything behind Ports | RAC + Nexus merged, no stack duplication |
 | **2 — Cognition** | Per-agent cognition | `agent_id` scoping; L1/L2/L3 schema; reflection + consolidation workers; wire LangMem/Cipher via `MemoryPort` | Per-agent distilled, endless memory |
 | **3 — Cloud migration** | GCP or Azure | Swap adapters (managed Postgres, Redis, object store, model endpoint, secrets, identity); IaC; `pg_dump`+object copy; re-embed if model changes | Same app, cloud-native, data intact |
@@ -364,10 +380,10 @@ Phases 0–2 are entirely free/self-hosted. Phase 3 is a **configuration + adapt
 
 ## Recommended dev stack (Phase 0 docker-compose)
 
-Provisioned in `docker-compose.yml` **today:** `postgres` (pgvector) · `redis` · `minio` · `ghcr.io/berriai/litellm` + `ollama` · `neo4j` · `keycloak` · `mcp-gateway` · `worker` (reflection/consolidation). Optional observability (`grafana`+`loki`+`tempo`) connects via OTel (`docs/OBSERVABILITY.md`).
+Provisioned in `docker-compose.yml` **today:** `postgres` (PostgreSQL 18 + `pgvector` + `ts_blob_cold` Chunked Blob CAS) · `valkey`/`redis` · `ghcr.io/berriai/litellm` + `ollama` · `neo4j` (`neo4j:5.26-community`, `Decision D17`) · `authentik` · `mcp-gateway` · `worker` (reflection/consolidation). Optional observability connects via OTel (`docs/OBSERVABILITY.md`).
 
 All open-source, all free, all with a documented GCP **and** Azure adapter for later. Start here; the cloud is a swap, not a rebuild.
 
 ---
 
-*Companion docs: [MEMORY_DESIGN.md](MEMORY_DESIGN.md), [research/NEXUS_V3_REVIEW.md](research/NEXUS_V3_REVIEW.md), [research/RAC_REVIEW.md](research/RAC_REVIEW.md), [research/MEMORY_LANDSCAPE.md](research/MEMORY_LANDSCAPE.md), [research/MEMORY_CONCEPT_REVIEW.md](research/MEMORY_CONCEPT_REVIEW.md). Cloud-service mappings should be re-verified at migration time as managed offerings change.*
+*Companion docs: [MULTIMODAL_AND_POSTGRES_BLOB_STORAGE.md](MULTIMODAL_AND_POSTGRES_BLOB_STORAGE.md), [MEMORY_DESIGN.md](MEMORY_DESIGN.md), [research/NEXUS_V3_REVIEW.md](research/NEXUS_V3_REVIEW.md), [research/RAC_REVIEW.md](research/RAC_REVIEW.md), [research/MEMORY_LANDSCAPE.md](research/MEMORY_LANDSCAPE.md), [research/MEMORY_CONCEPT_REVIEW.md](research/MEMORY_CONCEPT_REVIEW.md). Cloud-service mappings should be re-verified at migration time as managed offerings change.*
