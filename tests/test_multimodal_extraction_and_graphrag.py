@@ -661,3 +661,103 @@ async def test_virtual_employee_spaces_and_department_focus() -> None:
     assert get_mem_kwargs["project_id"] == "erp-core"
     assert get_mem_kwargs["domain_id"] == "billing"
     assert get_mem_kwargs["scopes"] == ("agent", "project", "domain", "space")
+
+
+@pytest.mark.asyncio
+async def test_portable_virtual_employee_brain_export_and_cross_tenant_import() -> None:
+    from engramory.core.models import AgentProfile, Memory
+    from engramory.mcp.server import McpServer
+
+    mock_repo = AsyncMock()
+    mock_repo.get_agent_profile.return_value = AgentProfile(
+        agent_id="support-billing-01",
+        display_name="Billing Specialist #1",
+        standing_preferences={
+            "department_focus": "billing",
+            "escalation_contact": "ops@acme-corp.internal",
+        },
+        tenant_id="tenant-acme",
+    )
+    mock_repo.get_memories.return_value = [
+        Memory(
+            id="mem-skill-1",
+            content_raw=(
+                "On tenant-acme project acme-payments, when Stripe webhook "
+                "550e8400-e29b-41d4-a716-446655440000 from "
+                "https://billing.acme-corp.internal/hook (10.24.1.99:8443) "
+                "fails for alice@acme-corp.com, verify Clock Skew tolerance <= 300s "
+                "and idempotency key header."
+            ),
+            summary=(
+                "For tenant-acme acme-payments webhook errors reported by alice@acme-corp.com, "
+                "verify Clock Skew tolerance <= 300s and idempotency key header."
+            ),
+            type="procedural",
+            embedding_model="text-embedding-3-small",
+            agent_id="support-billing-01",
+            project_id="acme-payments",
+            domain_id="billing",
+            tenant_id="tenant-acme",
+            scope="agent",
+            confidence=0.91,
+            provenance={"episode_id": "ep-secret-acme-1", "trace_id": "trace-acme-99"},
+        )
+    ]
+    mock_repo.upsert_memory.return_value = "mem-globex-1"
+
+    surface = AccessSurface(mock_repo, graph=None, llm=None)
+    source_ctx = ActorContext(
+        agent_id="support-billing-01",
+        project_id="acme-payments",
+        tenant_id="tenant-acme",
+        domain_id="billing",
+        scopes=frozenset({"agent", "project", "domain", "space"}),
+    )
+
+    # 1. Export portable brain passport from Tenant A ('tenant-acme') with sensitive data scrubbed
+    passport = await surface.agent_brain_export(
+        source_ctx,
+        domain_id="billing",
+        min_confidence=0.7,
+        redact_terms=["Acme Corp"],
+    )
+    assert passport["schema_version"] == "engramory.brain_passport.v1"
+    assert passport["skills_exported"] == 1
+    assert passport["total_redactions"] >= 6
+    skill = passport["skills"][0]
+    assert "tenant-acme" not in skill["summary"]
+    assert "acme-payments" not in skill["summary"]
+    assert "alice@acme-corp.com" not in skill["summary"]
+    assert "10.24.1.99" not in skill["content_raw"]
+    assert "https://billing.acme-corp.internal" not in skill["content_raw"]
+    assert "550e8400-e29b-41d4-a716-446655440000" not in skill["content_raw"]
+    assert "Clock Skew tolerance <= 300s" in skill["summary"]
+    assert "ops@acme-corp.internal" not in passport["standing_preferences"]["escalation_contact"]
+
+    # 2. Assign/import the sanitized specialist brain into Tenant B ('tenant-globex') via MCP
+    target_ctx = ActorContext(
+        agent_id="support-billing-01",
+        project_id="globex-billing",
+        tenant_id="tenant-globex",
+        domain_id="billing",
+        scopes=frozenset({"agent", "project", "domain"}),
+    )
+    mcp = McpServer(surface, target_ctx)
+    mcp_res = await mcp.handle_call_tool(
+        "agent_brain_import",
+        {
+            "passport": passport,
+            "evidence_ref": "CHG-008-SPECIALIST-TRANSFER",
+        },
+    )
+    import_payload = json.loads(mcp_res["content"][0]["text"])
+    assert import_payload["tenant_id"] == "tenant-globex"
+    assert import_payload["agent_id"] == "support-billing-01"
+    assert import_payload["skills_imported"] == 1
+    imported_mem: Memory = mock_repo.upsert_memory.call_args.args[0]
+    assert imported_mem.tenant_id == "tenant-globex"
+    assert imported_mem.agent_id == "support-billing-01"
+    assert imported_mem.project_id is None  # reusable across all projects in tenant-globex
+    assert imported_mem.domain_id == "billing"
+    assert "episode_id" not in imported_mem.provenance
+    assert imported_mem.provenance["source"] == "portable_brain_passport"

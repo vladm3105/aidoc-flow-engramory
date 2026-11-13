@@ -21,6 +21,8 @@ KNOWN_ACTIONS = frozenset(
         "memory_ingest_event",
         "memory_learning_health",
         "agent_profile_get",
+        "agent_brain_export",
+        "agent_brain_import",
         "knowledge_ingest",
         "knowledge_ingest_media",
         "knowledge_search",

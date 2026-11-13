@@ -661,6 +661,50 @@ def _cmd_profile_get(args: argparse.Namespace) -> int:
     return _run_with_surface(args, op, lambda p: f"{p['agent_id']} ({p['display_name']})")
 
 
+def _cmd_profile_export_brain(args: argparse.Namespace) -> int:
+    async def op(surface: AccessSurface, ctx: ActorContext) -> dict[str, Any]:
+        bundle = await surface.agent_brain_export(
+            ctx,
+            domain_id=getattr(args, "domain_id", None),
+            min_confidence=float(getattr(args, "min_confidence", 0.5)),
+            redact_terms=list(getattr(args, "redact_term", None) or []),
+        )
+        out_file = getattr(args, "out", None)
+        if out_file:
+            out_path = Path(out_file)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(json.dumps(bundle, indent=2), encoding="utf-8")
+        return bundle
+
+    return _run_with_surface(
+        args,
+        op,
+        lambda p: f"exported {p['skills_exported']} portable skill(s) for {p['agent_id']}",
+    )
+
+
+def _cmd_profile_import_brain(args: argparse.Namespace) -> int:
+    bundle_path = Path(args.file)
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+
+    async def op(surface: AccessSurface, ctx: ActorContext) -> dict[str, Any]:
+        return await surface.agent_brain_import(
+            ctx,
+            passport=bundle,
+            evidence_ref=args.evidence_ref,
+            target_domain_id=getattr(args, "domain_id", None),
+        )
+
+    return _run_with_surface(
+        args,
+        op,
+        lambda p: (
+            f"imported {p['skills_imported']} portable skill(s) into "
+            f"{p['tenant_id']}/{p['agent_id']}"
+        ),
+    )
+
+
 def _cmd_graph_reproject(args: argparse.Namespace) -> int:
     """Rebuild all graph projections from PostgreSQL into Neo4j (ADR-01/03/05)."""
     config = _load_config(getattr(args, "config", None))
@@ -1132,10 +1176,40 @@ def _build_parser() -> argparse.ArgumentParser:
     p_learn_health.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     p_learn_health.set_defaults(func=_cmd_memory_learning_health)
 
-    p_profile = sub.add_parser("profile", help="L3 identity")
+    p_profile = sub.add_parser("profile", help="L3 identity and portable virtual employee brain")
     prof_sub = p_profile.add_subparsers(dest="profile_command", required=True)
     p_pget = prof_sub.add_parser("get", help="load the caller's own profile")
     p_pget.set_defaults(func=_cmd_profile_get)
+
+    p_pexport = prof_sub.add_parser(
+        "export-brain",
+        help="export sanitized portable L3 profile + L2 agent-scoped skills for reassignment",
+    )
+    p_pexport.add_argument("--domain-id", default=None, help="optional domain/department filter")
+    p_pexport.add_argument(
+        "--min-confidence", type=float, default=0.5, help="minimum L2 skill confidence"
+    )
+    p_pexport.add_argument(
+        "--redact-term",
+        action="append",
+        default=[],
+        help="additional tenant/customer terms to scrub (repeatable)",
+    )
+    p_pexport.add_argument("--out", default=None, help="optional path to write JSON bundle")
+    p_pexport.set_defaults(func=_cmd_profile_export_brain)
+
+    p_pimport = prof_sub.add_parser(
+        "import-brain",
+        help="import a sanitized portable virtual employee brain passport into the target tenant",
+    )
+    p_pimport.add_argument("--file", required=True, help="path to exported JSON brain bundle")
+    p_pimport.add_argument(
+        "--evidence-ref", required=True, help="governed CHG/TICKET/STEWARD evidence reference"
+    )
+    p_pimport.add_argument(
+        "--domain-id", default=None, help="optional target domain/department override"
+    )
+    p_pimport.set_defaults(func=_cmd_profile_import_brain)
 
     p_knowledge = sub.add_parser("knowledge", aliases=["kb"], help="L0 knowledge tools")
     kb_sub = p_knowledge.add_subparsers(dest="knowledge_command", required=True)

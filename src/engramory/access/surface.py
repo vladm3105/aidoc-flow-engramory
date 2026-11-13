@@ -32,7 +32,11 @@ from pathlib import Path
 from typing import Any
 
 from engramory.access.authz import ActorContext, AuthzDecision, TargetScope, authorize
-from engramory.access.poisoning_guard import MemoryPoisoningError, inspect_memory_write
+from engramory.access.poisoning_guard import (
+    MemoryPoisoningError,
+    inspect_memory_write,
+    sanitize_portable_text,
+)
 from engramory.core.models import (
     AgentProfile,
     Episode,
@@ -516,6 +520,177 @@ class AccessSurface:
             if profile is not None
             else AgentProfile(agent_id=ctx.agent_id, tenant_id=ctx.tenant_id)
         )
+
+    async def agent_brain_export(
+        self,
+        ctx: ActorContext,
+        *,
+        domain_id: str | None = None,
+        min_confidence: float = 0.5,
+        redact_terms: Sequence[str] = (),
+    ) -> dict[str, Any]:
+        """Export a sanitized portable Virtual Employee Brain Passport (L3 profile + L2 skills).
+
+        Raw L1 episodes and tenant-specific L0/project data are never exported.
+        All exported L2 skill summaries/content are scrubbed of PII, secrets, URLs,
+        IPs, UUIDs, and source tenant/project identifiers.
+        """
+        await self._decide(
+            ctx, "agent_brain_export", TargetScope(tenant_id=ctx.tenant_id, scope="agent")
+        )
+        eff_domain = domain_id if domain_id is not None else ctx.domain_id
+        profile = await self.agent_profile_get(ctx)
+        memories = await self._repo.get_memories(
+            tenant_id=ctx.tenant_id,
+            agent_id=ctx.agent_id,
+            project_id=ctx.project_id,
+            domain_id=eff_domain,
+            k=MAX_K,
+            scopes=("agent",),
+        )
+        base_terms = [ctx.tenant_id, ctx.project_id, *redact_terms]
+        skills: list[dict[str, Any]] = []
+        total_redactions = 0
+        for mem in memories:
+            if mem.scope != "agent" or mem.confidence < min_confidence:
+                continue
+            if eff_domain is not None and mem.domain_id is not None and mem.domain_id != eff_domain:
+                continue
+            mem_terms = [*base_terms, *([mem.project_id] if mem.project_id else [])]
+            clean_summary, r_sum = sanitize_portable_text(mem.summary, redact_terms=mem_terms)
+            clean_raw, r_raw = sanitize_portable_text(mem.content_raw, redact_terms=mem_terms)
+            redactions = r_sum + r_raw
+            total_redactions += redactions
+            skills.append(
+                {
+                    "type": mem.type,
+                    "domain_id": mem.domain_id or eff_domain,
+                    "summary": clean_summary,
+                    "content_raw": clean_raw,
+                    "confidence": mem.confidence,
+                    "redactions_applied": redactions,
+                }
+            )
+        clean_prefs: dict[str, Any] = {}
+        for k, v in (profile.standing_preferences or {}).items():
+            if isinstance(v, str):
+                cv, r_pref = sanitize_portable_text(v, redact_terms=base_terms)
+                total_redactions += r_pref
+                clean_prefs[k] = cv
+            else:
+                clean_prefs[k] = v
+        return {
+            "schema_version": "engramory.brain_passport.v1",
+            "agent_id": ctx.agent_id,
+            "display_name": profile.display_name,
+            "domain_id": eff_domain,
+            "standing_preferences": clean_prefs,
+            "skills_exported": len(skills),
+            "total_redactions": total_redactions,
+            "skills": skills,
+        }
+
+    async def agent_brain_import(
+        self,
+        ctx: ActorContext,
+        *,
+        passport: Mapping[str, Any],
+        evidence_ref: str | None,
+        target_domain_id: str | None = None,
+        redact_terms: Sequence[str] = (),
+    ) -> dict[str, Any]:
+        """Governed import of a sanitized Virtual Employee Brain Passport into caller's tenant."""
+        from engramory.core.models import Memory
+
+        await self._decide(
+            ctx, "agent_brain_import", TargetScope(tenant_id=ctx.tenant_id, scope="agent")
+        )
+        if not evidence_ref:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="agent_brain_import",
+                allowed=False,
+                reason="missing_evidence_ref",
+            )
+            raise GovernedWriteRejected("agent_brain_import requires evidence_ref")
+
+        eff_domain = (
+            target_domain_id
+            or (str(passport["domain_id"]) if passport.get("domain_id") else None)
+            or ctx.domain_id
+        )
+        prefs = dict(passport.get("standing_preferences") or {})
+        if eff_domain and "department_focus" not in prefs:
+            prefs["department_focus"] = eff_domain
+        if hasattr(self._repo, "upsert_agent_profile"):
+            await self._repo.upsert_agent_profile(
+                AgentProfile(
+                    agent_id=ctx.agent_id,
+                    display_name=passport.get("display_name"),
+                    standing_preferences=prefs,
+                    tenant_id=ctx.tenant_id,
+                )
+            )
+
+        raw_skills = passport.get("skills") or []
+        memory_ids: list[str] = []
+        for idx, item in enumerate(raw_skills):
+            if not isinstance(item, Mapping):
+                continue
+            raw_sum = str(item.get("summary") or "").strip()
+            raw_content = str(item.get("content_raw") or raw_sum).strip()
+            if not raw_sum:
+                continue
+            clean_sum, _ = sanitize_portable_text(raw_sum, redact_terms=list(redact_terms))
+            clean_content, _ = sanitize_portable_text(raw_content, redact_terms=list(redact_terms))
+            vetted_sum = inspect_memory_write(
+                clean_sum,
+                tenant_id=ctx.tenant_id,
+                writer_agent_id=ctx.agent_id,
+                target=f"brain_import:{idx}",
+            )
+            vetted_content = inspect_memory_write(
+                clean_content,
+                tenant_id=ctx.tenant_id,
+                writer_agent_id=ctx.agent_id,
+                target=f"brain_import:{idx}",
+            )
+            m_type = str(item.get("type") or "procedural")
+            if m_type not in {"semantic", "episodic", "procedural"}:
+                m_type = "procedural"
+            conf = float(item.get("confidence", 0.7))
+            conf = max(0.0, min(1.0, conf))
+            mem = Memory(
+                content_raw=vetted_content,
+                summary=vetted_sum,
+                type=m_type,
+                embedding_model="none/portable-passport",
+                provenance={
+                    "source": "portable_brain_passport",
+                    "evidence_ref": evidence_ref,
+                    "source_agent_id": str(passport.get("agent_id") or "specialist"),
+                },
+                agent_id=ctx.agent_id,
+                project_id=None,
+                domain_id=str(item.get("domain_id") or eff_domain)
+                if (item.get("domain_id") or eff_domain)
+                else None,
+                tenant_id=ctx.tenant_id,
+                scope="agent",
+                confidence=conf,
+            )
+            mid = await self._repo.upsert_memory(mem)
+            memory_ids.append(mid)
+
+        return {
+            "agent_id": ctx.agent_id,
+            "tenant_id": ctx.tenant_id,
+            "domain_id": eff_domain,
+            "skills_imported": len(memory_ids),
+            "memory_ids": memory_ids,
+        }
 
     async def memory_ingest_event(
         self,

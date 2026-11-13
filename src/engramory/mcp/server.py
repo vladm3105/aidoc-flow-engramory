@@ -137,6 +137,57 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
+        "name": "agent_brain_export",
+        "description": (
+            "Export a sanitized portable Virtual Employee Brain Passport "
+            "(L3 profile + L2 skills with PII/secrets/tenant names scrubbed)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "domain_id": {
+                    "type": "string",
+                    "description": "Optional department/domain filter (e.g. billing)",
+                },
+                "min_confidence": {
+                    "type": "number",
+                    "description": "Minimum skill confidence threshold (0.0..1.0)",
+                    "default": 0.5,
+                },
+                "redact_terms": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Additional tenant/customer terms to scrub",
+                },
+            },
+        },
+    },
+    {
+        "name": "agent_brain_import",
+        "description": (
+            "Governed import of a sanitized Virtual Employee Brain Passport "
+            "into the caller's tenant and agent space."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "passport": {
+                    "type": "object",
+                    "description": "Portable brain passport JSON object",
+                },
+                "evidence_ref": {
+                    "type": "string",
+                    "description": "Approved governance evidence reference (ADR-06)",
+                },
+                "target_domain_id": {
+                    "type": "string",
+                    "description": "Optional target department/domain focus override",
+                },
+            },
+            "required": ["passport", "evidence_ref"],
+        },
+    },
+    {
         "name": "knowledge_ingest",
         "description": "Governed write of an SDD-artifact knowledge section (requires evidence).",
         "inputSchema": {
@@ -668,6 +719,28 @@ class McpServer:
                     "standing_preferences": dict(profile.standing_preferences),
                 }
                 return {"content": [{"type": "text", "text": json.dumps(data, indent=2)}]}
+
+            elif name == "agent_brain_export":
+                raw_redact = arguments.get("redact_terms", [])
+                redact_terms = (
+                    [str(x) for x in raw_redact if str(x)] if isinstance(raw_redact, list) else []
+                )
+                bundle = await self._surface.agent_brain_export(
+                    call_ctx,
+                    domain_id=arguments.get("domain_id"),
+                    min_confidence=float(arguments.get("min_confidence", 0.5)),
+                    redact_terms=redact_terms,
+                )
+                return {"content": [{"type": "text", "text": json.dumps(bundle, indent=2)}]}
+
+            elif name == "agent_brain_import":
+                imported = await self._surface.agent_brain_import(
+                    call_ctx,
+                    passport=dict(arguments["passport"]),
+                    evidence_ref=str(arguments["evidence_ref"]),
+                    target_domain_id=arguments.get("target_domain_id"),
+                )
+                return {"content": [{"type": "text", "text": json.dumps(imported, indent=2)}]}
 
             elif name == "knowledge_ingest":
                 sec_id = await self._surface.knowledge_ingest(
