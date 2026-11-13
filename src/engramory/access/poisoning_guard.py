@@ -56,6 +56,53 @@ _SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("secret_llm_api_key", re.compile(r"\bsk-(?:proj-|ant-)?[A-Za-z0-9_-]{24,255}\b")),
 ]
 
+_PORTABLE_REDACT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    *_SECRET_PATTERNS,
+    (
+        "[REDACTED_EMAIL]",
+        re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
+    ),
+    (
+        "[REDACTED_URL]",
+        re.compile(r"https?://[^\s)\"'>]+"),
+    ),
+    (
+        "[REDACTED_IP]",
+        re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?\b"),
+    ),
+    (
+        "[REDACTED_ID]",
+        re.compile(
+            r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
+        ),
+    ),
+]
+
+
+def sanitize_portable_text(
+    text: str, *, redact_terms: list[str] | tuple[str, ...] = ()
+) -> tuple[str, int]:
+    """Scrub secrets, emails, URLs, IPs, UUIDs, and tenant/project identifiers from portable skills.
+
+    Returns (sanitized_text, redaction_count).
+    """
+    cleaned = text
+    total_redactions = 0
+    for replacement, pattern in _PORTABLE_REDACT_PATTERNS:
+        label = replacement if replacement.startswith("[REDACTED_") else "[REDACTED_SECRET]"
+        cleaned, count = pattern.subn(label, cleaned)
+        total_redactions += count
+
+    for term in redact_terms:
+        norm = term.strip()
+        if len(norm) < 3 or norm.lower() in {"default", "dev", "prod", "stage", "agent", "project"}:
+            continue
+        term_re = re.compile(re.escape(norm), re.IGNORECASE)
+        cleaned, count = term_re.subn("[REDACTED_TENANT]", cleaned)
+        total_redactions += count
+
+    return cleaned, total_redactions
+
 
 class MemoryPoisoningError(PermissionError):
     """Raised when memory write fails OWASP ASI03 or platform poisoning checks."""
