@@ -1109,12 +1109,12 @@ def extract_knowledge_and_media_graph(
                     )
                 _add_rel(sec_node_id, target, "MENTIONS_ENTITY")
 
-            # Extract [[Concept]] wiki-style links
+            # Extract [[Concept]] wiki-style links (Unicode-aware for Russian / multilingual text)
             for match in _WIKI_CONCEPT_RE.finditer(sec.text):
                 raw_concept = match.group("concept").strip()
                 if not raw_concept:
                     continue
-                slug = re.sub(r"[^a-z0-9_]+", "-", raw_concept.lower()).strip("-")
+                slug = re.sub(r"[^\w]+", "-", raw_concept.lower()).strip("-")
                 if not slug:
                     continue
                 concept_id = f"concept:{slug}"
