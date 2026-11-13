@@ -3,7 +3,7 @@
 > **Status:** Implemented (v0.2.0 / CHG-009)  
 > **Date:** 2026-11-13  
 > **Owning Repository:** `platform-engramory`  
-> **Target Branch:** `feature/plan-024-virtual-employee-implementation-plan` -> `dev`  
+> **Target Branch:** `feature/plan-024-virtual-employee-hierarchy-and-portable-brain` -> `dev`  
 > **Governance Standard:** `aiops-harness` v0.2.0 (`verified-planning`, `SDD2C` — SDD-First & Documentation-First)  
 > **Upstream Normative Specifications:** `ADR-05` (`ADR-05_canonical_memory.yaml`), `ADR-06` (`ADR-06_governed_write_failclosed.yaml`), `ADR-07` (`ADR-07_scope_model.yaml`), `ADR-10` (`ADR-10_agent_facing_packaging.yaml`), `SPEC-01`, `SPEC-02`, `SPEC-03`, `SPEC-07`
 
@@ -262,11 +262,11 @@ Per the `aiops-harness` **SDD-First Mandate (`SDD2C`)**, update the governing SD
 | 7 | `Memory` frozen dataclass in `core/models.py` carries `content_raw`, `summary`, `type`, `embedding_model`, `provenance`, `agent_id`, `project_id`, `domain_id`, `tenant_id`, and `scope` | `class Memory:` | `src/engramory/core/models.py:116-137` |
 | 8 | `AgentProfile` frozen dataclass in `core/models.py` models L3 identity (`agent_id`, `display_name`, `standing_preferences`, `tenant_id`) | `class AgentProfile:` | `src/engramory/core/models.py:206-218` |
 | 9 | `AccessSurface.memory_search` in `access/surface.py` retrieves scoped L2 memories and fuses L0 `kb_sections` when `include_knowledge=True` | `async def memory_search(` | `src/engramory/access/surface.py:255-360` |
-| 10 | `AccessSurface.agent_profile_get` in `access/surface.py` loads the caller's L3 `AgentProfile` scoped by `(tenant_id, agent_id)` | `async def agent_profile_get(` | `src/engramory/access/surface.py:580-595` |
-| 11 | `AccessSurface.agent_brain_export` in `access/surface.py` exports sanitized L3 profile and L2 `scope='agent'` skills | `async def agent_brain_export(` | `src/engramory/access/surface.py:926-1045` |
-| 12 | `AccessSurface.agent_brain_import` in `access/surface.py` validates `evidence_ref` and imports sanitized portable skills into the caller's tenant | `async def agent_brain_import(` | `src/engramory/access/surface.py:1059-1335` |
-| 13 | `Repository.get_agent_profile` and `Repository.upsert_agent_profile` in `core/repository.py` read and write `agent_profiles` keyed by `(tenant_id, agent_id)` | `async def get_agent_profile(` | `src/engramory/core/repository.py:345-388` |
-| 14 | `Repository.get_memories` in `core/repository.py` enforces the 4-level `ADR-07` scope visibility SQL across `agent`, `project`, `domain`, and `space` | `async def get_memories(` | `src/engramory/core/repository.py:645-735` |
+| 10 | `AccessSurface.agent_profile_get` in `access/surface.py` loads the caller's L3 `AgentProfile` scoped by `(tenant_id, agent_id)` | `async def agent_profile_get(` | `src/engramory/access/surface.py:585-600` |
+| 11 | `AccessSurface.agent_brain_export` in `access/surface.py` exports sanitized L3 profile and L2 `scope='agent'` skills | `async def agent_brain_export(` | `src/engramory/access/surface.py:928-1050` |
+| 12 | `AccessSurface.agent_brain_import` in `access/surface.py` validates `evidence_ref` and imports sanitized portable skills into the caller's tenant | `async def agent_brain_import(` | `src/engramory/access/surface.py:1065-1350` |
+| 13 | `Repository.get_agent_profile` and `Repository.upsert_agent_profile` in `core/repository.py` read and write `agent_profiles` keyed by `(tenant_id, agent_id)` | `async def get_agent_profile(` | `src/engramory/core/repository.py:358-402` |
+| 14 | `Repository.get_memories` in `core/repository.py` enforces the 4-level `ADR-07` scope visibility SQL across `agent`, `project`, `domain`, and `space` | `async def get_memories(` | `src/engramory/core/repository.py:660-755` |
 | 15 | `reflect` in `workers/distillation.py` projects unreflected L1 episodes into L2 `Memory` rows preserving `domain_id` and `metadata['scope']` | `async def reflect(` | `src/engramory/workers/distillation.py:25-155` |
 | 16 | `McpServer._resolve_call_ctx` in `mcp/server.py` constructs a new `ActorContext` on `tenant_id`/`project_id` override while preserving `base.domain_id` | `def _resolve_call_ctx(` | `src/engramory/mcp/server.py:775-795` |
 | 17 | `_parse_config_text` and `_load_config` in `cli.py` construct `ActorContext` from `.engramory/config.toml` or environment variables | `def _parse_config_text(` | `src/engramory/cli.py:78-135` |
@@ -279,13 +279,13 @@ Per the `aiops-harness` **SDD-First Mandate (`SDD2C`)**, update the governing SD
 | 24 | `CHG-008_multimodal_rag_graphrag_and_blob_cas.yaml` is the predecessor Layer 09 change record (`CHG-008`) before `CHG-009` | `id: CHG-008` | `docs/sdd/09_CHG/CHG-008_multimodal_rag_graphrag_and_blob_cas.yaml:9-28` |
 | 25 | `NEW@pass2` `_SCOPE_CLAUSES` and `vector_literal` in `core/repository.py` define the 4-level `ADR-07` SQL predicates and `pgvector` literal formatting | `_SCOPE_CLAUSES = {` | `src/engramory/core/repository.py:43-89` |
 | 26 | `NEW@pass2` `Repository.upsert_memory` and `Repository.get_memory` in `core/repository.py` insert a `Memory` row with vector embedding support and fetch a single `Memory` by `(id, tenant_id)` | `async def upsert_memory(` | `src/engramory/core/repository.py:168-259` |
-| 27 | `NEW@pass2` `claims_to_actor_context` in `access/jwt_auth.py` maps verified OIDC `TokenClaims` to `ActorContext` including `domain_id` | `def claims_to_actor_context(` | `src/engramory/access/jwt_auth.py:187-239` |
-| 28 | `NEW@pass2` `create_http_server` in `mcp/server.py` constructs `ActorContext` from `X-Tenant-ID`/`X-Project-ID`/`X-Domain-ID` headers in dev mode | `tenant_hdr = self.headers.get("X-Tenant-ID")` | `src/engramory/mcp/server.py:1525-1535` |
+| 27 | `NEW@pass2` `claims_to_actor_context` in `access/jwt_auth.py` maps verified OIDC `TokenClaims` to `ActorContext` including `domain_id` | `def claims_to_actor_context(` | `src/engramory/access/jwt_auth.py:190-245` |
+| 28 | `NEW@pass2` `create_http_server` in `mcp/server.py` constructs `ActorContext` from `X-Tenant-ID`/`X-Project-ID`/`X-Domain-ID` headers in dev mode | `tenant_hdr = self.headers.get("X-Tenant-ID")` | `src/engramory/mcp/server.py:1528-1540` |
 | 29 | `NEW@pass2` `IPLAN-00_index.yaml` tracks the Layer 08 implementation plan registry (`total_plans: 9` through `IPLAN-09`) | `total_plans: 9` | `docs/sdd/08_IPLAN/IPLAN-00_index.yaml:8-20` |
-| 30 | `NEW@pass3` `Repository.get_unreflected_episodes` in `core/repository.py` scopes `NOT EXISTS` by `m.agent_id = e.agent_id` and `brain_variant` | `async def get_unreflected_episodes(` | `src/engramory/core/repository.py:558-608` |
-| 31 | `NEW@pass3` `Repository.get_retrieval_feedback` in `core/repository.py` reads `memory_retrievals.feedback` (`useful`, `not_useful`, `harmful`) for a memory | `async def get_retrieval_feedback(` | `src/engramory/core/repository.py:330-343` |
+| 30 | `NEW@pass3` `Repository.get_unreflected_episodes` in `core/repository.py` scopes `NOT EXISTS` by `m.agent_id = e.agent_id` and `brain_variant` | `async def get_unreflected_episodes(` | `src/engramory/core/repository.py:570-622` |
+| 31 | `NEW@pass3` `Repository.get_retrieval_feedback` in `core/repository.py` reads `memory_retrievals.feedback` (`useful`, `not_useful`, `harmful`) for a memory | `async def get_retrieval_feedback(` | `src/engramory/core/repository.py:344-359` |
 | 32 | `NEW@pass3` `_build_episode_provenance` in `workers/distillation.py` builds `Memory.provenance` with `episode_id`, `distiller`, `brain_metadata`, and `specializations` | `def _build_episode_provenance(` | `src/engramory/workers/distillation.py:190-231` |
-| 33 | `NEW@pass4` `Repository.get_active_agents_with_unreflected_episodes` in `core/repository.py` discovers `(tenant_id, agent_id)` pairs with unreflected episodes scoped by `m.agent_id = e.agent_id` and `brain_variant` | `async def get_active_agents_with_unreflected_episodes(` | `src/engramory/core/repository.py:610-644` |
+| 33 | `NEW@pass4` `Repository.get_active_agents_with_unreflected_episodes` in `core/repository.py` discovers `(tenant_id, agent_id)` pairs with unreflected episodes scoped by `m.agent_id = e.agent_id` and `brain_variant` | `async def get_active_agents_with_unreflected_episodes(` | `src/engramory/core/repository.py:622-658` |
 | 34 | `NEW@pass4` `_PROVENANCE_PASSTHROUGH_KEYS` in `workers/distillation.py` whitelists episode metadata keys copied into `Memory.provenance` including `specializations` and `agent_type` | `_PROVENANCE_PASSTHROUGH_KEYS = (` | `src/engramory/workers/distillation.py:175-188` |
 | 35 | `NEW@pass4` `run_worker_loop` in `workers/runner.py` polls `get_active_agents_with_unreflected_episodes` and calls `reflect()` | `targets = await repo.get_active_agents_with_unreflected_episodes(` | `src/engramory/workers/runner.py:118-131` |
 

@@ -177,7 +177,8 @@ def _upsert_profile_best_effort(
 def _cmd_init(args: argparse.Namespace) -> int:
     cfg_path = Path(CONFIG_DIRNAME) / CONFIG_FILENAME
     domain_id = getattr(args, "domain_id", None)
-    if cfg_path.exists():
+    force = bool(getattr(args, "force", False))
+    if cfg_path.exists() and not force:
         profile_state = _upsert_profile_best_effort(
             args.agent_id, args.dsn, args.tenant_id, domain_id=domain_id
         )
@@ -529,7 +530,7 @@ def _cmd_knowledge_sync_git(args: argparse.Namespace) -> int:
         f"{payload['files_modified']} modified, {payload['files_skipped']} skipped "
         f"({payload['duration_ms']}ms)",
     )
-    return 0
+    return 0 if payload.get("success", True) else 1
 
 
 def _cmd_knowledge_search(args: argparse.Namespace) -> int:
@@ -1308,6 +1309,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p_init.add_argument("--dsn", required=True)
     p_init.add_argument("--domain-id", default=None, help="optional department/domain focus id")
     p_init.add_argument("--scopes", help="comma-separated (default: agent,project)")
+    p_init.add_argument(
+        "--force", action="store_true", help="overwrite existing .engramory/config.toml"
+    )
     p_init.set_defaults(func=_cmd_init)
 
     p_memory = sub.add_parser("memory", help="SPEC-01 memory tools")
@@ -1734,7 +1738,15 @@ def main(argv: list[str] | None = None) -> int:
     except SystemExit as exc:  # argparse: 0 for --help, 2 for usage errors
         return 0 if exc.code in (0, None) else 2
     try:
-        require_dev_profile("cli")  # ADR-10 dev-tier fence — before any identity use
+        is_daemon = args.command == "worker" or (
+            args.command == "mcp"
+            and (
+                getattr(args, "auth", False)
+                or os.environ.get("AUTHENTIK_ENABLED", "").lower() in ("1", "true", "yes")
+            )
+        )
+        if not is_daemon:
+            require_dev_profile("cli")  # ADR-10 dev-tier fence — before any identity use
         return int(args.func(args))
     except ConfigError as exc:
         print(f"engramory: {exc}", file=sys.stderr)

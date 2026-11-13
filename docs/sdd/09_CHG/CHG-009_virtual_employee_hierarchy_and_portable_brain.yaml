@@ -1,7 +1,7 @@
 # =============================================================================
 #  CHG-009: Virtual Employee Hierarchy, Multi-Model Brain Variants & Portable Brain Passports
 # =============================================================================
-#  Flow: SDD2C · Level: C3 · Entry gate: GATE-CODE
+#  Flow: SDD2C · Level: C2 · Entry gate: GATE-SPEC
 #  Semver: minor (Virtual Employee roster, multi-model brain variants, memory_promote, offboarding, SHA-256 Brain Passports)
 #  Plan: plans/PLAN-024_virtual-employee-hierarchy-and-portable-brain.md
 # =============================================================================
@@ -17,7 +17,7 @@ metadata:
   last_updated: "2026-11-13"
   framework_version: "0.96.4"
   change_level:
-    value: C3
+    value: C2
   change_source:
     value: direct
 
@@ -34,16 +34,16 @@ document_control:
     - version: "1.0"
       date: "2026-11-13"
       author: "AI coding agent"
-      description: "C3 change request implementing PLAN-024 (Virtual Employee Hierarchy, Multi-Model Brain Variants, and Portable Brain Passports)"
+      description: "C2 change request implementing PLAN-024 (Virtual Employee Hierarchy, Multi-Model Brain Variants, and Portable Brain Passports)"
 
 change_control:
   chg_id: "CHG-009"
   status: Completed
-  change_level: C3
+  change_level: C2
   change_source: direct
-  entry_gate: GATE-CODE
+  entry_gate: GATE-SPEC
   semver_impact: minor
-  version_action: none
+  version_action: bump_minor
   author: "AI coding agent + owner"
   date_proposed: "2026-11-13T15:00:00Z"
   date_approved: "2026-11-13T16:38:00Z"
@@ -109,20 +109,41 @@ impact_assessment:
         - "docs/sdd/06_SPEC/SPEC-03_retrieval_graph.yaml"
         - "docs/sdd/06_SPEC/SPEC-07_cli_face.yaml"
       impact: "Extends Layer 06 specifications for Virtual Employee profile management, multi-model brain variants, skill promotion, offboarding, and Brain Passports."
+    - layer: "TDD"
+      artifacts:
+        - "docs/sdd/07_TDD/TDD-01_access_surface.yaml"
+        - "docs/sdd/07_TDD/TDD-02_memory_store.yaml"
+      impact: "Extends Layer 07 test guides for Virtual Employee lifecycle and multi-model brain comparison."
+    - layer: "IPLAN"
+      artifacts:
+        - "docs/sdd/08_IPLAN/IPLAN-00_index.yaml"
+        - "docs/sdd/08_IPLAN/IPLAN-09_virtual_employee_brain.yaml"
+      impact: "Registers and completes IPLAN-09 in the Layer 08 implementation plan registry."
     - layer: "CODE"
       artifacts:
-        - "src/engramory/access/surface.py"
+        - "src/engramory/access/authz.py"
+        - "src/engramory/access/jwt_auth.py"
+        - "src/engramory/access/poisoning_guard.py"
         - "src/engramory/core/repository.py"
         - "src/engramory/workers/distillation.py"
+        - "src/engramory/workers/runner.py"
+        - "src/engramory/access/surface.py"
         - "src/engramory/mcp/server.py"
         - "src/engramory/cli.py"
+        - "docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md"
+        - "tests/test_virtual_employee_lifecycle.py"
+        - "tests/test_multimodal_extraction_and_graphrag.py"
       impact: "Implements all 5 phases of PLAN-024."
   cascade_direction: "downward"
   risk_level: "Medium"
 
 implementation:
   iplan_ref: "@iplan: IPLAN-09"
-  sdd_lifecycle: []
+  sdd_lifecycle:
+    - { gate: "GATE-SPEC", status: "Passed" }
+    - { gate: "GATE-TDD", status: "Passed" }
+    - { gate: "GATE-IPLAN", status: "Passed" }
+    - { gate: "GATE-CODE", status: "Passed" }
   steps:
     - step: "Update Layer 06 SPEC, Layer 07 TDD, Layer 08 IPLAN-09, and Layer 09 CHG-009"
       phase: "sdd_update"
@@ -132,7 +153,27 @@ implementation:
       phase: "implementation"
       artifact: "plans/PLAN-024_virtual-employee-hierarchy-and-portable-brain.md"
       status: "Completed"
-  artifacts_modified: []
+  artifacts_modified:
+    - "docs/sdd/06_SPEC/SPEC-01_access_surface.yaml"
+    - "docs/sdd/06_SPEC/SPEC-02_memory_store.yaml"
+    - "docs/sdd/06_SPEC/SPEC-03_retrieval_graph.yaml"
+    - "docs/sdd/06_SPEC/SPEC-07_cli_face.yaml"
+    - "docs/sdd/07_TDD/TDD-01_access_surface.yaml"
+    - "docs/sdd/07_TDD/TDD-02_memory_store.yaml"
+    - "docs/sdd/08_IPLAN/IPLAN-00_index.yaml"
+    - "docs/sdd/08_IPLAN/IPLAN-09_virtual_employee_brain.yaml"
+    - "src/engramory/access/authz.py"
+    - "src/engramory/access/jwt_auth.py"
+    - "src/engramory/access/poisoning_guard.py"
+    - "src/engramory/core/repository.py"
+    - "src/engramory/workers/distillation.py"
+    - "src/engramory/workers/runner.py"
+    - "src/engramory/access/surface.py"
+    - "src/engramory/mcp/server.py"
+    - "src/engramory/cli.py"
+    - "docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md"
+    - "tests/test_virtual_employee_lifecycle.py"
+    - "tests/test_multimodal_extraction_and_graphrag.py"
 
 verification:
   checks:
@@ -144,13 +185,21 @@ verification:
       method: "task check && task ci"
 
 gate_approval:
-  gate: "GATE-CODE"
+  gate: "GATE-SPEC"
   approved: true
   approver: "vladm3105"
   role: "Owner"
   approval_date: "2026-11-13"
   evidence: "User explicitly requested implementation of PLAN-024 (Phases 1 through 5)"
   approved_scope_files:
+    - "docs/sdd/06_SPEC/SPEC-01_access_surface.yaml"
+    - "docs/sdd/06_SPEC/SPEC-02_memory_store.yaml"
+    - "docs/sdd/06_SPEC/SPEC-03_retrieval_graph.yaml"
+    - "docs/sdd/06_SPEC/SPEC-07_cli_face.yaml"
+    - "docs/sdd/07_TDD/TDD-01_access_surface.yaml"
+    - "docs/sdd/07_TDD/TDD-02_memory_store.yaml"
+    - "docs/sdd/08_IPLAN/IPLAN-00_index.yaml"
+    - "docs/sdd/08_IPLAN/IPLAN-09_virtual_employee_brain.yaml"
     - "src/engramory/access/authz.py"
     - "src/engramory/access/jwt_auth.py"
     - "src/engramory/access/poisoning_guard.py"
@@ -160,6 +209,9 @@ gate_approval:
     - "src/engramory/access/surface.py"
     - "src/engramory/mcp/server.py"
     - "src/engramory/cli.py"
+    - "docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md"
+    - "tests/test_virtual_employee_lifecycle.py"
+    - "tests/test_multimodal_extraction_and_graphrag.py"
   conditions: []
 
 rollback_plan:

@@ -121,6 +121,7 @@ class JWKSValidator:
             headers=req_headers,
         )
         self._lock = threading.Lock()
+        self._last_jwks_refresh: float = 0.0
 
     def validate_token(self, token: str) -> TokenClaims:
         """Validate a Bearer JWT against the JWKS endpoint.
@@ -134,6 +135,8 @@ class JWKSValidator:
         Raises:
             AuthenticationError: On expired, invalid signature, or wrong claims.
         """
+        import time
+
         if not token:
             raise AuthenticationError("Missing token")
 
@@ -146,12 +149,15 @@ class JWKSValidator:
                 signing_key = self._jwks_client.get_signing_key_from_jwt(clean_token)
             except PyJWKClientError:
                 with self._lock:
-                    self._jwks_client = PyJWKClient(
-                        uri=self.jwks_url,
-                        cache_jwk_set=self.cache_jwk_set,
-                        lifespan=self.lifespan,
-                        headers=self.headers,
-                    )
+                    now_mono = time.monotonic()
+                    if now_mono - self._last_jwks_refresh >= 5.0:
+                        self._jwks_client = PyJWKClient(
+                            uri=self.jwks_url,
+                            cache_jwk_set=self.cache_jwk_set,
+                            lifespan=self.lifespan,
+                            headers=self.headers,
+                        )
+                        self._last_jwks_refresh = now_mono
                 signing_key = self._jwks_client.get_signing_key_from_jwt(clean_token)
 
             payload = jwt.decode(
@@ -213,7 +219,7 @@ def claims_to_actor_context(claims: TokenClaims) -> ActorContext:
     # Evaluate role-authorized scopes
     max_scopes: set[str] = {"agent", "project"}
     roles = set(claims.groups)
-    if any(r in roles for r in ("domain-admin", "project-admin", "lead")) or domain_id is not None:
+    if "domain-admin" in roles or domain_id is not None:
         max_scopes.add("domain")
     if any(r in roles for r in ("platform-admin", "superuser")) or claims.raw_claims.get(
         "is_superuser"
@@ -265,13 +271,18 @@ def check_token_revocation(
         )
     jti = claims.jti
     agent_id = claims.agent_id or claims.sub
+    actor_sub = claims.actor.get("sub") if isinstance(claims.actor, dict) else None
+    principals = {p for p in (agent_id, claims.sub, actor_sub) if p}
 
     # Check local in-memory set if provided
     if revoked_identifiers:
         if jti and jti in revoked_identifiers:
             raise AuthenticationError(f"Token {jti} has been revoked by platform kill-switch")
-        if agent_id in revoked_identifiers:
-            raise AuthenticationError(f"Agent {agent_id} has been revoked by platform kill-switch")
+        for principal in principals:
+            if principal in revoked_identifiers:
+                raise AuthenticationError(
+                    f"Agent {principal} has been revoked by platform kill-switch"
+                )
 
     # Check Security Gate if configured
     if security_gate_url:
@@ -295,10 +306,11 @@ def check_token_revocation(
                     raise AuthenticationError(
                         f"Token {jti} has been revoked by platform kill-switch"
                     )
-                if agent_id in revoked_set:
-                    raise AuthenticationError(
-                        f"Agent {agent_id} has been revoked by platform kill-switch"
-                    )
+                for principal in principals:
+                    if principal in revoked_set:
+                        raise AuthenticationError(
+                            f"Agent {principal} has been revoked by platform kill-switch"
+                        )
         except (urllib.error.URLError, ValueError, OSError) as exc:
             logger.warning("Could not reach Security Gate revocation endpoint: %s", exc)
             if fail_closed:

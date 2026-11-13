@@ -188,15 +188,18 @@ def inspect_memory_write(
             "Memory poisoning blocked: forbidden Unicode control/bidi/tag characters (P14)"
         )
 
-    # 2. OWASP ASI03 Indirect Prompt Injection
-    injections = detect_prompt_injection(content)
+    # 2. OWASP ASI03 Indirect Prompt Injection (normalized with NFKC to defeat fullwidth homoglyphs)
+    import unicodedata
+
+    norm_content = unicodedata.normalize("NFKC", content)
+    injections = detect_prompt_injection(norm_content)
     if injections:
         raise MemoryPoisoningError(
             f"Memory poisoning blocked (OWASP ASI03): prompt injection {injections}"
         )
 
     # 3. Hard secret leakage block
-    secrets = detect_hard_secrets(content)
+    secrets = detect_hard_secrets(norm_content)
     if secrets:
         raise MemoryPoisoningError(
             f"Memory write blocked by DLP: content contains unredacted credentials {secrets}"

@@ -47,7 +47,7 @@ from engramory.core.models import (
     KBSection,
     ValidationError,
 )
-from engramory.core.repository import Repository
+from engramory.core.repository import Repository, StoreUnavailable
 from engramory.ports import GraphPort, LLMPort, StoragePort
 
 logger = logging.getLogger(__name__)
@@ -192,6 +192,8 @@ class AccessSurface:
                     depth=depth,
                     project_id=project_id,
                 )
+            except StoreUnavailable:
+                raise
             except Exception as exc:
                 logger.debug("Repository find_neighbors fallback failed for %s: %s", id, exc)
         return hits
@@ -565,6 +567,10 @@ class AccessSurface:
         await self._decide(
             ctx, "memory_feedback", TargetScope(tenant_id=ctx.tenant_id, scope="agent")
         )
+        if retrieval_id.startswith("kb-ret:"):
+            raise ValidationError(
+                "memory_feedback requires an L2 memory retrieval_id, not a kb_section hit"
+            )
         await self._repo.record_feedback(retrieval_id, outcome, tenant_id=ctx.tenant_id)
 
     async def memory_forget(self, ctx: ActorContext, memory_id: str, *, reason: str) -> None:
@@ -806,7 +812,7 @@ class AccessSurface:
         eff_domain_id = (
             (target_domain_id or ctx.domain_id or source.domain_id)
             if target_scope == "domain"
-            else target_domain_id
+            else None
         )
         if target_scope == "project" and not eff_project_id:
             raise ValidationError("memory_promote to scope='project' requires a project_id")
@@ -943,7 +949,7 @@ class AccessSurface:
         await self._decide(
             ctx, "agent_brain_export", TargetScope(tenant_id=ctx.tenant_id, scope="agent")
         )
-        eff_domain = domain_id if domain_id is not None else ctx.domain_id
+        eff_domain = await self._enforce_domain_boundary(ctx, "agent_brain_export", domain_id)
         profile = await self.agent_profile_get(ctx)
         max_k = max(1, min(limit, MAX_K))
         memories = await self._repo.get_memories(
@@ -955,6 +961,7 @@ class AccessSurface:
             scopes=("agent",),
             brain_variant=brain_variant,
             specialization=specialization,
+            min_confidence=min_confidence,
         )
         base_terms = [ctx.tenant_id, ctx.project_id, *redact_terms]
         skills: list[dict[str, Any]] = []
@@ -1306,11 +1313,17 @@ class AccessSurface:
                 )
                 if isinstance(item_bm, dict):
                     item_bm["brain_variant"] = eff_var
-                skill_dom = (
-                    str(item.get("domain_id") or eff_domain)
-                    if (item.get("domain_id") or eff_domain)
-                    else None
-                )
+                raw_item_dom = str(item.get("domain_id") or "").strip() or None
+                if eff_domain is not None:
+                    skill_dom: str | None = eff_domain
+                elif (
+                    raw_item_dom is not None
+                    and ctx.domain_id is None
+                    and ("domain" in ctx.scopes or "space" in ctx.scopes)
+                ):
+                    skill_dom = raw_item_dom
+                else:
+                    skill_dom = ctx.domain_id
                 vetted_skills.append(
                     {
                         "summary": vetted_sum,
@@ -1648,6 +1661,7 @@ class AccessSurface:
                 reason=f"cross_agent_event_rejected: {ev.producer}",
             )
             raise AuthzError("out_of_scope")
+        await self._enforce_domain_boundary(ctx, "memory_ingest_event", ev.domain_id)
         try:
             ep = ev.to_episode()
         except MemoryPoisoningError as exc:
@@ -1815,8 +1829,9 @@ class AccessSurface:
 
         vetted_sections: list[KBSection] = []
         for s in sections:
-            # Bound scope to authorized scope / caller's scopes
+            # Bound scope and domain_id to authorized scope / caller's department boundary
             target_scope = s.scope if s.scope in ctx.scopes else scope
+            eff_sec_dom = await self._enforce_domain_boundary(ctx, "knowledge_ingest", s.domain_id)
             try:
                 vetted_text = inspect_memory_write(
                     s.text,
@@ -1849,7 +1864,7 @@ class AccessSurface:
                     text=vetted_text,
                     project_id=ctx.project_id,
                     tenant_id=ctx.tenant_id,
-                    domain_id=s.domain_id,
+                    domain_id=eff_sec_dom,
                     scope=target_scope,
                     version=s.version,
                     modality=s.modality,
@@ -2282,6 +2297,13 @@ class AccessSurface:
                 )
             )
 
+        eff_scope = scope if scope in ctx.scopes else "project"
+        if eff_scope == "domain" or ctx.domain_id is not None:
+            eff_doc_dom = await self._enforce_domain_boundary(
+                ctx, "docs_ingest_runbook", doc.domain_id
+            )
+        else:
+            eff_doc_dom = doc.domain_id
         locked_doc = KBDocument(
             doc_id=doc.doc_id,
             repo_path=doc.repo_path,
@@ -2297,9 +2319,9 @@ class AccessSurface:
             review_ttl_days=doc.review_ttl_days,
             git_commit_sha=evidence_ref,
             project_id=ctx.project_id,
-            domain_id=doc.domain_id,
+            domain_id=eff_doc_dom,
             tenant_id=ctx.tenant_id,
-            scope=scope if scope in ctx.scopes else "project",
+            scope=eff_scope,
         )
         try:
             await self._repo.upsert_kb_document(locked_doc)
@@ -2341,10 +2363,11 @@ class AccessSurface:
         await self._decide(
             ctx, "docs_slice_runbook", TargetScope(tenant_id=ctx.tenant_id, scope=scope)
         )
+        eff_slice_dom = await self._enforce_domain_boundary(ctx, "docs_slice_runbook", domain_id)
         l0_steps = await self._repo.slice_runbook(
             tenant_id=ctx.tenant_id,
             project_id=ctx.project_id,
-            domain_id=domain_id,
+            domain_id=eff_slice_dom,
             scope=scope,
             doc_id=doc_id,
             alert_id=alert_id,
@@ -2370,6 +2393,8 @@ class AccessSurface:
                     }
                     for h in hits
                 ]
+            except StoreUnavailable:
+                raise
             except Exception:
                 l2_memories = []
 

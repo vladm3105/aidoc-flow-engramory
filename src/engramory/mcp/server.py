@@ -733,8 +733,8 @@ def format_context_slice_markdown(task_id: str, ancestors: Sequence[Mapping[str,
         nid = str(a.get("id", "UNKNOWN"))
         props = a.get("properties", {})
         title = props.get("name") or props.get("title") or nid
-        path = props.get("path", "")
-        file_link = f"file:///{path.lstrip('/')}" if path else ""
+        path = str(props.get("path", "") or "")
+        file_link = f"file://{path}" if path.startswith("/") else path
         header = f"### [{nid}: {title}]({file_link})" if file_link else f"### {nid}: {title}"
         lines.append(header)
         domain = props.get("domain_id")
@@ -902,9 +902,14 @@ class McpServer:
                 return {"content": [{"type": "text", "text": json.dumps(ingested, indent=2)}]}
 
             elif name == "memory_learning_health":
+                req_proj = (
+                    call_ctx.project_id
+                    if (self._auth_enabled and "space" not in call_ctx.scopes)
+                    else arguments.get("project_id")
+                )
                 health = await self._surface.memory_learning_health(
                     call_ctx,
-                    project_id=arguments.get("project_id"),
+                    project_id=req_proj,
                     limit=int(arguments.get("limit", 500)),
                     scope=str(arguments.get("scope", "project")),
                 )
@@ -1899,9 +1904,19 @@ class McpServer:
                 project_id=call_ctx.project_id,
                 enforce_project_boundary=enforce_project,
             )
+            raw_pol = arguments.get("policy_path")
+            confined_pol = (
+                resolve_confined_repo_path(
+                    str(raw_pol),
+                    project_id=call_ctx.project_id,
+                    enforce_project_boundary=enforce_project,
+                )
+                if raw_pol
+                else None
+            )
             report = lint_stack_policy(
                 target,
-                policy_path=arguments.get("policy_path"),
+                policy_path=confined_pol,
             )
             return {
                 "isError": not bool(report["passed"]),

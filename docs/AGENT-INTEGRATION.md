@@ -96,6 +96,7 @@ Mechanics: `engramory <cmd> --help` / `docs/AGENT-QUICKSTART.md`.
 Project executors and specialized Virtual Employee instances initialize with their repository ID, optional department focus (`--domain-id`), and isolated scopes:
 
 ```bash
+export ENGRAMORY_DSN="${ENGRAMORY_DATABASE_URL:-postgresql://engramory:change_me@localhost:${POSTGRES_HOST_PORT:-5432}/engramory}"
 engramory init \
   --agent-id agent-support-01 \
   --project-id my-project \

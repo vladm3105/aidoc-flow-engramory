@@ -215,7 +215,7 @@ Nexus's existing Trading `learning:` block (`post_trade_review`, `meta_review_fr
 Engramory's primary storage and retrieval spine is implemented **natively in PostgreSQL** (migration 0003):
 
 - **Native storage & indexing:** `memories` table with `VECTOR` embeddings, generated `ts_lex` full-text search GIN index, and partial indexes for active valid memories.
-- **Native hybrid retrieval:** Reciprocal Rank Fusion combining dense vector cosine similarity (w=0.5), sparse full-text lexical ranking (w=0.3), recency (w=0.2), and post-fusion confidence/scope multipliers (SPEC-03).
+- **Native hybrid retrieval:** `kb_sections` (`Repository.search_kb_sections`) executes 3-leg Reciprocal Rank Fusion combining dense vector cosine similarity, sparse full-text `ts_lex` lexical ranking, and substring matching, while `Repository.get_memories` ranks scoped `memories` by cosine distance, substring boost, and recency (`valid_from DESC`) (SPEC-03).
 - **Native distillation:** Built-in in-process reflection worker (`engramory memory distill`) projecting raw episodes into dense memories.
 
 The cores define an optional `MemoryPort` for advanced distillation algorithms:
@@ -334,7 +334,7 @@ kb_sections(
 ### 3. Hybrid Retrieval & Cumulative `@-tag` Lineage
 
 - **Hybrid Dense + Sparse Search:** Queries against `kb_sections` leverage `pgvector` cosine similarity combined with full-text search over structured headers and section text.
-- **Traceability Graph:** SDD documents carry cumulative traceability tags (`@brd`, `@prd`, `@ears`, `@bdd`, `@adr`, `@spec`, `@tdd`, `@ip-lan`, `@depends`). Engramory models these links to enable lineage and impact queries (e.g., "Find all SPECs and code units impacted by changes to ADR-07").
+- **Traceability Graph:** SDD documents carry cumulative traceability tags (`@brd`, `@prd`, `@ears`, `@bdd`, `@adr`, `@spec`, `@tdd`, `@iplan`, `@depends`). Engramory models these links to enable lineage and impact queries (e.g., "Find all SPECs and code units impacted by changes to ADR-07").
 - **Evidence-Backed Governed Writes (ADR-06 / SPEC-05):** Unlike conversational memories, L0 SDD documentation cannot be modified arbitrarily by coding agents. Writes require an approved evidence reference (`evidence_ref`, such as an approved IPLAN completion record); unauthorized writes fail closed and trigger an audit entry.
 
 ---
@@ -346,10 +346,7 @@ A common point of confusion is whether Engramory requires external RAG framework
 1. **Native PostgreSQL Spine (`pgvector` + `ts_lex`):**
    Engramory implements vector storage, cosine distance matching, lexical GIN indexes, and relational integrity natively inside PostgreSQL. External vector stores or RAG wrappers introduce unnecessary network hops, data duplication, and synchronization failures.
 2. **Native Hybrid Rank Fusion:**
-   Engramory's `RetrievalService` (SPEC-03) performs weighted Reciprocal Rank Fusion (RRF) directly across:
-   - Dense vector embeddings (`memories.embedding` and `kb_sections.embedding`).
-   - Sparse lexical search (`memories.ts_lex` tsvector).
-   - Recency and source-trust multipliers (`human` > `tool` > `agent`).
+   Engramory's `Repository` (SPEC-03) performs 3-leg Reciprocal Rank Fusion (RRF) over `kb_sections` (`embedding` cosine similarity + `ts_lex` BM25 + substring matching) and cosine + substring + recency ranking over `memories`, fused with post-retrieval GraphRAG expansion (`expand_graph=True`).
 3. **Graph Projections over Relational Data:**
    Rather than making a graph database the primary source of truth, Engramory stores canonical entities and lineage in PostgreSQL and projects them into Neo4j (via `GraphPort`) only when multi-hop graph algorithms or deep topological traversal are required. The graph is completely rebuildable from PostgreSQL.
 4. **Conclusion:**
@@ -396,7 +393,7 @@ Phases 0–2 are entirely free/self-hosted. Phase 3 is a **configuration + adapt
 
 ## Recommended dev stack (Phase 0 docker-compose)
 
-Provisioned in `docker-compose.yml` **today:** `postgres` (PostgreSQL 18 + `pgvector` + `ts_blob_cold` Chunked Blob CAS) · `valkey`/`redis` · `ghcr.io/berriai/litellm` + `ollama` · `neo4j` (`neo4j:5.26-community`, `Decision D17`) · `authentik` · `mcp-gateway` · `worker` (reflection/consolidation). Optional observability connects via OTel (`docs/OBSERVABILITY.md`).
+Provisioned in `docker-compose.yml` **today:** `postgres` (PostgreSQL 18 + `pgvector` + `ts_blob_cold` Chunked Blob CAS) · `redis` · `ghcr.io/berriai/litellm` + `ollama` (`--profile local-ai`) · `neo4j` (`neo4j:5.26-community`, `Decision D17`) · `mcp` (MCP gateway, authenticating against Stage Authentik or `--profile legacy-idp` `keycloak`) · `worker` (reflection/consolidation). Optional observability connects via OTel (`docs/OBSERVABILITY.md`).
 
 All open-source, all free, all with a documented GCP **and** Azure adapter for later. Start here; the cloud is a swap, not a rebuild.
 

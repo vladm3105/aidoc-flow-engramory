@@ -215,6 +215,7 @@ class InMemoryVirtualEmployeeRepo:
         brain_variant: str | None = None,
         specialization: str | None = None,
         include_quarantined: bool = False,
+        min_confidence: float | None = None,
     ) -> list[Memory]:
         _ = (query_vec,)
         levels = scopes or ("agent", "project", "domain", "space")
@@ -226,6 +227,8 @@ class InMemoryVirtualEmployeeRepo:
                 or m.status not in allowed_statuses
                 or m.valid_to is not None
             ):
+                continue
+            if min_confidence is not None and m.confidence < min_confidence:
                 continue
             if brain_variant is not None:
                 m_var = str(m.provenance.get("brain_variant") or "default")

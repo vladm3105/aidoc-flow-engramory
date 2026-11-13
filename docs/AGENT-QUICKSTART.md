@@ -27,6 +27,7 @@ close the loop**.
 
 ```bash
 # once per repo (see INSTALL.md for the DSN; optional --domain-id binds department focus)
+export ENGRAMORY_DSN="${ENGRAMORY_DATABASE_URL:-postgresql://engramory:change_me@localhost:${POSTGRES_HOST_PORT:-5432}/engramory}"
 engramory init --agent-id agent-support-01 --project-id my-project \
   --tenant-id default --domain-id billing --dsn "$ENGRAMORY_DSN"
 

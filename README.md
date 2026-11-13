@@ -45,10 +45,10 @@ It consolidates two predecessor designs — **RAC** (a working knowledge platfor
 ## Quickstart (dev, self-hosted)
 
 ```bash
-cp .env.example .env          # fill in secrets; set POSTGRES_HOST_PORT if 5432 is taken
-docker compose up -d          # Postgres+pgvector, Redis, Neo4j, MCP gateway, Worker
+cp .env.example .env          # fill in secrets; set POSTGRES_HOST_PORT if 5432 is taken (and LITELLM_BASE_URL=http://localhost:4000 for local-ai)
+docker compose up -d          # Postgres+pgvector, Redis, Neo4j, MCP gateway, Worker (add --profile local-ai for local Ollama + LiteLLM)
 make migrate                  # apply db/migrations
-make pull-models              # pull local Ollama models (when using local-ai profile)
+make pull-models              # pull local Ollama models (when started with --profile local-ai)
 pip install -e . && engramory --help
 ```
 
@@ -59,7 +59,7 @@ All dev dependencies are free and open-source.
 Any AI agent with a shell or MCP client uses Engramory through two thin faces over `AccessSurface` (ADR-10):
 
 - **`engramory` CLI (dev/CI face):** `engramory memory` (`add`, `distill`, `promote`, `search [--include-knowledge --expand-graph --brain-variant --specialization]`, `feedback`, `forget`, `ingest-event`, `learning-health`), `engramory profile` (`get`, `set`, `list`, `export-brain`, `import-brain`, `compare-brains`, `offboard`), `engramory knowledge` (`ingest`, `ingest-media`, `blob-stat`, `blob-get`, `sync-git`, `search [--modality --expand-graph]`), `engramory sdd` (`ingest`, `slice`, `blast-radius`, `validate-graph`, `check-invariants`, `lint-policy`), `engramory docs` (`lint`, `ingest`, `slice-runbook`, `check-drift`, `export-llms`, `smoke-run`, `tool-inventory`, `build-portal`), and `engramory mcp` (`--transport stdio|sse`).
-- **MCP Gateway (`engramory mcp`, authenticated production face):** exposes `memory_*` (`memory_search`, `memory_add`, `memory_promote`, `memory_feedback`, `memory_forget`, `memory_ingest_event`, `memory_learning_health`), `agent_*` (`agent_profile_get`, `agent_profile_upsert`, `agent_roster_list`, `agent_brain_export`, `agent_brain_import`, `agent_brain_compare`, `agent_space_offboard`), `knowledge_ingest`, `knowledge_ingest_media`, `knowledge_search`, `graph_neighbors`, `sdd_context_slice`, `sdd_blast_radius`, `sdd_ingest`, `sdd_validate_graph`, `sdd_check_invariants`, `sdd_lint_policy`, and `docs_*` tools with OIDC/JWKS authentication and fail-closed authorization.
+- **MCP Gateway (`engramory mcp`, authenticated production face):** exposes `memory_*` (`memory_search`, `memory_add`, `memory_promote`, `memory_feedback`, `memory_forget`, `memory_ingest_event`, `memory_learning_health`), `agent_*` (`agent_profile_get`, `agent_profile_upsert`, `agent_roster_list`, `agent_brain_export`, `agent_brain_import`, `agent_brain_compare`, `agent_space_offboard`), `knowledge_ingest`, `knowledge_ingest_media`, `knowledge_search`, `blob_head`, `graph_neighbors`, `sdd_context_slice`, `sdd_blast_radius`, `sdd_ingest`, `sdd_validate_graph`, `sdd_check_invariants`, `sdd_lint_policy`, and `docs_*` tools with OIDC/JWKS authentication and fail-closed authorization.
 
 - **Install + first round-trip:** [docs/INSTALL.md](docs/INSTALL.md)
 - **Agent workflow (3 tracks: terminal agent, CI, Skill):** [docs/AGENT-QUICKSTART.md](docs/AGENT-QUICKSTART.md)
@@ -76,6 +76,7 @@ gateway (`engramory mcp`) is the authenticated production face.
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Target architecture, portability matrix, build roadmap |
 | [docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md](docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md) | Virtual Employee 4-level space hierarchy (`tenant -> agent -> domain -> project`), multi-model brain variants, and portable Brain Passports |
+| [docs/DATA_FLOW_AND_LIFECYCLE.md](docs/DATA_FLOW_AND_LIFECYCLE.md) | End-to-end tool inventory, insert/update/delete/retrieve flows, and PostgreSQL + Neo4j projection choreography |
 | [docs/MULTIMODAL_AND_POSTGRES_BLOB_STORAGE.md](docs/MULTIMODAL_AND_POSTGRES_BLOB_STORAGE.md) | Multimodal ingestion (text, images, audio, `20 GB+` video), PostgreSQL 18 Chunked Blob CAS (`ts_blob_cold`), and Neo4j dual-engine graph architecture (`Rule D14a`/`D14b`, `Decision D17`) |
 | [docs/doc-tools/00_INDEX.md](docs/doc-tools/00_INDEX.md) | AI-first documentation, executable runbooks, drift & `llms.txt` toolchain (`engramory docs`) |
 | [docs/CORES.md](docs/CORES.md) | The two bounded cores (Memory & Knowledge), their boundary, and the shared spine |

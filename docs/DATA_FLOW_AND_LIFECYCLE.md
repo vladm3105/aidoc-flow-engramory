@@ -87,9 +87,9 @@ sequenceDiagram
 3. **Authorization Grant:** If the actor has sufficient grants for the requested scope and tenant, an `AuthzDecision(allowed=True)` is issued.
 4. **Canonical Ingestion in PostgreSQL:** `Repository.upsert_graph_entity()` executes an atomic parameterized `INSERT INTO graph_entities (...) ON CONFLICT (tenant_id, id) DO UPDATE`. PostgreSQL guarantees ACID durability and issues a row write with audit timestamps.
 5. **Ingestion Confirmation:** The database transaction commits, and `Repository` returns the confirmed resource identifier.
-6. **Projection Trigger:** Either inline during sync or asynchronously via `GraphProjectionWorker`, the unprojected or updated entities and relationships are retrieved from PostgreSQL.
-7. **Entity Read:** The projection worker receives typed `GraphEntity` and `GraphRelation` instances containing structured properties and tenant tags.
-8. **Projection to Neo4j:** The worker invokes `Neo4jGraphAdapter.upsert_node()` and `upsert_edge()` via `GraphPort`.
+6. **Projection Trigger:** Either inline during `sdd_ingest` / `KnowledgeCore.ingest_documents_batch` or via `engramory graph reproject`, the entities and relationships are retrieved from PostgreSQL.
+7. **Entity Read:** The projection pass receives typed `GraphEntity` and `GraphRelation` instances containing structured properties and tenant tags.
+8. **Projection to Neo4j:** `KnowledgeCore` invokes `Neo4jGraphAdapter.upsert_node()` and `upsert_edge()` via `GraphPort`.
 9. **Cypher Idempotent Upsert:** Neo4j executes parameterized Cypher:
 
    ```cypher
@@ -114,15 +114,15 @@ sequenceDiagram
     participant Neo4j as Neo4j (Projection)
 
     alt Knowledge Base Section / Entity Update
-        Agent->>Surface: knowledge_ingest (updated content/props)
-        Surface->>Repo: upsert_graph_entity(id, props)
+        Agent->>Surface: knowledge_ingest / sdd_ingest (updated content/props)
+        Surface->>Repo: upsert_kb_section / upsert_graph_entity(id, props)
         Note over Repo: ON CONFLICT (tenant_id, id)<br/>DO UPDATE SET name=EXCLUDED.name, properties=EXCLUDED.properties, updated_at=NOW()
         Surface->>Neo4j: upsert_node(id, labels, updated_props)
         Note over Neo4j: MERGE (n:Entity {id: $id}) SET n += $props
         Surface-->>Agent: Update confirmed
     else Distilled Memory Update (Append-Only Superseding)
-        Agent->>Surface: memory_add (with supersedes=old_id)
-        Surface->>Repo: add_memory(new_memory)
+        Agent->>Surface: memory_forget(old_id) + memory_add / reflect
+        Surface->>Repo: upsert_memory(new_memory, supersedes=old_id)
         Note over Repo: INSERT new memory row<br/>UPDATE old memory SET valid_to=NOW(), status='superseded'
         Surface-->>Agent: New memory created, old superseded
     end
@@ -131,8 +131,8 @@ sequenceDiagram
 #### Detailed Step-by-Step Explanation
 
 - **Branch A: Governed Technical Knowledge Base & Graph Entities (In-Place Upsert):**
-  1. An agent submits an updated specification or ADR through `knowledge_ingest`.
-  2. `Repository.upsert_graph_entity()` executes an upsert query in PostgreSQL:
+  1. An agent submits an updated specification or ADR through `knowledge_ingest` / `sdd_ingest`.
+  2. `Repository.upsert_kb_section()` and `Repository.upsert_graph_entity()` execute upsert queries in PostgreSQL:
 
      ```sql
      INSERT INTO graph_entities (id, entity_type, name, tenant_id, domain_id, properties)
@@ -146,8 +146,8 @@ sequenceDiagram
 
 - **Branch B: Cognitive Distillation & Episodic Memories (Append-Only Superseding):**
   1. Distilled memories (L1/L2) are **immutable by design** (ADR-05). Memories are never mutated in place.
-  2. When an agent updates or refines an existing memory, it submits a new memory payload specifying `supersedes = old_memory_id`.
-  3. `Repository.add_memory()` inserts the new memory row in PostgreSQL with a fresh UUID. Within the same transaction, it executes:
+  2. When an agent or distillation pass refines an existing memory, it retires the old memory (`memory_forget`) or constructs a new `Memory` row specifying `supersedes = old_memory_id`.
+  3. `Repository.upsert_memory()` inserts the new memory row in PostgreSQL with a fresh UUID. Within the same transaction, it executes:
 
      ```sql
      UPDATE memories
@@ -175,15 +175,13 @@ sequenceDiagram
         Note over Repo: UPDATE memories<br/>SET valid_to = now(), status = 'superseded'<br/>(Audit trail and provenance preserved)
         Repo-->>Surface: ok
         Surface-->>Agent: Memory retired
-    else Canonical Graph Entity Deletion
-        Agent->>Surface: delete_graph_entity(id)
+    else Canonical Graph Entity Deletion (Repository / Sync Engine)
         Surface->>Repo: delete_graph_entity(id)
         Note over Repo: DELETE FROM graph_entities WHERE id = $id<br/>(PostgreSQL Foreign Key cascades to graph_relations)
         Repo-->>Surface: ok
         Surface->>Neo4j: delete_node(id)
         Note over Neo4j: MATCH (n:Entity {id: $id})<br/>DETACH DELETE n
         Neo4j-->>Surface: ok
-        Surface-->>Agent: Entity and attached edges deleted
     end
 ```
 

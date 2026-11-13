@@ -284,22 +284,36 @@ class Repository:
             raise ValueError(
                 f"feedback outcome must be one of {sorted(FEEDBACK_OUTCOMES)}: {outcome!r}"
             )
+        if retrieval_id.startswith("kb-ret:"):
+            raise ValidationError(
+                "record_feedback requires an L2 memory retrieval_id, not a kb_section hit"
+            )
         async with self._conn() as conn:
             async with conn.transaction():
-                row = await (
+                prev = await (
                     await conn.execute(
                         """
-                        UPDATE memory_retrievals
-                        SET feedback = %(outcome)s, feedback_at = now()
+                        SELECT memory_id, feedback
+                        FROM memory_retrievals
                         WHERE id = %(id)s AND tenant_id = %(tenant_id)s
-                        RETURNING memory_id
+                        FOR UPDATE
                         """,
-                        {"id": retrieval_id, "outcome": outcome, "tenant_id": tenant_id},
+                        {"id": retrieval_id, "tenant_id": tenant_id},
                     )
                 ).fetchone()
-                if row is None:
+                if prev is None:
                     raise KeyError(retrieval_id)
-                memory_id = row["memory_id"]
+                if prev["feedback"] == outcome:
+                    return
+                memory_id = prev["memory_id"]
+                await conn.execute(
+                    """
+                    UPDATE memory_retrievals
+                    SET feedback = %(outcome)s, feedback_at = now()
+                    WHERE id = %(id)s AND tenant_id = %(tenant_id)s
+                    """,
+                    {"id": retrieval_id, "outcome": outcome, "tenant_id": tenant_id},
+                )
                 if outcome == "useful":
                     await conn.execute(
                         """
@@ -657,6 +671,7 @@ class Repository:
         brain_variant: str | None = None,
         specialization: str | None = None,
         include_quarantined: bool = False,
+        min_confidence: float | None = None,
     ) -> list[Memory]:
         """Visible, live, active memories per the ADR-07 ladder.
 
@@ -686,6 +701,7 @@ class Repository:
             "brain_variant": brain_variant,
             "specialization": specialization,
             "include_quarantined": include_quarantined,
+            "min_confidence": min_confidence,
         }
         async with self._conn() as conn:
             rows = await (
@@ -701,6 +717,10 @@ class Repository:
                       AND (
                           status = 'active'
                           OR (%(include_quarantined)s AND status = 'quarantined')
+                      )
+                      AND (
+                          %(min_confidence)s::double precision IS NULL
+                          OR confidence >= %(min_confidence)s
                       )
                       AND (
                           %(brain_variant)s::text IS NULL

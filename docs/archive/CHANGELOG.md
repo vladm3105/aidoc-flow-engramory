@@ -74,7 +74,7 @@ remediation pass.
 
 ### Added — canon secret-scan (gitleaks) workflow (2026-07-11)
 
-Adopted the aidoc-flow-ci secret-scan gate (, gitleaks binary).
+Adopted the aidoc-flow-ci secret-scan gate (`secret-scan.yml@ci/v1.9.4`, gitleaks binary).
 
 ### Added — PLAN-002: agent-usable memory plane — CLI face, full SPEC-01 tool set, agent docs (2026-07-11)
 
@@ -331,3 +331,6 @@ Multi-agent self-review per OPS-0065 (code-reviewer + documentation-specialist p
 - Scope vocabulary unified across schema/SPEC/docs: isolation column renamed `space_id` → `tenant_id`; the `shared` scope value is retired in favor of `space` (tenant-wide). See ADR-07.
 - `make migrate` now applies **all** `db/migrations/*.sql` in order (was hard-coded to 0001) and loads `.env`.
 - ADR homes clarified: `sdd/05_ADR/` is canonical/implementing; `docs/adr/` is conceptual/descriptive.
+
+[Unreleased]: https://github.com/vladm3105/aidoc-flow-engramory/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/vladm3105/aidoc-flow-engramory/releases/tag/v0.2.0

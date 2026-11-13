@@ -24,9 +24,11 @@ It provides L0 knowledge base + L1 short-term + L2 long-term distilled + L3 per-
 
 - `src/engramory/ports/` — interfaces the core depends on.
 - `src/engramory/adapters/` — per-environment implementations (dev/gcp/azure).
-- `src/engramory/core/` — knowledge + memory logic.
+- `src/engramory/access/` — `AccessSurface`, default-deny authorization (`authz.py`), OIDC JWT validation (`jwt_auth.py`), and poisoning guard (`poisoning_guard.py`).
+- `src/engramory/core/` — knowledge + memory logic, canonical `Repository`, SDD context tools, and doc tools.
 - `src/engramory/mcp/` — MCP gateway exposing tools to agents.
 - `src/engramory/workers/` — reflection + consolidation (the distillation loop).
+- `src/engramory/cli.py` — thin `engramory` CLI transport over `AccessSurface`.
 - `db/migrations/` — SQL schema.
 - `config/` — per-project / per-domain YAML config on the shared core.
 - `docs/sdd/` — SDD lifecycle artifacts (BRD→IPLAN→CHG); `docs/sdd/05_ADR/` = canonical implementing ADRs.

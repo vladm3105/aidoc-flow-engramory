@@ -15,13 +15,13 @@ doc_id: SPEC-07
 title: "CLI Face — engramory dev/CI transport"
 
 document_control:
-  status: Draft
-  version: "1.0"
+  status: Approved
+  version: "1.1"
   date_created: "2026-07-11T00:00:00"
-  last_updated: "2026-07-11T00:00:00"
+  last_updated: "2026-11-13T00:00:00"
   author: "Engramory team"
   component: "engramory.cli"
-  tdd_ready_score: "[Pending]/100"
+  tdd_ready_score: "98/100"
 
 component_overview:
   description: |
@@ -55,9 +55,9 @@ interfaces:
     - { code: 2, meaning: "usage / config / environment — argparse errors, missing or malformed config, the ADR-10 dev-tier fence (PermissionError)" }
     - { code: 3, meaning: "retryable — canonical store unreachable (StoreUnavailable)" }
   commands:
-    - { name: "init", maps_to: "scaffold + Repository.upsert_agent_profile (best-effort)", notes: "Writes .engramory/config.toml (actor identity + store dsn), appends .engramory/ to .gitignore (config carries a DSN). Idempotent: existing config -> created=false, never overwritten. Profile upsert is best-effort: store-down still exits 0 with profile=deferred (row lands on a later init)." }
-    - { name: "memory add", maps_to: "AccessSurface.memory_add", notes: "--content, --kind (default note); JSON result {episode_id}" }
-    - { name: "memory search", maps_to: "AccessSurface.memory_search", notes: "--query, --scope (default agent), -k (default 8); JSON result {hits: [{memory_id, summary, score, retrieval_id, token_count}]}" }
+    - { name: "init", maps_to: "scaffold + Repository.upsert_agent_profile (best-effort)", notes: "Writes .engramory/config.toml (actor identity + optional --domain-id + store dsn), appends .engramory/ to .gitignore. Idempotent unless --force is passed. Profile upsert is best-effort: store-down still exits 0 with profile=deferred." }
+    - { name: "memory add", maps_to: "AccessSurface.memory_add", notes: "--content, --kind (default note), --scope, --domain-id, --brain-variant, --specialization; JSON result {episode_id}" }
+    - { name: "memory search", maps_to: "AccessSurface.memory_search", notes: "--query, --scope (default agent), --domain-id, --brain-variant, --specialization, --include-knowledge, --expand-graph, -k (default 8); JSON result {hits: [...]}" }
     - { name: "memory feedback", maps_to: "AccessSurface.memory_feedback", notes: "--retrieval-id, --outcome (useful|not_useful|harmful); JSON result {ok}" }
     - { name: "memory forget", maps_to: "AccessSurface.memory_forget", notes: "--memory-id, --reason (audited); JSON result {ok}" }
     - { name: "memory distill", maps_to: "workers.distillation.reflect (OPS COMMAND)", notes: "Interim reflect pass (--brain-variant, --distiller-model, --rag-params-json); JSON result {created, brain_variant}. Replaced in body by the SPEC-04 engine; command survives." }
@@ -119,5 +119,5 @@ traceability:
     spec_references: ["@spec: SPEC-01"]
     ears_references: ["@ears: EARS.01.03.e020", "@ears: EARS.01.03.c900"]
   downstream:
-    - { type: IPLAN, layer: 8, description: "PLAN-002 Phase 2 implements this face; Phase 3 documents it (INSTALL / AGENT-QUICKSTART / AGENT-INTEGRATION / reference Skill)" }
-  health_score: { tdd_ready: "[Pending]%", target_score: ">=90/100" }
+    - { type: IPLAN, layer: 8, description: "Implemented across IPLAN-07 (CLI face), IPLAN-08 (multimodal RAG & blob CAS), and IPLAN-09 (Virtual Employee profile & Brain Passports)" }
+  health_score: { tdd_ready: "98%", target_score: ">=90/100" }

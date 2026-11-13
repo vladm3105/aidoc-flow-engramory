@@ -14,13 +14,13 @@ doc_id: SPEC-01
 title: "Access Surface & Authorization"
 
 document_control:
-  status: Draft
-  version: "1.0"
+  status: Approved
+  version: "1.1"
   date_created: "2026-06-22T00:00:00"
-  last_updated: "2026-06-22T00:00:00"
+  last_updated: "2026-11-13T00:00:00"
   author: "Engramory team"
   component: "AccessSurface"
-  tdd_ready_score: "[Pending]/100"
+  tdd_ready_score: "98/100"
 
 component_overview:
   description: |
@@ -111,6 +111,11 @@ interfaces:
       signature: "async def memory_promote(ctx: ActorContext, *, memory_id: str, target_scope: str, evidence_ref: str | None, target_domain_id: str | None = None, target_project_id: str | None = None, specializations: Sequence[str] | None = None) -> dict[str, Any]"
       description: "Governed promotion of a validated L2 memory up the ADR-07 scope ladder (agent -> project -> domain -> space) with strict source visibility, cross-instance deduplication, and provenance."
       errors: ["AuthzError", "GovernedWriteRejected", "ValidationError", "KeyError", "StoreUnavailable"]
+    - name: "knowledge_search"
+      type: "async function"
+      signature: "async def knowledge_search(ctx: ActorContext, query: str, *, limit: int = 8, scope: str = 'project', domain_id: str | None = None, modality: str | None = None, expand_graph: bool = False, graph_depth: int = 1) -> list[dict[str, Any]]"
+      description: "Scoped 3-leg hybrid RRF search over L0 kb_sections with optional modality filtering and GraphRAG expansion."
+      errors: ["AuthzError", "StoreUnavailable"]
     - name: "knowledge_ingest"
       type: "async function"
       signature: "async def knowledge_ingest(ctx: ActorContext, entry: KBEntryIn, evidence_ref: str | None) -> EntryId"
@@ -200,11 +205,12 @@ tdd_contracts:
     - { path: "tests/e2e/test_scope_isolation.py", covers: "BDD.01.03.e500 cross-tenant deny" }
     - { path: "tests/e2e/test_retrieval.py", covers: "BDD.01.03.a100 scoped retrieval e2e" }
     - { path: "tests/security/test_failclosed.py", covers: "TDD.01.04.d400 fail-closed on store loss" }
+    - { path: "tests/test_virtual_employee_lifecycle.py", covers: "Virtual Employee hierarchy, multi-model brain variants, Brain Passports, and offboarding" }
 
 traceability:
   tags: ["@spec: SPEC-01"]
   upstream:
-    adr_references: ["@adr: ADR.02.03.a100", "@adr: ADR.06.03.a100"]
+    adr_references: ["@adr: ADR.02.03.a100", "@adr: ADR.06.03.a100", "@adr: ADR-07", "@adr: ADR-10"]
     bdd_references: ["@bdd: BDD.01.03.e500", "@bdd: BDD.01.03.f600", "@bdd: BDD.01.03.a100"]
     ears_references: ["@ears: EARS.01.03.e020", "@ears: EARS.01.03.f600", "@ears: EARS.01.03.a700", "@ears: EARS.01.03.b050"]
   downstream:

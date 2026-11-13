@@ -44,7 +44,7 @@ endpoints:
 watched_paths:
   - "compose.platform.yaml"
   - "docs/doc-tools/07_PORTAL_API_CONTRACTS_AND_DEPLOYMENT_RUNBOOK.md"
-last_verified: 2026-11-06
+last_verified: 2026-11-13
 ---
 
 # Multi-Repo Starlight & Scalar Portal, Deployment Architecture & Operations Runbook
