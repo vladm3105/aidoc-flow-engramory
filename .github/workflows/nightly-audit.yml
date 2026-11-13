@@ -22,7 +22,7 @@ jobs:
       # Opt-in verified secret scan (set the TRUFLEHOG_VERIFY repo/org variable to 'true';
       # absent skips). Filesystem scan, verified findings only, no provisioned secret needed.
       - if: vars.TRUFLEHOG_VERIFY == 'true'
-        uses: trufflesecurity/trufflehog@4dd8831c5f12599465d4d45c3c447b4018a34c85  # v3.97.9
+        uses: trufflesecurity/trufflehog@ea68ca03c865c5f324e86e849ced20ed3cf9dbbb  # v3.99.8
         with:
           path: ./
           extra_args: --only-verified
