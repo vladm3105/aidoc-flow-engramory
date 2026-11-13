@@ -4,6 +4,20 @@ All notable changes to Engramory are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-13
+
+### Added — 2026-11-13 (`PLAN-013`..`PLAN-023` / `CHG-006`..`CHG-008`)
+
+- **Multimodal RAG, Dual-Engine GraphRAG & PostgreSQL 18 20 GB+ Chunked Blob CAS (`PLAN-022`, `PLAN-023`, `CHG-008`, `IPLAN-08`)**:
+  - Added migration `0010_multimodal_blob_cas.sql` provisioning `kb_blobs` (`STAGED`/`READY`), `kb_blob_chunks` (`<= 50 MiB` `LOGGED`), `kb_blob_chunks_large` (`> 50 MiB` `UNLOGGED` with `STORAGE EXTERNAL`), and multimodal columns on `kb_sections` (`modality`, `blob_sha256`, `blob_uri`, `media_metadata`).
+  - Implemented `PostgresBlobStorageAdapter` and `LocalFsStorageAdapter` (`StoragePort`) streaming arbitrary files up to `20 GB+` in bounded `4 MiB` chunks (`O(1)` memory) with end-to-end `SHA-256` verification and orphan chunk GC.
+  - Added `ImageExtractor` and `VideoAudioExtractor` with pure-Python `O(1)`-RAM container duration probing for ISO-BMFF (`MP4`/`MOV`/`M4A`) and RIFF `WAVE` (`WAV`) plus optional LiteLLM Vision/Whisper enrichment.
+  - Added 3-leg Hybrid RRF (`search_kb_sections`: vector cosine + `websearch_to_tsquery('simple')` + trigram/ILIKE with `modality` filter) and dual-engine GraphRAG (`expand_graph=True` via Neo4j `:Entity` or PostgreSQL recursive CTE fallback).
+  - Added cross-modal knowledge graph extraction (`DOCUMENT`, `SECTION`, `MEDIA_BLOB`, Unicode/Cyrillic `CONCEPT`, and SDD entity stubs) preserved across `sdd ingest --reconcile` and automatically projected during `engramory knowledge ingest` and `knowledge sync-git`.
+  - Fused L0 extracted knowledge into `memory_search` (`include_knowledge=True`, `expand_graph=True`) across `AccessSurface`, `McpServer`, and `engramory memory search`.
+- **Deep Audit Remediation, Experience Pipeline & Built-In SDD/Docs Toolchains (`PLAN-013`..`PLAN-021`, `CHG-006`..`CHG-007`)**:
+  - Consolidated `context_tools` (`sdd` CLI/MCP suite), `docs_tools` (`docs` lint, drift, runbook slice, `llms.txt`, Starlight+Scalar portal), and Interlog `ExperienceEvent` + `NatsEventsAdapter` (`memory_ingest_event`, `memory_learning_health`).
+
 ### Added — 2026-11-05 (`PLAN-009`..`PLAN-012`)
 
 - **Release Cutoff Remediation (PLAN-012)**:

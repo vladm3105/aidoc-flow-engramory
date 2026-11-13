@@ -965,7 +965,7 @@ class McpServer:
                 "result": {
                     "protocolVersion": MCP_PROTOCOL_VERSION,
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "engramory-mcp", "version": "0.1.0"},
+                    "serverInfo": {"name": "engramory-mcp", "version": "0.2.0"},
                 },
             }
         elif method == "notifications/initialized":
@@ -1072,7 +1072,7 @@ class McpServer:
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
                     self.end_headers()
-                    resp = {"status": "ok", "service": "engramory-mcp", "version": "0.1.0"}
+                    resp = {"status": "ok", "service": "engramory-mcp", "version": "0.2.0"}
                     self.wfile.write(json.dumps(resp).encode("utf-8"))
                 else:
                     self.send_response(404)

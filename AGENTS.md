@@ -30,7 +30,7 @@ It provides L0 knowledge base + L1 short-term + L2 long-term distilled + L3 per-
 - `db/migrations/` — SQL schema.
 - `config/` — per-project / per-domain YAML config on the shared core.
 - `docs/sdd/` — SDD lifecycle artifacts (BRD→IPLAN→CHG); `docs/sdd/05_ADR/` = canonical implementing ADRs.
-- `plans/` — verified implementation plans (`PLAN-001`..`PLAN-021`).
+- `plans/` — verified implementation plans (`PLAN-001`..`PLAN-023`).
 - `docs/` — architecture, memory design, conceptual ADRs (`docs/adr/`), research.
 
 ## Before you finish
