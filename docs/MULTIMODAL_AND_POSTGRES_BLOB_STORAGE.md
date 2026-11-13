@@ -12,8 +12,8 @@ watched_paths:
   - "src/engramory/ports/graph.py"
   - "src/engramory/core/parsers/detector.py"
   - "src/engramory/core/extraction/router.py"
-  - "db/migrations/0001_init_memory.sql"
-last_verified: "2026-11-12"
+  - "db/migrations/0010_multimodal_rag_and_blob_cas.sql"
+last_verified: "2026-11-13"
 ---
 
 # Engramory Multimodal Ingestion & PostgreSQL 18 Large-Blob (`20 GB+`) CAS Architecture
@@ -238,12 +238,12 @@ Neo4j always acts as a **deterministic, rebuildable projection** of canonical Po
 
 ---
 
-## 6. Future Engramory Implementation Roadmap (Deferred to Implementation Session)
+## 6. Implemented Engramory Components (`PLAN-022`, `PLAN-023`, `CHG-008`, `IPLAN-08`)
 
-This specification defines the approved target architecture. Implementation in `platform-engramory` will proceed in a dedicated coding session across five work packages:
+Engramory implements the full multimodal and PostgreSQL 18 `20 GB+` Chunked Blob CAS pipeline across five modules:
 
-1. **Migration `db/migrations/0010_multimodal_blobs.sql`:** Provision `kb_blobs`, `kb_blob_chunks` (`LOGGED`), `kb_blob_chunks_large` (`UNLOGGED`), and optional `kb_media_segments` (`blob_sha256`, `modality`, `start_ms`, `end_ms`, `section_id`).
-2. **`StoragePort` Streaming Extension & `PgBlobStorageAdapter` (`src/engramory/ports/storage.py`):** Add `put_stream()` / `get_stream()` protocols, `COPY BINARY` chunked ingestion, `4`-chunk keyset streaming, `BlobTruncatedError` completeness verification, and orphan chunk GC.
-3. **Multimodal `LLMPort` & Ingestion Router (`src/engramory/ports/llm.py`, `src/engramory/core/parsers/detector.py`, `src/engramory/core/extraction/router.py`):** Extend `detector.py` and `router.py` for image (`PNG`, `JPEG`, `WebP`), audio (`MP3`, `WAV`), and video (`MP4`, `MOV`, `WebM`) extraction into `kb_sections` + `kb_blobs`.
-4. **Neo4j Multimodal Lineage Projection (`src/engramory/ports/graph.py`):** Project `(:BlobNode)<-[:DERIVED_FROM]-(:SectionNode)-[:MENTIONS]->(:EntityNode)` into Neo4j via `Neo4jAdapter`.
-5. **Verification Suite (`tests/`):** Unit, property, and integration tests covering `4 MiB` chunk boundaries, `UNLOGGED` crash-truncation detection, and Neo4j projection parity.
+1. **Migration `db/migrations/0010_multimodal_rag_and_blob_cas.sql`:** Provisions `kb_blobs` (`STAGED`/`READY`), `kb_blob_chunks` (`LOGGED` `<= 50 MiB`), `kb_blob_chunks_large` (`UNLOGGED` `> 50 MiB` with `STORAGE EXTERNAL`), and multimodal columns on `kb_sections` (`modality`, `blob_sha256`, `blob_uri`, `media_metadata`).
+2. **`StoragePort` Streaming & `PostgresBlobStorageAdapter` (`src/engramory/ports/storage.py`, `src/engramory/adapters/dev/storage_pg_blob.py`):** Implements `put_stream()`, `get_stream()`, and `gc_orphan_blobs()` with `4 MiB` chunking (`O(1)` memory), end-to-end `SHA-256` verification, `BlobTruncatedError` completeness guards, and `LocalFsStorageAdapter` (`src/engramory/adapters/dev/storage_local.py`).
+3. **Multimodal Extractors & Ingestion Router (`src/engramory/core/extraction/media.py`, `router.py`, `src/engramory/access/surface.py`):** `ImageExtractor` and `VideoAudioExtractor` perform `O(1)`-RAM header probing (`PNG`/`JPEG`/`WebP`/`GIF`/`SVG`, ISO-BMFF `MP4`/`MOV`/`M4A`, RIFF `WAV`) plus optional LiteLLM Vision/Whisper enrichment, stamping `extraction_metadata` (`extraction_model`, `embedding_model`, `rag_params`) into `kb_sections.media_metadata` via `knowledge_ingest_media`.
+4. **3-Leg Hybrid RRF & Dual-Engine GraphRAG (`src/engramory/core/repository.py`, `src/engramory/core/knowledge_graph.py`):** `search_kb_sections()` fuses vector cosine similarity, `websearch_to_tsquery('simple')`, and trigram/ILIKE with `modality` filtering; `extract_document_graph()` extracts `DOCUMENT`, `SECTION`, `MEDIA_BLOB`, Unicode/Cyrillic `CONCEPT`, and SDD nodes projected to Neo4j or traversed via PostgreSQL recursive CTEs (`expand_graph=True`).
+5. **Verification Suite (`tests/test_multimodal_extraction_and_graphrag.py`):** Covers `4 MiB` multi-chunk streaming, `BlobTruncatedError` detection, multimodal extraction, 3-leg RRF, and fused `memory_search(include_knowledge=True, expand_graph=True)`.

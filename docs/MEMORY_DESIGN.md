@@ -53,7 +53,7 @@ Each agent gets its **own memory namespace** — its unique accumulated experien
 
 ## The distillation loop — the "sleep" that makes it endless
 
-This is the heart of requirement 3, and the genuinely hard part. The mechanism:
+The distillation loop is the heart of requirement 3, and the genuinely hard part. The mechanism:
 
 ```text
 During work:    agent retrieves relevant L0/L2 memory + L1 project state → acts →
@@ -168,7 +168,7 @@ This matters a lot for your mixed fleet (Codex, Claude Code, Hermes, custom). Th
 
 ## Portability & migration — moving the agent's "brain"
 
-This is the right thing to optimize for, because it's where lock-in actually hurts. Honest state of play in 2026:
+Portability is the right thing to optimize for, because vendor lock-in is where migration hurts. Honest state of play in 2026:
 
 ### Do the engines have export/import? Mostly yes — but at different completeness, and there is **no universal cross-tool standard yet**
 

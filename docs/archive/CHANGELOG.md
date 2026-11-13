@@ -6,8 +6,15 @@ All notable changes to Engramory are documented here. Format: [Keep a Changelog]
 
 ## [0.2.0] - 2026-11-13
 
-### Added — 2026-11-13 (`PLAN-013`..`PLAN-023` / `CHG-006`..`CHG-008`)
+### Added — 2026-11-13 (`PLAN-013`..`PLAN-024` / `CHG-006`..`CHG-009`)
 
+- **Virtual Employee Hierarchy, Multi-Model Brain Variants, Specialist Roster & Portable Brain Passports (`PLAN-024`, `CHG-009`, `IPLAN-09`)**:
+  - Formalized the 3-level Virtual Employee specialist taxonomy (`agent_type` archetype $\to$ `agent_id` instance $\to$ `specializations` & `domain_id` department focus) across L3 `agent_profiles`, L2 `memories.provenance`, and `engramory.brain_passport.v1`.
+  - Added end-to-end `domain_id` propagation across `.engramory/config.toml` (`engramory init --domain-id` with non-clobbering profile preservation), OIDC `claims_to_actor_context()`, and `McpServer._resolve_call_ctx()` / `X-Domain-ID`, plus fail-closed cross-department spoofing guards on `memory_search`, `memory_add`, and `knowledge_search`.
+  - Added `agent_profile_upsert` (`engramory profile set`) and experience-ranked `agent_roster_list` (`engramory profile list`) ordered by `mean_confidence DESC, active_skill_count DESC`.
+  - Extended `get_unreflected_episodes`, `get_active_agents_with_unreflected_episodes`, and `reflect()` for parallel multi-model distillation (`brain_variant`, `distiller_model`, `rag_params`) and added `agent_brain_compare` (`engramory profile compare-brains`) for side-by-side variant benchmarking.
+  - Added governed `memory_promote` (`engramory memory promote`) with strict `_SCOPE_CLAUSES` ownership verification, ladder monotonicity, and cross-instance deduplication (`find_existing_promoted_memory`).
+  - Hardened `agent_brain_export` and `agent_brain_import` with recursive `sanitize_portable_value()`, canonical `passport_sha256` integrity verification, cross-archetype `agent_type_mismatch` guard, sibling clone specialization union-merging, and `1536`-dim vector re-embedding, plus transactional `agent_space_offboard` (`engramory profile offboard`).
 - **Multimodal RAG, Dual-Engine GraphRAG & PostgreSQL 18 20 GB+ Chunked Blob CAS (`PLAN-022`, `PLAN-023`, `CHG-008`, `IPLAN-08`)**:
   - Added migration `0010_multimodal_blob_cas.sql` provisioning `kb_blobs` (`STAGED`/`READY`), `kb_blob_chunks` (`<= 50 MiB` `LOGGED`), `kb_blob_chunks_large` (`> 50 MiB` `UNLOGGED` with `STORAGE EXTERNAL`), and multimodal columns on `kb_sections` (`modality`, `blob_sha256`, `blob_uri`, `media_metadata`).
   - Implemented `PostgresBlobStorageAdapter` and `LocalFsStorageAdapter` (`StoragePort`) streaming arbitrary files up to `20 GB+` in bounded `4 MiB` chunks (`O(1)` memory) with end-to-end `SHA-256` verification and orphan chunk GC.
@@ -233,6 +240,8 @@ Governance drift check (`bash ../aidoc-flow-ci/install/apply-standards.sh
   roadmap at ../roadmap/ROADMAP.md).
 - **`CHANGELOG.md`** — this entry.
 
+### Changed — Wave 3b Review & Bundle Verification (2026-07-08)
+
 Working-tree cleanup (not a diff surface — `tmp/` is gitignored):
 
 - Removed untracked `tmp/TODO.md` + `tmp/SESSION_HANDOFF_2026-07-07.md`
@@ -252,7 +261,7 @@ lost; all dead refs cleared.
 
 Multi-agent self-review per OPS-0065 (code-reviewer + documentation-specialist parallel dispatch): approved after 1 fold cycle addressing 1 CRITICAL (4 dead refs to deleted docs/ROADMAP.md — code-reviewer flagged; all 4 fixed by migrating Phase 0-3 content into roadmap/ROADMAP.md + updating README + docs/README consumer refs) + 3 HIGH (docs/ROADMAP.md supersession framing was wrong — Phase content wasn't duplicate, was complementary; content-migration path chosen; false "AGENTS.md CHG/GATE-SPEC" claim retracted across HANDOFF + DECISIONS + CLAUDE.md; surface count 6→8 corrected honestly; CHANGELOG TBD → filled) + 4 MEDIUM/LOW (charter/build-in-progress → Phase 0 dev foundation per README wording; tmp cleanup reframed as working-tree hygiene not diff surface; tmp/SESSION_HANDOFF also cleaned; CHANGELOG subsection order preserved — Added-then-Changed acceptable within Unreleased)
 
-### Added
+### Added — Wave 3 Canon Rollout (2026-07-08)
 
 - **Wave 3 product-tier adoption of aidoc-flow-ci canon** (2026-07-08) —
   self-adopts the workspace-wide standards canon from
@@ -282,6 +291,9 @@ Multi-agent self-review per OPS-0065 (code-reviewer + documentation-specialist p
     repo-settings + actions-permissions + branch-protection-product.
   - **Origin:** `aidoc-flow-ci/plans/PLAN-002_workspace-standards-rollout.md`
     §5.5 Wave 3.
+
+### Added — Initial Platform & CI Bootstrap (2026-07-06)
+
 - **aidoc-flow CI standards adoption** (2026-07-06) — engramory joins the
   aidoc-flow workspace CI infrastructure:
   - `CLAUDE.md` populated with the aidoc-flow-standard governance sections

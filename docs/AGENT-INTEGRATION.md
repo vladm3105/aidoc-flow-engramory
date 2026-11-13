@@ -91,20 +91,21 @@ Mechanics: `engramory <cmd> --help` / `docs/AGENT-QUICKSTART.md`.
 
 ## Multi-Agent Scoping & Trust Boundary
 
-### Project Executor Isolation
+### Project Executor & Virtual Employee Isolation
 
-Project executors initialize with their specific repository ID and isolated scopes:
+Project executors and specialized Virtual Employee instances initialize with their repository ID, optional department focus (`--domain-id`), and isolated scopes:
 
 ```bash
 engramory init \
-  --agent-id my-coding-agent \
+  --agent-id agent-support-01 \
   --project-id my-project \
   --tenant-id default \
-  --scopes "agent,project" \
+  --domain-id billing \
+  --scopes "agent,project,domain" \
   --dsn "$ENGRAMORY_DSN"
 ```
 
-The AccessSurface enforces strict default-deny isolation: a coding agent configured for `my-project` cannot search or alter memories belonging to other repositories.
+`AccessSurface` enforces strict default-deny isolation: an agent configured for `my-project` and `domain_id="billing"` cannot search or alter memories belonging to other repositories or override `domain_id` to another department unless granted `space` scope. See [VIRTUAL_EMPLOYEE_ARCHITECTURE.md](VIRTUAL_EMPLOYEE_ARCHITECTURE.md) for multi-instance specialization (`agent_profile_upsert`, `agent_roster_list`), selective promotion (`memory_promote`), and cross-tenant Brain Passports (`agent_brain_export` / `agent_brain_import`).
 
 ### Operations Assistant (Supervisor) Scope
 
