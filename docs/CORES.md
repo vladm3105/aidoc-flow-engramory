@@ -1,7 +1,7 @@
 # The Two Cores — Memory and Knowledge
 
 Engramory is **one platform with two bounded cores**, not two projects. Decision recorded
-in [ADR-08](../sdd/05_ADR/ADR-08_two_bounded_cores.yaml).
+in [ADR-08](sdd/05_ADR/ADR-08_two_bounded_cores.yaml).
 
 - **Memory core** — experiential, agent-authored, distilled (L1–L3).
 - **Knowledge core** — curated documents, governed, citable (L0).
@@ -17,7 +17,7 @@ Both run on the **same PostgreSQL spine** and are reached through **one unified 
 | Layers | L1 short-term (project/session), L2 long-term distilled (cross-project), L3 agent identity | L0 documents/sections (`kb_sections`) |
 | Author | AI agents (experience, outcomes, lessons) | Humans / governed processes (specifications, ADRs) |
 | Trust | Inferred — needs confidence + safety screening (`source_trust`: `human`/`tool`/`agent`) | Authoritative, citable, versioned |
-| Write governance | Reflection + consolidation; injection/quarantine screening | Governed write + evidence reference ([ADR-06](../sdd/05_ADR/ADR-06_governed_write_failclosed.yaml)) |
+| Write governance | Reflection + consolidation; injection/quarantine screening | Governed write + evidence reference ([ADR-06](sdd/05_ADR/ADR-06_governed_write_failclosed.yaml)) |
 | Lifecycle | Distilled → consolidated → forgotten | Versioned, permanent (append-only) |
 | Schema | `episodes`, `memories`, `agent_profiles`, `consolidation_runs`, `memory_retrievals` | `kb_sections` (migration 0003, MVP-1) |
 | Scale profile | High-frequency append + periodic reflection/compaction | Massive document corpora (e.g. 160+ SDD docs, 17 MB in `b-local-privy`) |
@@ -74,10 +74,10 @@ Real-world software engineering repositories (such as `b-local-privy` or `aidoc-
 
 Both cores share, and must not duplicate:
 
-- **Postgres canonical store** + pgvector ([ADR-01](../sdd/05_ADR/ADR-01_postgres_spine.yaml), [ADR-05](../sdd/05_ADR/ADR-05_canonical_memory.yaml)).
-- **Scope + isolation model** — `agent → project → domain → space` within a `tenant_id` wall ([ADR-07](../sdd/05_ADR/ADR-07_scope_model.yaml)).
+- **Postgres canonical store** + pgvector ([ADR-01](sdd/05_ADR/ADR-01_postgres_spine.yaml), [ADR-05](sdd/05_ADR/ADR-05_canonical_memory.yaml)).
+- **Scope + isolation model** — `agent → project → domain → space` within a `tenant_id` wall ([ADR-07](sdd/05_ADR/ADR-07_scope_model.yaml)).
 - **One unified access surface** — a single auth/scope decision and fail-closed audit log per call.
-- **Hexagonal ports & adapters** ([ADR-02](../sdd/05_ADR/ADR-02_ports_and_adapters.yaml)) — identical StoragePort/VectorPort/GraphPort/MemoryPort serve both cores.
+- **Hexagonal ports & adapters** ([ADR-02](sdd/05_ADR/ADR-02_ports_and_adapters.yaml)) — identical StoragePort/VectorPort/GraphPort/MemoryPort serve both cores.
 - **Portability** — canonical text in Postgres; embeddings and graphs are rebuildable projections.
 
 ---
@@ -106,7 +106,7 @@ The iplan-runner / iplanic **execution ledger** is a *separate bounded context* 
 execution plane's system-of-record — **not** a third Engramory core and **not** Engramory's
 storage backend. Engramory owns its own store; it **ingests** execution-events as L1 episodes
 (via `EventsPort`) and cross-links provenance by ID. Decision recorded in
-[ADR-09](../sdd/05_ADR/ADR-09_independent_memory_storage.yaml).
+[ADR-09](sdd/05_ADR/ADR-09_independent_memory_storage.yaml).
 
 ---
 

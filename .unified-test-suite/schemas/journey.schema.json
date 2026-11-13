@@ -1,0 +1,231 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://unified-test-suite/schemas/journey.schema.json",
+  "title": "Journey card (uts.journey/1) — tests/journeys/<BDD-ID>.journey.yaml",
+  "description": "The browser test contract for one BDD scenario (CANON.md §12, .unified-test-suite/agents/JOURNEYS.md). Validated by uts check (sdd/sdd_index.py). Drafts (draft: true) may omit ears/act/expect.",
+  "type": "object",
+  "required": [
+    "schema",
+    "journey"
+  ],
+  "properties": {
+    "schema": {
+      "const": "uts.journey/1"
+    },
+    "draft": {
+      "type": "boolean"
+    },
+    "journey": {
+      "type": "string",
+      "pattern": "^BDD\\.\\d{2,}\\.\\d{2,}\\.[a-f0-9]{4,8}$"
+    },
+    "title": {
+      "type": "string"
+    },
+    "tdd": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^TDD\\.\\d{2,}\\.\\d{2,}\\.[a-f0-9]{4,8}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "ears": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "pattern"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^EARS\\.\\d{2,}\\.\\d{2,}\\.[a-f0-9]{4,8}$"
+          },
+          "pattern": {
+            "enum": [
+              "event",
+              "state",
+              "unwanted",
+              "optional",
+              "ubiquitous"
+            ]
+          },
+          "while": {
+            "type": "string"
+          },
+          "when": {
+            "type": "string"
+          },
+          "then": {
+            "type": "string",
+            "description": "an expect id of this card"
+          },
+          "covered_by": {
+            "type": "string",
+            "pattern": "^BDD\\.\\d{2,}\\.\\d{2,}\\.[a-f0-9]{4,8}$"
+          },
+          "within": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "number"
+              },
+              "unit": {
+                "type": "string"
+              },
+              "enforce": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      }
+    },
+    "states": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "setup": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "reach": {
+            "type": "string"
+          },
+          "identity": {
+            "type": [
+              "integer",
+              "string"
+            ]
+          },
+          "data": {
+            "type": "string"
+          },
+          "via": {
+            "enum": [
+              "ui",
+              "seed"
+            ]
+          }
+        }
+      }
+    },
+    "act": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "intent"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "intent": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "expect": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "oracle",
+          "assert"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "oracle": {
+            "enum": [
+              "ui",
+              "url",
+              "network",
+              "console",
+              "timing",
+              "storage",
+              "a11y"
+            ]
+          },
+          "assert": {
+            "type": "string"
+          },
+          "ears": {
+            "type": "string",
+            "pattern": "^EARS\\.\\d{2,}\\.\\d{2,}\\.[a-f0-9]{4,8}$"
+          }
+        }
+      }
+    },
+    "allow": {
+      "type": "object",
+      "properties": {
+        "origins": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "properties": {
+        "capture": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "on_failure": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "max_steps": {
+          "type": "integer"
+        },
+        "timeout_s": {
+          "type": "integer"
+        }
+      }
+    },
+    "environments": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "external": {
+      "type": "boolean"
+    }
+  }
+}

@@ -1,0 +1,70 @@
+# .unified-test-suite/ci/github-actions.example.yml — reference job (copy into .github/workflows/ and adapt).
+# Pins Task, runs a canon gate, publishes summary.md, and splits artifacts so traces/HTML (which contain
+# tokens) are uploaded only on failure with short retention (CANON.md §5.4).
+name: tests
+
+on:
+  pull_request:
+    paths:
+      - '**'
+      # Narrow `paths` if you like, but always keep:
+      #   Taskfile.yml, unified-test-suite.*, .unified-test-suite/**, tests/steps/**, <playwright config>
+
+jobs:
+  test-pr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CI: 'true'
+      TEST_RUN_ID: gh-${{ github.run_id }}-${{ github.run_attempt }}
+      # Test identities for parallel Playwright workers (JSON array) — store as a repository secret.
+      E2E_USER_POOL: ${{ secrets.E2E_USER_POOL }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }          # test:changed / selection needs the merge base
+
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }   # pin to your project's Node version
+      # Add the toolchains your layers use:
+      # - uses: actions/setup-go@v5
+      #   with: { go-version-file: go.mod }
+      # - uses: actions/setup-python@v5
+      #   with: { python-version: '3.12' }
+      # - run: python -m pip install -r requirements-dev.txt   # include pytest-cov if a pytest layer sets "coverage"
+
+      - name: Install Task (pinned to the canon's PINNED_TASK_VERSION)
+        run: |
+          sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b ~/.local/bin v3.53.1
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - run: task test:setup
+      - run: task test:doctor
+      - run: task uts:check STRICT=1
+      # Tamper check on protected branches: re-verify the lock against the upstream canon tag.
+      # - run: task uts:check UPSTREAM=https://github.com/<org>/unified-test-suite.git
+      - run: task test:pr
+
+      - name: Publish summary
+        if: always()
+        run: '[ -f test-results/summary.md ] && cat test-results/summary.md >> "$GITHUB_STEP_SUMMARY" || true'
+
+      - name: Upload results (no traces/HTML)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          retention-days: 30
+          path: |
+            test-results/
+            !test-results/reports/*/artifacts/**
+            !test-results/reports/*/html/**
+
+      - name: Upload Playwright debug (failure only — contains tokens)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-debug
+          retention-days: 7
+          path: |
+            test-results/reports/*/artifacts/
+            test-results/reports/*/html/

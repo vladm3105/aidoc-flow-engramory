@@ -5,6 +5,7 @@ Real Postgres via the shared fixture. Covers the repository capabilities
 and the three remaining SPEC-01 surface tools (memory_feedback,
 memory_forget, agent_profile_get) — every decision audited.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -54,21 +55,21 @@ def surface(repo: Repository) -> AccessSurface:
 
 # ── Repository: feedback ────────────────────────────────────────────────────
 
+
 async def test_record_feedback_sets_outcome(repo: Repository) -> None:
     mem_id = await repo.upsert_memory(_memory("t-fb1"))
     [rid] = await repo.log_retrievals(
         memory_ids=[mem_id], tenant_id="t-fb1", agent_id="agent-a", project_id="p1"
     )
     await repo.record_feedback(rid, "useful", tenant_id="t-fb1")
-    assert await repo.get_retrieval_feedback(
-        tenant_id="t-fb1", memory_id=mem_id
-    ) == ["useful"]
+    assert await repo.get_retrieval_feedback(tenant_id="t-fb1", memory_id=mem_id) == ["useful"]
 
 
 async def test_record_feedback_rejects_unknown_outcome(repo: Repository) -> None:
     with pytest.raises(ValueError):
-        await repo.record_feedback("00000000-0000-0000-0000-000000000000",
-                                   "amazing", tenant_id="t-fb2")
+        await repo.record_feedback(
+            "00000000-0000-0000-0000-000000000000", "amazing", tenant_id="t-fb2"
+        )
 
 
 async def test_record_feedback_is_tenant_guarded(repo: Repository) -> None:
@@ -79,12 +80,13 @@ async def test_record_feedback_is_tenant_guarded(repo: Repository) -> None:
     )
     with pytest.raises(KeyError):
         await repo.record_feedback(rid, "harmful", tenant_id="t-other")
-    assert await repo.get_retrieval_feedback(
-        tenant_id="t-fb3", memory_id=mem_id
-    ) == [None]  # untouched
+    assert await repo.get_retrieval_feedback(tenant_id="t-fb3", memory_id=mem_id) == [
+        None
+    ]  # untouched
 
 
 # ── Repository: tenant-scoped get_memory + retire ───────────────────────────
+
 
 async def test_get_memory_is_tenant_scoped(repo: Repository) -> None:
     mem_id = await repo.upsert_memory(_memory("t-gm1"))
@@ -126,9 +128,7 @@ async def test_record_feedback_last_write_wins(repo: Repository) -> None:
     )
     await repo.record_feedback(rid, "useful", tenant_id="t-fb4")
     await repo.record_feedback(rid, "harmful", tenant_id="t-fb4")
-    assert await repo.get_retrieval_feedback(
-        tenant_id="t-fb4", memory_id=mem_id
-    ) == ["harmful"]
+    assert await repo.get_retrieval_feedback(tenant_id="t-fb4", memory_id=mem_id) == ["harmful"]
 
 
 async def test_retire_memory_is_tenant_guarded(repo: Repository) -> None:
@@ -141,11 +141,13 @@ async def test_retire_memory_is_tenant_guarded(repo: Repository) -> None:
 
 # ── Repository: agent profiles ──────────────────────────────────────────────
 
+
 async def test_agent_profile_roundtrip(repo: Repository) -> None:
     assert await repo.get_agent_profile("nobody-yet") is None
     await repo.upsert_agent_profile(
-        AgentProfile(agent_id="agent-p1", display_name="Agent P",
-                     standing_preferences={"tone": "terse"})
+        AgentProfile(
+            agent_id="agent-p1", display_name="Agent P", standing_preferences={"tone": "terse"}
+        )
     )
     profile = await repo.get_agent_profile("agent-p1")
     assert profile is not None
@@ -155,14 +157,13 @@ async def test_agent_profile_roundtrip(repo: Repository) -> None:
 
 async def test_agent_profile_upsert_updates(repo: Repository) -> None:
     await repo.upsert_agent_profile(AgentProfile(agent_id="agent-p2"))
-    await repo.upsert_agent_profile(
-        AgentProfile(agent_id="agent-p2", display_name="Renamed")
-    )
+    await repo.upsert_agent_profile(AgentProfile(agent_id="agent-p2", display_name="Renamed"))
     profile = await repo.get_agent_profile("agent-p2")
     assert profile is not None and profile.display_name == "Renamed"
 
 
 # ── Surface: memory_feedback ────────────────────────────────────────────────
+
 
 async def test_surface_memory_feedback_records_and_audits(
     surface: AccessSurface, repo: Repository
@@ -172,9 +173,7 @@ async def test_surface_memory_feedback_records_and_audits(
     hits = await surface.memory_search(ctx, query="tags", k=5)
     assert hits and hits[0].memory_id == mem_id
     await surface.memory_feedback(ctx, hits[0].retrieval_id, "useful")
-    assert await repo.get_retrieval_feedback(
-        tenant_id="t-sf1", memory_id=mem_id
-    ) == ["useful"]
+    assert await repo.get_retrieval_feedback(tenant_id="t-sf1", memory_id=mem_id) == ["useful"]
     audits = await repo.get_audit_records(tenant_id="t-sf1")
     assert audits[0]["action"] == "memory_feedback" and audits[0]["allowed"] is True
 
@@ -184,12 +183,11 @@ async def test_surface_memory_feedback_rejects_bad_outcome(
 ) -> None:
     ctx = _ctx("t-sf2")
     with pytest.raises(ValueError):
-        await surface.memory_feedback(
-            ctx, "00000000-0000-0000-0000-000000000000", "meh"
-        )
+        await surface.memory_feedback(ctx, "00000000-0000-0000-0000-000000000000", "meh")
 
 
 # ── Surface: memory_forget ──────────────────────────────────────────────────
+
 
 async def test_surface_memory_forget_retires_and_audits(
     surface: AccessSurface, repo: Repository
@@ -235,6 +233,7 @@ async def test_surface_memory_forget_cannot_cross_tenants(
 
 # ── Surface: agent_profile_get ──────────────────────────────────────────────
 
+
 async def test_surface_agent_profile_get_default_on_fresh_store(
     surface: AccessSurface, repo: Repository
 ) -> None:
@@ -249,14 +248,13 @@ async def test_surface_agent_profile_get_default_on_fresh_store(
 async def test_surface_agent_profile_get_returns_own_profile_only(
     surface: AccessSurface, repo: Repository
 ) -> None:
-    await repo.upsert_agent_profile(
-        AgentProfile(agent_id="agent-b", display_name="Someone Else")
-    )
+    await repo.upsert_agent_profile(AgentProfile(agent_id="agent-b", display_name="Someone Else"))
     profile = await surface.agent_profile_get(_ctx("t-pr2", agent_id="agent-a"))
     assert profile.agent_id == "agent-a"  # never another agent's row
 
 
 # ── Worker: interim reflect() ───────────────────────────────────────────────
+
 
 async def test_reflect_projects_episodes_to_searchable_memories(
     surface: AccessSurface, repo: Repository
@@ -288,16 +286,10 @@ async def test_reflect_respects_agent_wall_within_tenant(repo: Repository) -> No
     or consume — agent-b's episodes."""
     from engramory.workers.distillation import reflect
 
-    await repo.add_episode(
-        Episode(agent_id="agent-a", content_raw="a's fact", tenant_id="t-rf4")
-    )
-    await repo.add_episode(
-        Episode(agent_id="agent-b", content_raw="b's fact", tenant_id="t-rf4")
-    )
+    await repo.add_episode(Episode(agent_id="agent-a", content_raw="a's fact", tenant_id="t-rf4"))
+    await repo.add_episode(Episode(agent_id="agent-b", content_raw="b's fact", tenant_id="t-rf4"))
     assert await reflect(repo, tenant_id="t-rf4", agent_id="agent-a") == 1
-    remaining = await repo.get_unreflected_episodes(
-        tenant_id="t-rf4", agent_id="agent-b"
-    )
+    remaining = await repo.get_unreflected_episodes(tenant_id="t-rf4", agent_id="agent-b")
     assert [e.content_raw for e in remaining] == ["b's fact"]
 
 

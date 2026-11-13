@@ -1,0 +1,25 @@
+# Project Taskfile — owned by this project. The CI contract lives in .ci/ (aidoc-hybrid-ci).
+# Adapt per service via include vars (see .ci/taskfiles/<lang>.yml headers), add project
+# checks via EXTRA_CHECKS / EXTRA_FAST_CHECKS, and put project tasks under `tasks:`.
+version: '3'
+
+includes:
+  uts:
+    taskfile: .unified-test-suite/Taskfile.yml
+    flatten: true
+  stack: .aidoc/stack/Taskfile.yml
+  sdd: .aidoc/Taskfile.yml
+  ci:
+    taskfile: .ci/taskfiles/root.yml
+    flatten: true
+    vars:
+      SERVICES: "app"
+      EXTRA_FAST_CHECKS: "sdd:check"
+      EXTRA_CHECKS: ""
+
+  app:
+    taskfile: .ci/taskfiles/python.yml
+    dir: .
+    vars: { COV_MIN: "80" }
+
+tasks: {}

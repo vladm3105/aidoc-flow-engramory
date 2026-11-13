@@ -1,0 +1,594 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://unified-test-suite/schemas/config.schema.json",
+  "title": "unified-test-suite project config (unified-test-suite.config.json)",
+  "description": "Project-owned. Everything project-specific lives here; the vendored canon never changes per project. `uts check` validates semantics beyond this schema.",
+  "type": "object",
+  "required": [
+    "project",
+    "layers",
+    "gates"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "project": {
+      "type": "string",
+      "description": "Project name shown in summaries"
+    },
+    "resultsDir": {
+      "type": "string",
+      "default": "test-results",
+      "description": "Must be gitignored"
+    },
+    "setup": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Commands for `task test:setup`; default derived from runners (npm ci, playwright install chromium)"
+    },
+    "stack": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "backendUrl": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Default BACKEND_URL (exported env wins). null = no backend. Loopback + compose configured ⇒ managed stack"
+        },
+        "appUrl": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Default APP_URL for browser layers (needsApp)"
+        },
+        "healthPath": {
+          "type": "string",
+          "default": "/health"
+        },
+        "waitSeconds": {
+          "type": "integer",
+          "default": 120
+        },
+        "compose": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "files": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1
+            },
+            "envFile": {
+              "type": "string",
+              "description": "Read by docker compose ONLY, never in CI, never by task/test processes"
+            }
+          },
+          "required": [
+            "files"
+          ]
+        },
+        "dbReset": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Command that resets + seeds the test DB on a managed stack (runs before every stateful layer)"
+        }
+      }
+    },
+    "layers": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9-]*$",
+        "not": {
+          "enum": [
+            "layer",
+            "layers",
+            "report",
+            "clean",
+            "changed",
+            "gate",
+            "group"
+          ]
+        }
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/layer"
+      }
+    },
+    "groups": {
+      "type": "object",
+      "description": "Named layer sets → task test:<group> (no clean, parallel then serial)",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "minItems": 1
+      }
+    },
+    "gates": {
+      "type": "object",
+      "description": "Gates → task test:<gate> (clean, stateless ∥, stateful in order, report). Conventional names: fast, pr, nightly, all",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "layers"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "layers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1
+          },
+          "strict": {
+            "type": "boolean",
+            "description": "Budget and flaky breaches fail instead of warn"
+          },
+          "budgetSeconds": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "sddMode": {
+            "enum": [
+              "build",
+              "gate-code"
+            ],
+            "description": "SDD mode only: severity of UTS-SDD findings for this gate (gate-code = errors that fail the verdict) and default sdd-lint mode"
+          }
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "description": "Per-layer coverage floors (go: coverprofile; pytest: pytest-cov XML). null = reported, not enforced",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "minPercent": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "flaky": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "strictFailPercent": {
+          "type": "number",
+          "description": "Under strict gates, a flaky rate above this fails (any flaky test is always a warning)"
+        }
+      }
+    },
+    "bdd": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "idPattern": {
+          "type": "string",
+          "description": "Regex (no anchors) for scenario IDs, e.g. BDD\\.\\d{2}\\.\\d{2}\\.[0-9a-z]{4}"
+        },
+        "catalogGlobs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "requireCatalog": {
+          "type": "boolean"
+        },
+        "specGlobs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "totalScenarios": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      }
+    },
+    "selection": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Changed paths → layers for `task test:changed`",
+      "properties": {
+        "base": {
+          "type": "string",
+          "default": "origin/main"
+        },
+        "always": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "fallback": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "fullRunTriggers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "paths",
+              "layers"
+            ],
+            "properties": {
+              "paths": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "layers": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "secrets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "envKeys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Env vars whose VALUES are masked everywhere"
+        },
+        "testOnlyEnvKeys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "keysFile": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Shared JSON {\"secret\": [...], \"testOnly\": [...]} also read by the project's secret scanner"
+        }
+      }
+    },
+    "providers": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Third-party providers: the env switch the app honours and its mode per gate. {} = none. null = not declared (check TODO)",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "env"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "env": {
+            "type": "string",
+            "description": "Env var the application reads, e.g. BRIDGE_MODE"
+          },
+          "modes": {
+            "type": "object",
+            "description": "gate name (or \"default\") → value, e.g. {\"pr\": \"stub\", \"nightly\": \"sandbox\"}",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "notes": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "e2e": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "config": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Playwright config path (must use defineCanonConfig)"
+        },
+        "identityPoolEnv": {
+          "type": "string",
+          "default": "E2E_USER_POOL"
+        },
+        "identitiesPerWorker": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        },
+        "minWorkersInCI": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        },
+        "secretFields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Extra identity-pool field names to redact by value (password/otp/token/secret/key/pin/cred/cookie/session are always redacted)"
+        }
+      }
+    },
+    "freeze": {
+      "type": "array",
+      "description": "Frozen legacy suites: may shrink, never grow",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "glob",
+          "baseline"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "glob": {
+            "type": "string"
+          },
+          "testPattern": {
+            "type": "string",
+            "description": "Regex counting tests per file (multiline); default Python def test_*"
+          },
+          "baseline": {
+            "type": "string"
+          },
+          "instead": {
+            "type": "string",
+            "description": "What to do instead (shown on violation)"
+          }
+        }
+      }
+    },
+    "sdd": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "description": "aidoc-flow SDD integration (opt-in). Absent or null = standalone mode (1.0.0-rc.2 behavior). Present = summary.sdd, TDD binding and the sdd-lint runner. Needs python3 + PyYAML.",
+      "properties": {
+        "docsRoot": {
+          "type": "string",
+          "description": "SDD corpus root (default docs/sdd)"
+        },
+        "framework": {
+          "type": "string",
+          "description": "aidoc-flow-framework checkout for the registry grammar and sdd-lint (default .aidoc/framework; env SDD_FRAMEWORK wins)"
+        },
+        "python": {
+          "type": "string",
+          "description": "python interpreter with PyYAML (default python3)"
+        },
+        "mode": {
+          "enum": [
+            "build",
+            "gate-code"
+          ],
+          "description": "default severity of UTS-SDD findings (build = warnings, gate-code = errors); gates.<g>.sddMode overrides"
+        },
+        "profile": {
+          "type": "string",
+          "description": "SDD project profile (default .aidoc/profile.yaml)"
+        },
+        "$comment": {
+          "type": "string"
+        },
+        "journeys": {
+          "type": "string",
+          "description": "journey card directory (default tests/journeys; CANON.md §12)"
+        }
+      }
+    },
+    "$comment": {
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "layer": {
+      "type": "object",
+      "required": [
+        "runner"
+      ],
+      "properties": {
+        "runner": {
+          "enum": [
+            "go",
+            "pytest",
+            "node-test",
+            "node-command",
+            "steps",
+            "playwright",
+            "command",
+            "sdd-lint",
+            "journeys"
+          ]
+        },
+        "description": {
+          "type": "string"
+        },
+        "stateful": {
+          "type": "boolean",
+          "description": "Shares state (DB/backend): runs sequentially. Defaults to needsStack"
+        },
+        "needsStack": {
+          "type": "boolean",
+          "description": "Preflight: backend up (+ DB reset unless resetDb:false)"
+        },
+        "needsApp": {
+          "type": "boolean",
+          "description": "Preflight also waits for APP_URL"
+        },
+        "needsBackend": {
+          "type": "boolean",
+          "description": "Needs a reachable backend but never starts/resets one (smoke)"
+        },
+        "resetDb": {
+          "type": "boolean",
+          "default": true
+        },
+        "packages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "go: package patterns"
+        },
+        "race": {
+          "type": "boolean",
+          "description": "go: -race (default true; needs CGO)"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "python": {
+          "type": "string",
+          "description": "pytest: interpreter (default python3)"
+        },
+        "coverage": {
+          "type": [
+            "boolean",
+            "string"
+          ],
+          "description": "pytest: enable pytest-cov (true or a source path)"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "node-test: test files/globs"
+        },
+        "command": {
+          "type": "string",
+          "description": "node-command: command run verbatim; per-test JUnit via NODE_OPTIONS"
+        },
+        "steps": {
+          "description": "steps: a list file (name :: command) or inline array",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "run"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "run": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "project": {
+          "type": "string",
+          "description": "playwright: --project (default = layer name)"
+        },
+        "config": {
+          "type": "string",
+          "description": "playwright: overrides e2e.config"
+        },
+        "browser": {
+          "type": "boolean",
+          "description": "playwright: false for request-only projects (doctor skips chromium)"
+        },
+        "run": {
+          "type": "string",
+          "description": "command: shell command; {reportDir} is substituted; JUnit must land in {reportDir}/*.xml"
+        },
+        "reproduce": {
+          "type": "string",
+          "description": "command: single-test repro template ({name}, {file})"
+        },
+        "dir": {
+          "type": "string",
+          "description": "Run the layer from this sub-directory (monorepos: go.mod / pytest root not at repo root). Not for playwright."
+        },
+        "mode": {
+          "enum": [
+            "build",
+            "gate-code"
+          ],
+          "description": "sdd-lint only: sdd_doc_lint mode (default: gate sddMode, then sdd.mode)"
+        },
+        "evidenceDir": {
+          "type": "string",
+          "description": "journeys only: directory of browser-subagent evidence records (default <resultsDir>/agent-evidence)"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

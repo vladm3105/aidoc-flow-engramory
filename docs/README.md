@@ -12,12 +12,18 @@ Engramory enforces **hierarchical access control** (`agent → project → domai
 
 | Doc | Purpose |
 |---|---|
+| [DATA_FLOW_AND_LIFECYCLE.md](DATA_FLOW_AND_LIFECYCLE.md) | Data flow, document lifecycle, CRUD tool audit, and sequential diagrams |
+| [NEO4J_MIGRATION_ARCHITECTURE.md](NEO4J_MIGRATION_ARCHITECTURE.md) | Neo4j graph engine architecture, dual-store contract, and rebuildable projection |
+| [runbooks/neo4j_ops.md](runbooks/neo4j_ops.md) | Neo4j operations runbook, memory tuning, health verification, and disaster recovery |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Target architecture, multi-agent operating model, SQL schema, hybrid retrieval, and portability matrix |
 | [CORES.md](CORES.md) | The two bounded cores (Memory & Knowledge), access hierarchy, audit loop, and shared spine |
 | [STRATEGY.md](STRATEGY.md) | Build strategy & recommendation: native PostgreSQL spine, swappable processors, and evaluation-led delivery |
 | [INSTALL.md](INSTALL.md) | Dev-tier environment setup, Docker Compose stack, migrations, and CLI verification |
 | [AGENT-QUICKSTART.md](AGENT-QUICKSTART.md) | Step-by-step guide for AI agents to remember, retrieve, and close the feedback loop |
 | [AGENT-INTEGRATION.md](AGENT-INTEGRATION.md) | Vendor-neutral integration guide (Claude, Gemini, Codex, Copilot, Cursor) |
+| [OBSERVABILITY.md](OBSERVABILITY.md) | OpenTelemetry tracing, structured JSON logging, and `/health` + `/healthz` probes |
+| [SDD_KNOWLEDGE_GRAPH_ARCHITECTURE.md](SDD_KNOWLEDGE_GRAPH_ARCHITECTURE.md) | 10-layer SDD knowledge graph, context slicing, and blast-radius analysis |
+| [doc-tools/00_INDEX.md](doc-tools/00_INDEX.md) | Governed documentation & executable runbook toolchain specification |
 | [MEMORY_DESIGN.md](MEMORY_DESIGN.md) | Layered cognitive memory model (L0–L3), distillation loop, and engine portability analysis |
 | [PORTABILITY.md](PORTABILITY.md) | Self-hosted → GCP/Azure principles, hexagonal ports, and migration rules |
 | [HOW_TO_USE_THE_FRAMEWORK.md](HOW_TO_USE_THE_FRAMEWORK.md) | Authoring SDD artifacts the UCX / aidoc-flow way (8-layer lifecycle) |
@@ -26,4 +32,4 @@ Engramory enforces **hierarchical access control** (`agent → project → domai
 | [adr/](adr/) | Conceptual/descriptive architecture decision records |
 | [research/](research/) | Historical landscape reviews, benchmark evaluations, and memory-tool critiques |
 
-The canonical SDD lifecycle artifacts (BRD→IPLAN) live in the [`sdd/`](../sdd/) tree; [`sdd/05_ADR/`](../sdd/05_ADR/ADR-00_index.md) holds the canonical implementing ADRs. Canonical roadmap is maintained at [`roadmap/ROADMAP.md`](../roadmap/ROADMAP.md).
+The canonical SDD lifecycle artifacts (BRD→IPLAN) live in the [`sdd/`](sdd/) tree; [`sdd/05_ADR/`](sdd/05_ADR/ADR-00_index.md) holds the canonical implementing ADRs. Canonical roadmap is maintained at [`docs/sdd/08_IPLAN/IPLAN-00_index.yaml`](sdd/08_IPLAN/IPLAN-00_index.yaml).

@@ -1,0 +1,6 @@
+extends: existence
+message: "Avoid bare '%s'; specify explicit host loopback ('127.0.0.1:<port>') or container gateway ('10.250.0.1:<port>')."
+level: warning
+nonword: true
+tokens:
+  - 'https?://localhost:\d+'

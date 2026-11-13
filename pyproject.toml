@@ -1,6 +1,6 @@
 [project]
 name = "engramory"
-version = "0.1.0"
+version = "0.2.0"
 description = "Shared agent knowledge & memory core — per-agent distilled long-term memory over MCP."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -8,16 +8,24 @@ license = { text = "Apache-2.0" }
 authors = [{ name = "Engramory contributors" }]
 # The ports layer stays stdlib-only by design. psycopg is spine infrastructure
 # (ADR-01 / SPEC-06): the repository uses the Postgres driver directly.
-dependencies = ["psycopg[binary]>=3.2"]
+dependencies = [
+    "cryptography>=42.0.0",
+    "nats-py>=2.8.0",
+    "neo4j>=5.26.0",
+    "psycopg[binary]>=3.2",
+    "pyjwt[crypto]>=2.8.0",
+    "pyyaml>=6.0.3",
+]
 
 [project.optional-dependencies]
-dev = ["ruff", "pytest", "pytest-asyncio", "mypy"]
+dev = ["ruff", "pytest", "pytest-asyncio", "pytest-cov", "mypy"]
+extraction = ["docling>=2.0", "pymupdf>=1.24.0", "beautifulsoup4>=4.12.0"]
 
 [project.scripts]
 engramory = "engramory.cli:main"
 
 [project.urls]
-Repository = "https://github.com/vladm3105/aidoc-flow-engramory"
+Repository = "https://github.com/vladm3105/platform-engramory"
 
 [build-system]
 requires = ["hatchling"]
@@ -29,6 +37,7 @@ packages = ["src/engramory"]
 [tool.ruff]
 line-length = 100
 src = ["src"]
+extend-exclude = [".agents", ".ci", ".aidoc", ".venv", "tmp", ".unified-test-suite", "scripts", "plans", "docs", "sdd"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
@@ -37,9 +46,18 @@ select = ["E", "F", "I", "UP", "B"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-q"
+markers = [
+    "integration: integration, e2e, and conformance tests against database/services",
+]
 
 [tool.mypy]
 python_version = "3.12"
 mypy_path = "src"
 packages = ["engramory"]
 ignore_missing_imports = true
+
+[dependency-groups]
+dev = [
+    "bandit>=1.9.4",
+    "pip-audit>=2.10.1",
+]

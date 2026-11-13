@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://unified-test-suite/schemas/agent-evidence.schema.json",
+  "title": "Browser-subagent evidence record (uts.agent-evidence/1)",
+  "description": "Written by a browser subagent to the work item evidenceFile; imported by the journeys runner (CANON.md §12). Never contains credentials.",
+  "type": "object",
+  "required": [
+    "schema",
+    "journey",
+    "journeyFile",
+    "journeySha256",
+    "fingerprint",
+    "agent",
+    "verdict",
+    "steps",
+    "startedAt",
+    "finishedAt"
+  ],
+  "properties": {
+    "schema": {
+      "const": "uts.agent-evidence/1"
+    },
+    "journey": {
+      "type": "string",
+      "pattern": "^BDD\\.\\d{2,}\\.\\d{2,}\\.[a-f0-9]{4,8}$"
+    },
+    "journeyFile": {
+      "type": "string"
+    },
+    "journeySha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "fingerprint": {
+      "type": "string"
+    },
+    "runId": {
+      "type": "string"
+    },
+    "agent": {
+      "type": "object",
+      "required": [
+        "runtime"
+      ],
+      "properties": {
+        "runtime": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        }
+      }
+    },
+    "env": {
+      "type": "object"
+    },
+    "identity": {
+      "type": "object",
+      "properties": {
+        "slot": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      }
+    },
+    "verdict": {
+      "enum": [
+        "passed",
+        "failed",
+        "blocked",
+        "inconclusive"
+      ]
+    },
+    "classification": {
+      "enum": [
+        "product",
+        "test",
+        "environment",
+        null
+      ]
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "passed",
+              "failed",
+              "skipped"
+            ]
+          },
+          "observed": {
+            "type": "string"
+          },
+          "durationMs": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "timings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "ears": {
+            "type": "string"
+          },
+          "metric": {
+            "type": "string"
+          },
+          "samples": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "unit": {
+            "type": "string"
+          },
+          "bound": {
+            "type": "number"
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "startedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "finishedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "notes": {
+      "type": "string"
+    }
+  }
+}

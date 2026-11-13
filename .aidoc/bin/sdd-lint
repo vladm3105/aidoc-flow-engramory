@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# sdd-lint — portable runner for sdd_doc_lint in consumer repositories.
+# Ported from framework/scripts/install.sh (framework 0.96.25).
+# Installed by aiops-harness at .aidoc/bin/sdd-lint.
+# Prefers the Taskfile runner; falls back to the vendored or harness framework payload.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if command -v task >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/Taskfile.yml" ]; then
+  exec task --taskfile "$SCRIPT_DIR/Taskfile.yml" --dir "$(dirname "$SCRIPT_DIR")" lint -- "$@"
+fi
+PYTHONPATH="${AIDOC_FRAMEWORK_ROOT:-$SCRIPT_DIR/framework}:$SCRIPT_DIR/framework" exec python3 -m sdd_doc_lint "$@"

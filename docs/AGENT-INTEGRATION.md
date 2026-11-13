@@ -2,24 +2,26 @@
 
 > How an AI coding agent of any vendor uses Engramory as its memory, through
 > the `engramory` CLI (ADR-10 dev/CI face; contract:
-> `../sdd/06_SPEC/SPEC-07_cli_face.yaml`). Companion: worked first-memory walk
+> `sdd/06_SPEC/SPEC-07_cli_face.yaml`). Companion: worked first-memory walk
 > in [`AGENT-QUICKSTART.md`](AGENT-QUICKSTART.md); the Claude reference Skill
 > at `../skills/engramory-memory/SKILL.md`.
 
 ## The one idea
 
-**Engramory's agent interface is the `engramory` CLI — vendor-neutral.**
+**Engramory's agent interface is exposed over two thin faces on `AccessSurface` (ADR-10): the `engramory` CLI and the MCP gateway.**
 Every agent, regardless of vendor, remembers and retrieves through the same
-commands (`init · memory add · memory distill · memory search · memory
-feedback · memory forget · profile get · status`). Agents differ only in *how
-they are told* to run the CLI — the instruction surface each vendor reads
-(`SKILL.md`, `GEMINI.md`, `AGENTS.md`, `.github/copilot-instructions.md`, a
-rules file). The instruction file carries the **judgment** (what is worth
-remembering, when to search, always close the feedback loop); the CLI carries
-the **mechanics**.
+command groups (`init · memory · knowledge · sdd · docs · profile · status`) or
+the corresponding MCP tools (`memory_*`, `knowledge_search`, `sdd_*`, `docs_*`).
+Agents differ only in *how they are told* to invoke Engramory — the instruction
+surface each vendor reads (`SKILL.md`, `GEMINI.md`, `AGENTS.md`,
+`.github/copilot-instructions.md`, a rules file) or its MCP server configuration.
+The instruction file carries the **judgment** (what is worth remembering, when
+to search, always close the feedback loop); the CLI and MCP gateway carry the
+**mechanics**.
 
-The MCP gateway is the authenticated production face and arrives in a later
-cycle (ADR-10); until then, every shell-capable agent is covered by the CLI.
+The MCP gateway (`engramory mcp serve` for stdio or `--transport sse` for
+authenticated HTTP) is the production face (ADR-10), while the CLI covers every
+shell-capable dev/CI agent.
 
 ## The integration pattern
 

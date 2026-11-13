@@ -6,6 +6,7 @@ canonical. A managed memory service may back this as an accelerator only.
 Scope ladder (see GLOSSARY + ADR-07): agent -> project -> domain -> space, all within a
 tenant. `tenant_id` is the hard isolation boundary; `space` scope = tenant-wide sharing.
 """
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
@@ -13,18 +14,33 @@ from typing import Any, Protocol
 
 
 class MemoryPort(Protocol):
-    async def add_episode(self, *, agent_id: str, content: str,
-                          project_id: str | None = None, domain_id: str | None = None,
-                          tenant_id: str | None = None, kind: str = "note",
-                          metadata: Mapping[str, Any] | None = None) -> str:
+    async def add_episode(
+        self,
+        *,
+        agent_id: str,
+        content: str,
+        project_id: str | None = None,
+        domain_id: str | None = None,
+        tenant_id: str | None = None,
+        kind: str = "note",
+        metadata: Mapping[str, Any] | None = None,
+    ) -> str:
         """Append a raw episode (L1 source material). Returns the episode id."""
         ...
 
-    async def search(self, *, query: str, agent_id: str | None = None,
-                     project_id: str | None = None, domain_id: str | None = None,
-                     tenant_id: str | None = None, scope: str = "agent",
-                     k: int = 8, include_advisory: bool = False,
-                     token_budget: int | None = None) -> Sequence[Mapping[str, Any]]:
+    async def search(
+        self,
+        *,
+        query: str,
+        agent_id: str | None = None,
+        project_id: str | None = None,
+        domain_id: str | None = None,
+        tenant_id: str | None = None,
+        scope: str = "agent",
+        k: int = 8,
+        include_advisory: bool = False,
+        token_budget: int | None = None,
+    ) -> Sequence[Mapping[str, Any]]:
         """Retrieve top-k distilled memories relevant to `query`, visible at `scope`
         (agent | project | domain | space). Default excludes non-active memories
         (advisory/quarantined/superseded); `include_advisory=True` adds advisory only.
@@ -47,8 +63,9 @@ class MemoryPort(Protocol):
         Drives the confidence-update rule (SPEC-04); 'harmful' quarantines."""
         ...
 
-    async def forget(self, *, memory_id: str, reason: str,
-                     superseded_by: str | None = None) -> None:
+    async def forget(
+        self, *, memory_id: str, reason: str, superseded_by: str | None = None
+    ) -> None:
         """Retire a memory: end-date it and mark it superseded (soft — provenance
         retained, never hard-deleted). `superseded_by` links a correcting memory."""
         ...

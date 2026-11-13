@@ -1,0 +1,208 @@
+# aidoc-hybrid-ci — repository-level contract tasks.
+# Included by the consumer's root Taskfile.yml with `flatten: true`, so these tasks are
+# top-level: `task check`, `task ci`, ... Do not edit in consumer repos (vendored, verified).
+#
+# Include vars (set in the consumer Taskfile.yml):
+#   SERVICES           space-separated service namespaces; "none" for docs/config-only repos
+#   EXTRA_FAST_CHECKS  extra Task names added to `check`   (e.g. "app:schema-lint")
+#   EXTRA_CHECKS       extra Task names added to `ci`      (e.g. "e2e:test contracts")
+# Universal checks are selected in .ci-config (UNIVERSAL_CHECKS, FAST_CHECKS, REPORT_ONLY).
+version: '3'
+
+vars:
+  SERVICES: '{{.SERVICES | default "none"}}'
+  EXTRA_FAST_CHECKS: '{{.EXTRA_FAST_CHECKS | default ""}}'
+  EXTRA_CHECKS: '{{.EXTRA_CHECKS | default ""}}'
+  CI_BIN: '{{.TASKFILE_DIR}}/../bin'
+  RUN: 'CI_SERVICES="{{.SERVICES}}" bash "{{.TASKFILE_DIR}}/../bin/run"'
+  FAST_CHECKS: '@fmt-check @lint @typecheck +universal-fast {{.EXTRA_FAST_CHECKS}}'
+  ALL_CHECKS: '@fmt-check @lint @typecheck @test @security @deps-audit +universal {{.EXTRA_CHECKS}}'
+
+tasks:
+  default:
+    desc: List tasks
+    cmds: [task --list]
+    silent: true
+
+  # ---- workflow ------------------------------------------------------------------------
+  doctor:
+    desc: "Verify tools, framework integrity and git setup. Run first in a new repo or worktree."
+    cmds: ['bash "{{.CI_BIN}}/doctor" {{.CLI_ARGS}}']
+
+  setup:
+    desc: Install dependencies for all services, install git hooks, run doctor
+    cmds:
+      - '{{.RUN}} --force --label deps @deps'
+      - task: hooks
+      - task: doctor
+
+  hooks:
+    desc: Install git hooks (lefthook)
+    cmds: [lefthook install]
+
+  deps:
+    desc: Install locked dependencies for all services
+    cmds: ['{{.RUN}} --force --label deps @deps']
+
+  fmt:
+    desc: Auto-fix formatting (all services + whitespace/newlines + Markdown). Safe any time.
+    cmds: ['{{.RUN}} --force --label fmt @fmt hygiene-fix markdown-fix']
+
+  check:
+    desc: "Fast gate: format-check, lint, typecheck + fast universal checks. After every edit."
+    cmds: ['{{.RUN}} --route --label check {{.FAST_CHECKS}}']
+
+  test:
+    desc: "Tests for all services. Targeted: task <service>:test -- <filter>"
+    preconditions:
+      - sh: 'test -z "{{.CLI_ARGS}}"'
+        msg: 'task test takes no filter — run targeted tests as: task <service>:test -- <filter>'
+    cmds: ['{{.RUN}} --route --label test @test']
+
+  ci:
+    desc: "Full gate (cached, parallel). Must end with RESULT: pass before work is reported done."
+    cmds: ['{{.RUN}} --route --label ci {{.ALL_CHECKS}}']
+
+  ci-full:
+    desc: Full gate without cache (used by ship and server-side verify)
+    cmds: ['{{.RUN}} --force --route --label ci-full {{.ALL_CHECKS}}']
+
+  audit:
+    desc: Nightly — dependency audit (all services + osv-scanner) and external link check
+    cmds: ['LINKS_MODE=external {{.RUN}} --force --label audit @deps-audit sca links']
+
+  ship:
+    desc: "HUMAN-APPROVED: uncached gate -> push -> signoff -> PR (+ CI summary comment)"
+    cmds: ['bash "{{.CI_BIN}}/ship" {{.CLI_ARGS}}']
+
+  autoship:
+    desc: "AUTONOMOUS ship: only into SHIP_AUTONOMOUS_BRANCHES with a verified review PASS;
+      arms auto-merge (github) or merges on observed green (gitea)"
+    cmds: ['bash "{{.CI_BIN}}/ship" --auto {{.CLI_ARGS}}']
+
+  review:
+    desc: "Self-review: Pass 1 (task ci) + Pass 2 (independent reviewer). task review -- --issue N"
+    cmds: ['bash "{{.CI_BIN}}/review" {{.CLI_ARGS}}']
+
+  self-review:
+    desc: "Author self-review heuristic audit (Pass 0 pre-flight): task self-review [-- --llm|--uncommitted]"
+    cmds: ['bash "{{.CI_BIN}}/self-review" {{.CLI_ARGS}}']
+
+  self-review:static:
+    desc: "Author self-review static heuristics: task self-review:static"
+    cmds: ['bash "{{.CI_BIN}}/self-review"']
+
+  self-review:llm:
+    desc: "Author self-review local advisory LLM critique: task self-review:llm"
+    cmds: ['bash "{{.CI_BIN}}/self-review" --llm']
+
+  sync:
+    desc: "Update the branch with push-remote/<base> and resolve conflicts (canon: https://github.com/vladm3105/aidoc-hybrid-ci/blob/main/docs/CONFLICT_RESOLUTION.md): task sync [-- --check|--brief|--continue|--abort|--all]"
+    cmds: ['bash "{{.CI_BIN}}/sync" {{.CLI_ARGS}}']
+
+  pr-status:
+    desc: "The forge's view of this branch's PR (mergeable, merge state, auto-merge); exit 10 when it conflicts"
+    cmds: ['bash "{{.CI_BIN}}/pr-status" {{.CLI_ARGS}}']
+
+  inbox:
+    desc: "Supervisor queue across the fleet (task inbox -- [FLEET_FILE]); exit 10 when items pend"
+    cmds: ['bash "{{.CI_BIN}}/inbox" {{.CLI_ARGS}}']
+
+  mirror:
+    desc: "Push-mirror Gitea refs to the GitHub replica (task mirror [-- --check])"
+    cmds: ['bash "{{.CI_BIN}}/mirror" {{.CLI_ARGS}}']
+
+  cleanup:
+    desc: "Post-merge cleanup of a merged branch + worktree (safe, no force): task cleanup -- <branch>"
+    cmds: ['bash "{{.CI_BIN}}/cleanup" {{.CLI_ARGS}}']
+
+  worktree:
+    desc: "Create a feature worktree for a new branch off the base tip: task worktree -- <name> (then task setup there)"
+    cmds:
+      - |
+        test -n "{{.CLI_ARGS}}" || { echo "usage: task worktree -- <branch-name>" >&2; exit 2; }
+        repo="$(basename "$(git rev-parse --show-toplevel)")"
+        base="$(grep -E '^[[:space:]]*BASE_BRANCH=' .ci-config 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '"')"
+        base=${base:-main}
+        remote=origin; git remote get-url gitea >/dev/null 2>&1 && remote=gitea
+        git fetch "$remote" "$base" || { echo "worktree: cannot fetch $remote/$base" >&2; exit 2; }
+        git worktree add "../${repo}-{{.CLI_ARGS}}" -b "{{.CLI_ARGS}}" "$remote/$base"
+        echo "next: cd ../${repo}-{{.CLI_ARGS}} && task setup"
+
+  rulesets:
+    desc: "Branch rules as code, both forges (dry run); a human applies with: task rulesets -- --apply"
+    cmds: ['bash "{{.CI_BIN}}/rulesets" {{.CLI_ARGS}}']
+
+  promote:
+    desc: "HUMAN-APPROVED: promote verified integration content, e.g. task promote -- staging (server verify required)"
+    cmds: ['bash "{{.CI_BIN}}/promote" {{.CLI_ARGS}}']
+
+  autopromote:
+    desc: "AUTONOMOUS promote into PROMOTION_AUTONOMOUS targets only (e.g. staging): opens the promotion
+      PR and arms auto-merge, so it merges when verify and verify-source are green"
+    cmds: ['bash "{{.CI_BIN}}/promote" --auto {{.CLI_ARGS}}']
+
+  # ---- universal checks (language-agnostic) -----------------------------------------------
+  secrets:
+    desc: Secret scan (gitleaks) — unpushed commits + worktree (uncommitted/untracked, never ignored); GITLEAKS_LOG_OPTS=--all for history-only
+    cmds: ['bash "{{.CI_BIN}}/secrets"']
+
+  sast:
+    desc: Universal SAST (Semgrep) for all languages + custom rules in .semgrep/
+    cmds: ['bash "{{.CI_BIN}}/sast"']
+
+  policy:
+    desc: Anti-gaming policy (suppressions, skipped/deleted tests, config changes)
+    cmds: ['bash "{{.CI_BIN}}/policy"']
+
+  audit-trail:
+    desc: Audit-trail phrase gate (OPS-0069) when AUDIT_TRAIL=required in .ci-config
+    cmds: ['bash "{{.CI_BIN}}/audit-trail"']
+
+  closure:
+    desc: Issue-closing evidence gate (opt-in via CLOSURE_EVIDENCE_PATHS in .ci-config)
+    cmds: ['bash "{{.CI_BIN}}/closure"']
+
+  hygiene:
+    desc: Trailing whitespace, final newline, merge-conflict markers (changed files)
+    cmds: ['bash "{{.CI_BIN}}/universal" hygiene']
+
+  hygiene-fix:
+    desc: Fix trailing whitespace and final newlines in changed files
+    cmds: ['bash "{{.CI_BIN}}/universal" hygiene --fix']
+
+  markdown:
+    desc: markdownlint-cli2 on all Markdown
+    cmds: ['bash "{{.CI_BIN}}/universal" markdown']
+
+  markdown-fix:
+    desc: markdownlint-cli2 --fix on all Markdown
+    cmds: ['bash "{{.CI_BIN}}/universal" markdown --fix || true']
+
+  links:
+    desc: "lychee link check (offline/internal; LINKS_MODE=external for external URLs)"
+    cmds: ['bash "{{.CI_BIN}}/universal" links']
+
+  yaml:
+    desc: yamllint on all YAML
+    cmds: ['bash "{{.CI_BIN}}/universal" yaml']
+
+  workflows:
+    desc: actionlint on .github/workflows
+    cmds: ['bash "{{.CI_BIN}}/universal" workflows']
+
+  shell:
+    desc: shellcheck on shell scripts
+    cmds: ['bash "{{.CI_BIN}}/universal" shell']
+
+  sca:
+    desc: osv-scanner over every lockfile (all ecosystems)
+    cmds: ['bash "{{.CI_BIN}}/universal" sca']
+
+  iac:
+    desc: trivy config — Dockerfile / Kubernetes / CloudFormation / ARM misconfiguration
+    cmds: ['bash "{{.CI_BIN}}/universal" iac']
+
+  paths:
+    desc: Detect hardcoded local absolute workspace paths (PATHS_DENY in .ci-config)
+    cmds: ['bash "{{.CI_BIN}}/universal" paths']

@@ -1,0 +1,208 @@
+#!/usr/bin/env bash
+# aidoc-local-flow-ci universal (language-agnostic) checks.
+#   universal hygiene [--fix]   trailing whitespace, final newline, merge-conflict markers (changed files)
+#   universal markdown [--fix]  markdownlint-cli2 on all Markdown (repo .markdownlint* config)
+#   universal links             lychee link check; LINKS_MODE=internal (offline, default) | external
+#   universal yaml              yamllint on all YAML (repo .yamllint* config)
+#   universal workflows         actionlint on .github/workflows
+#   universal shell             shellcheck -S warning on shell scripts
+#   universal sca               osv-scanner over every lockfile in the repo (all ecosystems)
+#   universal iac               trivy config (Dockerfile / Kubernetes / CloudFormation / ARM misconfig)
+#   universal paths             prevent hardcoded local absolute workspace path leakage
+# Each check prints "n/a — <reason>" and exits 0 when there is nothing to inspect, and fails
+# with an install hint when its tool is missing (local CI is the merge gate — no silent skips).
+set -uo pipefail
+# shellcheck source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+root=$(ci_root) || { echo "universal: not in a git repo" >&2; exit 2; }
+cd "$root" || exit 2
+
+check=${1:-}; shift || true
+fix=0; [[ ${1:-} == --fix ]] && fix=1
+
+need() { command -v "$1" >/dev/null 2>&1 || { echo "$check: '$1' not installed — run 'mise install' (see task doctor)" >&2; exit 1; }; }
+na()   { echo "$check: n/a — $*"; exit 0; }
+list() { mapfile -t FILES < <(ci_files "$@"); }
+
+case $check in
+  hygiene)
+    mapfile -t FILES < <(ci_changed_files)
+    [[ ${#FILES[@]} -gt 0 ]] || na "no changed files"
+    deny=$(ci_paths_deny)
+    rc=0; n=0
+    for f in "${FILES[@]}"; do
+      grep -Iq . "$f" 2>/dev/null || continue          # skip binary/empty
+      case $f in *.diff|*.patch|*.svg) continue ;; esac
+      n=$((n + 1))
+      if [[ $f != *.md ]] && grep -nE '[[:blank:]]+$' "$f" >/dev/null; then
+        if [[ $fix == 1 ]]; then sed -i.bak -E 's/[[:blank:]]+$//' "$f" && rm -f "$f.bak"
+        else echo "$f: trailing whitespace on lines $(grep -nE '[[:blank:]]+$' "$f" | cut -d: -f1 | head -5 | tr '\n' ' ')"; rc=1; fi
+      fi
+      if [[ -s $f && $(tail -c1 "$f" | od -An -c | tr -d ' ') != '\n' ]]; then
+        if [[ $fix == 1 ]]; then echo >>"$f"; else echo "$f: missing final newline"; rc=1; fi
+      fi
+      if grep -nE '^(<<<<<<<|=======|>>>>>>>)( |$)' "$f" >/dev/null; then
+        echo "$f: merge-conflict markers on lines $(grep -nE '^(<<<<<<<|=======|>>>>>>>)( |$)' "$f" | cut -d: -f1 | tr '\n' ' ')"; rc=1
+      fi
+      if [[ -n $deny && $f != .ci-config ]] && grep -nE "$deny" "$f" >/dev/null; then
+        echo "$f: hardcoded local workspace path on lines $(grep -nE "$deny" "$f" | cut -d: -f1 | head -5 | tr '\n' ' ')"; rc=1
+      fi
+    done
+    [[ $rc -eq 0 ]] && echo "hygiene: OK ($n text files)" || echo "hygiene: fix with 'task fmt'"
+    exit $rc ;;
+
+  markdown)
+    list '*.md' '*.markdown'
+    [[ ${#FILES[@]} -gt 0 ]] || na "no Markdown files"
+    need markdownlint-cli2
+    args=(); [[ $fix == 1 ]] && args+=(--fix)
+    exec markdownlint-cli2 "${args[@]}" "${FILES[@]}" ;;
+
+  links)
+    list '*.md' '*.markdown' '*.html'
+    [[ ${#FILES[@]} -gt 0 ]] || na "no Markdown/HTML files"
+    need lychee
+    # An absent config is an error, not a shrug (server twin: aidoc-flow-ci
+    # actions/links — running on lychee defaults silently drops the tolerance
+    # profile). install.sh ships .lychee.toml, so absence means a broken
+    # install or a rename.
+    if [[ ! -f .lychee.toml ]]; then
+      echo "::error::links: .lychee.toml not found — refusing to run with lychee defaults (reinstall or restore the config)" >&2
+      exit 1
+    fi
+    args=(--no-progress --config .lychee.toml)
+    case ${LINKS_MODE:-internal} in
+      internal) args+=(--offline) ;;
+      external) ;;
+      *) echo "::error::links: LINKS_MODE must be internal or external (got: ${LINKS_MODE})" >&2; exit 1 ;;
+    esac
+    exec lychee "${args[@]}" -- "${FILES[@]}" ;;
+
+  yaml)
+    list '*.yml' '*.yaml' ':(exclude)**/pnpm-lock.yaml' ':(exclude)pnpm-lock.yaml'
+    [[ ${#FILES[@]} -gt 0 ]] || na "no YAML files"
+    need yamllint
+    args=(-f parsable)
+    if [[ ! -f .yamllint && ! -f .yamllint.yaml && ! -f .yamllint.yml ]]; then args+=(-d relaxed); fi
+    exec yamllint "${args[@]}" "${FILES[@]}" ;;
+
+  workflows)
+    list '.github/workflows/*.yml' '.github/workflows/*.yaml'
+    [[ ${#FILES[@]} -gt 0 ]] || na "no GitHub workflows"
+    need actionlint
+    rc=0
+    actionlint -no-color "${FILES[@]}" || rc=1
+    # Self-hosted runners only (#49): a GitHub-hosted image in runs-on (or a runner_labels
+    # default) fails the check.
+    hosted=$(grep -nE '^[[:space:]]*(runs-on:|default:).*\b(ubuntu|windows|macos)-[a-z0-9.]+' "${FILES[@]}" || true)
+    if [[ -n $hosted ]]; then
+      echo "workflows: GitHub-hosted runner image (self-hosted runners only):"
+      echo "$hosted" | sed 's/^/  /'
+      echo "  Use the self-hosted labels, e.g. runs-on: [self-hosted, ci, ephemeral]."
+      rc=1
+    fi
+    # Anti-deadlock invariant: workflows providing REQUIRED checks must trigger on every event —
+    # no paths/paths-ignore under on: (route inside jobs instead). An untriggered required check
+    # never reports and blocks the branch ("Expected — Waiting for status to be reported").
+    for wf in $(ci_list REQUIRED_WORKFLOWS ".github/workflows/verify.yml"); do
+      [[ -f $wf ]] || continue
+      bad=$(awk '/^("?on"?):/ {inon=1; next} inon && /^[^[:space:]#]/ {inon=0}
+                 inon && /^[[:space:]]+(paths|paths-ignore)[[:space:]]*:/ {print FILENAME ":" NR ": " $0}' "$wf")
+      if [[ -n $bad ]]; then
+        echo "workflows: ANTI-DEADLOCK violation — trigger-level path filter in a required-check workflow:"
+        echo "$bad" | sed 's/^/  /'
+        echo "  Remove it and route inside the jobs (detect changes, then report success when skipped)."
+        rc=1
+      fi
+    done
+    # ff promotion source tips need verify (#11): with PROMOTION_MODE=ff, verify.yml must run
+    # on push to BASE_BRANCH and every intermediate promotion branch, or `promote` refuses
+    # them forever (verify: missing). The installer bakes this; older or hand-edited copies drift.
+    if [[ $(ci_config PROMOTION_MODE ff) == ff ]]; then
+      read -r -a promos <<<"$(ci_list PROMOTION_BRANCHES "")"
+      need_b=("$(ci_config BASE_BRANCH main)")
+      (( ${#promos[@]} > 1 )) && need_b+=("${promos[@]:0:${#promos[@]}-1}")
+      for wf in .github/workflows/verify.yml .gitea/workflows/verify.yml; do
+        [[ -f $wf ]] || continue
+        pushb=" $(awk '/^("?on"?):/ {inon=1; next} inon && /^[^[:space:]#]/ {inon=0}
+                    inon && /^  push:/ {inpush=1; next} inpush && /^  [^[:space:]#]/ {inpush=0}
+                    inpush && /^    branches:/ {inb=1; sub(/^    branches:[[:space:]]*/, ""); gsub(/[][,"'"'"']/, " "); print; next}
+                    inb && /^      -/ {sub(/^      -[[:space:]]*/, ""); gsub(/["'"'"']/, ""); print; next}
+                    inb {inb=0}' "$wf" | xargs) "
+        miss=()
+        for b in "${need_b[@]}"; do [[ $pushb == *" $b "* ]] || miss+=("$b"); done
+        if (( ${#miss[@]} )); then
+          echo "workflows: $wf does not run on push to: ${miss[*]} (PROMOTION_MODE=ff)"
+          echo "  ff promotion needs verify on the source tip; add them to on.push.branches (#11)."
+          rc=1
+        fi
+      done
+    fi
+    exit $rc ;;
+
+  shell)
+    read -r -a extra <<<"$(ci_list SHELL_FILES "")"
+    list '*.sh' '*.bash' "${extra[@]+"${extra[@]}"}"
+    [[ ${#FILES[@]} -gt 0 ]] || na "no shell scripts"
+    need shellcheck
+    exec shellcheck -S warning -x "${FILES[@]}" ;;
+
+  sca)
+    need osv-scanner
+    # --no-ignore (D23): ignore files must not hide manifests from the scan; unconditional.
+    # Exclude runtime virtualenvs and build dirs so wheels inside .venv do not trigger false CVE findings
+    sca_excludes=(
+      --experimental-exclude .venv
+      --experimental-exclude "g:**/.venv"
+      --experimental-exclude node_modules
+      --experimental-exclude "g:**/node_modules"
+      --experimental-exclude target
+      --experimental-exclude .ci
+      --experimental-exclude "g:**/.mypy_cache"
+    )
+    for ex in $(ci_list LINT_EXCLUDE ""); do
+      sca_excludes+=(--experimental-exclude "$ex")
+    done
+    ci_net_run osv-scanner scan source -r --no-ignore "${sca_excludes[@]}" --no-call-analysis=all . ; rc=$?
+    [[ $rc -eq 128 ]] && na "no lockfiles/manifests found"
+    exit $rc ;;
+
+  iac)
+    need trivy; need jq
+    tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+    iac_skips=(
+      --skip-dirs node_modules --skip-dirs .venv --skip-dirs target --skip-dirs .ci
+      --skip-dirs .mypy_cache --skip-dirs .pytest_cache --skip-dirs .ruff_cache
+    )
+    for ex in $(ci_list LINT_EXCLUDE ""); do
+      iac_skips+=(--skip-dirs "$ex")
+    done
+    trivy config --quiet --exit-code 1 --format json \
+      --misconfig-scanners dockerfile,kubernetes,cloudformation,azure-arm \
+      --severity "$(ci_config IAC_SEVERITY HIGH,CRITICAL)" \
+      "${iac_skips[@]}" . >"$tmp"; rc=$?
+    if [[ $rc -ne 0 ]]; then cat "$tmp"; exit "$rc"; fi
+    jq -e '.Results | type == "array" and length > 0' "$tmp" >/dev/null 2>&1 \
+      || na "no IaC files found"
+    echo "iac: OK — no misconfigurations found"; exit 0 ;;
+
+  paths)
+    deny=$(ci_paths_deny)
+    [[ -n $deny ]] || na "PATHS_DENY=none (.ci-config)"
+    list
+    [[ ${#FILES[@]} -gt 0 ]] || na "no tracked files"
+    rc=0
+    for f in "${FILES[@]}"; do
+      [[ $f == .ci-config ]] && continue   # holds the patterns; scanning it would self-flag
+      grep -Iq . "$f" 2>/dev/null || continue          # skip binary/empty
+      case $f in *.diff|*.patch|*.svg|*.png|*.jpg|*.lock|*.sum|*.min.js) continue ;; esac
+      if grep -nE "$deny" "$f" >/dev/null; then
+        echo "$f: hardcoded local absolute workspace path detected"
+        rc=1
+      fi
+    done
+    [[ $rc -eq 0 ]] && echo "paths: OK — no hardcoded local paths"
+    exit $rc ;;
+
+  *) echo "usage: universal <hygiene|markdown|links|yaml|workflows|shell|sca|iac|paths> [--fix]" >&2; exit 2 ;;
+esac

@@ -1,11 +1,7 @@
 <!--
-Canonical PR template per docs/REPO_STANDARDS.md §8. Applied via PR-B
-apply-standards.sh. Ships as .github/pull_request_template.md in
-consumer repos.
-
-Remove commented-out sections that don't apply to your PR; leave the
-required sections (Summary, Files touched, Multi-agent review, Test
-plan) in place.
+PR template. Copy to .github/pull_request_template.md (the installer does this
+for new adoptions). Delete subsections that do not apply; keep the six
+section headers in place so reviewers always find them.
 -->
 
 ## Summary
@@ -13,69 +9,57 @@ plan) in place.
 <!-- 1-3 sentences describing what changed and why. Focus on the "why" —
      reviewers read the diff for the "what". -->
 
-## Files touched (OPS-0061 Rule 1 self-check)
+## Files touched
 
-<!--
-List each file surface. Rule 1 caps this at ≤3 doc surfaces per
-governance PR (touches CLAUDE.md, DECISIONS.md, IPLAN files,
-.github/ai-review/, .github/workflows/, .claude/agents/,
-.claude/skills/, or governance/supersession content). If >3 surfaces
-on a governance PR: SPLIT into follow-up PRs or note a founder OK
-below.
-
-Non-governance PRs (feature code, docs-only changes, tests) have no
-surface cap.
--->
+<!-- List each surface. Keep framework changes (ci/, install.sh, templates/)
+     separate from consumer surfaces (services, docs). -->
 
 | Surface | Change |
 | --- | --- |
 | `path/to/file` | brief change note |
 
-**Governance tier:** <!-- 🟢 non-governance / 🟡 governance / 🔴 spec-tier per OPS-0062 carve-outs -->
-
-## Multi-agent self-review (OPS-0065 / OPS-0069)
+## Multi-agent self-review
 
 <!--
-OPS-0069 requires dispatch of diff-class-matched sub-agents BEFORE
-`git push`. The audit-trail phrase lives in a COMMIT MESSAGE in the
-push range, not this PR body:
+This project gates merges on `task review` (see canon: https://github.com/vladm3105/aidoc-hybrid-ci/blob/main/docs/SELF_REVIEW.md). The
+audit-trail phrase lives in a COMMIT MESSAGE in the push range, not here:
 
-  Multi-agent self-review per OPS-0065 (<agents>): <verdict-summary>
+  Multi-agent self-review per OPS-0065 (<reviewers>): PASS
 
-OR (rare, founder OK required):
-
-  Self-review skipped per founder OK — <reason>
-
-The PR body below records the outcome for reviewers.
+Copy a phrase from .ci-config AUDIT_TRAIL_PHRASES verbatim — that key is the
+source of truth the gate matches. The PR body records the outcome for reviewers.
 -->
 
-**Agents dispatched:**
+**Review verdict:** <!-- PASS after N rounds / REVISE folded -->
 
-- `<agent-name>` — `<verdict summary>`
+**Rounds:** <!-- e.g. "round 1 REVISE (3 findings folded), round 2 PASS" -->
 
-**Fold outcome:** <!-- e.g. "cycle 1 APPROVED, 0 findings" or "cycle 1 REVISIONS-NEEDED, N findings folded". Cap at 3 fold cycles per OPS-0066. -->
+## Consumer impact
+
+<!--
+This repo is the CI canon — changes under ci/ propagate to every project that
+vendors it. Assess downstream impact:
+-->
+
+**Affected consumers:** <!-- all / some (name them) / none (canon-internal) -->
+
+**Requires consumer re-vendor:** <!-- yes (MAJOR/MINOR) / no (PATCH or canon-internal) -->
+
+**Breaking changes:** <!-- yes — describe migration path / no -->
+
+**Migration notes:** <!-- Steps consumers take after updating .ci/. Delete if none. -->
 
 ## Cross-references
 
-<!-- OPS-NNNN, IPLAN-NNNN, PLAN-NNN, related PRs. Delete section if none. -->
+<!-- PLAN-NNN, issues, related PRs. Delete section if none. -->
 
-- OPS-NNNN
+- #
 
 ## Test plan
 
-<!-- Reviewer-facing check list. What CI verifies, what human-verifies. -->
+<!-- Reviewer-facing check list: what CI verifies, what a human verifies. -->
 
-<!--
-Not every tier requires every check. Delete lines that don't apply
-per docs/REPO_STANDARDS.md §2 branch-protection table:
-  - product-code / ops-private: full set
-  - governance: full set MINUS `Secret scan (gitleaks)`
-  - umbrella: submodule-pointer PRs — no CI checks required
-  - bootstrap: `Lint / format / security hooks` only; ai-review +
-    composition are opt-in per REPO_ONBOARDING.md
--->
-- [ ] `call / ai-review` verdict on this PR
-- [ ] `call / composition` gate
-- [ ] `Lint / format / security hooks` green
-- [ ] `Secret scan (gitleaks)` green
+- [ ] `task ci` green on the branch
+- [ ] `task review` PASS (or N/A with reason)
+- [ ] Scratch-install e2e (for installer or template changes)
 - [ ] `<domain-specific verification>`

@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+# aidoc-local-flow-ci inbox — the supervisor queue: one JSON array across the fleet.
+# Each item is something a human (not an agent) must look at: escalated
+# conflicts, checks still red after the single auto-retry, checks stuck pending
+# past the stale threshold (hung runners never fail), AI reviews stuck in
+# REVISE/BLOCK past the stale threshold, open promotion PRs awaiting approval,
+# releases due, and mirror lag on Gitea projects. Read-only: it never merges,
+# retries, or labels (tending is task sync -- --all's job; merging is
+# task pr-status -- --watch's).
+#
+#   inbox [FLEET_FILE]        default ./fleet.list (FLEET_FILE env overrides it)
+#
+# Fleet file: one project root per line, '#' full-line comments, blanks skipped.
+# A root needs git; .ci-config is optional (defaults apply). Forge traffic uses
+# the ambient credentials (gh auth / GITEA_TOKEN) and per-project URL sniffing.
+# .ci-config: REVIEW_STALE_H=24 (stale-review threshold) · CHANGELOG_PATH=CHANGELOG.md ·
+#   MIRROR_LAG_MIN=60 (mirror-lag threshold, gitea projects with a mirror) ·
+#   CHECK_STALE_H=2 (stuck-pending threshold: oldest pending run age in hours)
+# Exit: 0 empty · 10 pending items · 3 error (fleet file unreadable)
+set -uo pipefail
+# shellcheck source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+fleet=${1:-${FLEET_FILE:-fleet.list}}
+[[ -f $fleet && -r $fleet ]] || { echo "inbox: fleet file '$fleet' unreadable — pass a fleet file (one project root per line, '#' comments) or set FLEET_FILE (canon: https://github.com/vladm3105/aidoc-hybrid-ci/blob/main/docs/ADOPTING.md#8-supervisor-runbook-fleet §8)" >&2; exit 3; }
+MIRROR_BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/mirror"
+
+emit() {  # PROJECT TYPE DETAIL [PR] [BRANCH] [TITLE] [AGE_H] — one compact item
+  jq -n -c --arg p "$1" --arg t "$2" --arg d "$3" --arg pr "${4:-}" --arg b "${5:-}" \
+    --arg ti "${6:-}" --arg a "${7:-}" '{project:$p, type:$t, detail:$d}
+    + (if $pr != "" then {pr:($pr|tonumber)} else {} end)
+    + (if $b != "" then {branch:$b} else {} end)
+    + (if $ti != "" then {title:$ti} else {} end)
+    + (if $a != "" then {age_h:($a|tonumber)} else {} end)'
+}
+
+scan_project() {  # ROOT — print compact items, one per line; never fails the batch
+  local root=$1
+  (
+    cd "$root" 2>/dev/null || { emit "$root" error "cannot cd into project root"; exit 0; }
+    unset CI_FORGE  # the fleet is mixed by nature: sniff every project
+    git rev-parse --git-dir >/dev/null 2>&1 || { emit "$root" error "not a git repo"; exit 0; }
+    local gitdir prs promo base_branch stale_h
+    gitdir=$(git rev-parse --absolute-git-dir)
+    promo=" $(ci_list PROMOTION_BRANCHES "") "
+    base_branch=$(ci_base_branch)
+    stale_h=$(ci_config CHECK_STALE_H 2)
+    [[ $stale_h =~ ^[0-9]+$ ]] || stale_h=2
+    # --- forge signals ---------------------------------------------------------
+    if prs=$(forge_pr_list 2>/dev/null); then
+      local prow num head title pbase
+      while read -r prow; do
+        num=$(jq -r .number <<<"$prow"); head=$(jq -r .head <<<"$prow"); title=$(jq -r .title <<<"$prow"); pbase=$(jq -r .base <<<"$prow")
+        if jq -e '.labels | index("conflict:human")' <<<"$prow" >/dev/null; then
+          emit "$root" conflict-pr "merge conflict needs a human decision" "$num" "$head" "$title"
+        fi
+        if [[ $promo == *" $pbase "* ]]; then
+          emit "$root" pending-approval "promotion PR awaits a human approve+merge" "$num" "$head" "$title"
+        fi
+        if jq -e '.labels | index("ci:auto-retried")' <<<"$prow" >/dev/null; then
+          local sha st
+          if sha=$(forge_pr_view "$head" 2>/dev/null | jq -r .headRefOid) && [[ -n $sha && $sha != null ]]; then
+            st=$(forge_commit_status "$sha" 2>/dev/null) || st=unknown
+            [[ $st == failure ]] && emit "$root" red-after-retry "checks still red after the auto-retry" "$num" "$head" "$title"
+          fi
+        fi
+        # stuck-pending: base-branch PRs (not already escalated) whose checks
+        # stay pending past CHECK_STALE_H — hung runners never fail, so no
+        # retry fires and nothing else escalates. Needs live runs behind the
+        # pending state; PRs with no Actions run stay silent.
+        if [[ $pbase == "$base_branch" ]] \
+          && ! jq -e '.labels | index("conflict:human")' <<<"$prow" >/dev/null; then
+          local sha2 st2 age
+          if sha2=$(forge_pr_view "$head" 2>/dev/null | jq -r .headRefOid) && [[ -n $sha2 && $sha2 != null ]]; then
+            st2=$(forge_commit_status "$sha2" 2>/dev/null) || st2=unknown
+            if [[ $st2 == pending ]]; then
+              age=$(forge_oldest_pending_age "$sha2" 2>/dev/null) || age=""
+              if [[ $age =~ ^[0-9]+$ && $age -gt $stale_h ]]; then
+                emit "$root" stuck-pending "checks pending for ${age}h (threshold ${stale_h}h — runner may be hung)" "$num" "$head" "$title" "$age"
+              fi
+            fi
+          fi
+        fi
+      done < <(jq -c '.[]' <<<"$prs")
+    else
+      emit "$root" error "cannot list PRs ($(ci_forge 2>/dev/null || echo unknown-forge))"
+    fi
+    # --- mirror lag (live head comparison; local sync age is advisory only) ----
+    lag_thr=$(ci_config MIRROR_LAG_MIN 60)
+    [[ $lag_thr =~ ^[0-9]+$ ]] || lag_thr=60
+    merr=$(mktemp); mout=""; mrc=0
+    mout=$(bash "$MIRROR_BIN" --check 2>"$merr") || mrc=$?
+    if [[ $mrc == 0 ]]; then
+      if [[ $(jq -r .configured <<<"$mout") == true ]]; then
+        lag=$(jq -r '.lag_min // empty' <<<"$mout")
+        # No local state (synced elsewhere?) is unknown, not stale — stay silent.
+        if [[ $lag =~ ^[0-9]+$ && $lag -gt $lag_thr ]]; then
+          emit "$root" mirror-lag "replica matches but no sync for ${lag}min (threshold ${lag_thr}min — sync pipeline may be dead)"
+        fi
+      fi
+    elif [[ $mrc == 10 ]]; then
+      detail=$(jq -r '.reasons | join("; ")' <<<"$mout" 2>/dev/null) || detail="mirror stale"
+      lag=$(jq -r '.lag_min // empty' <<<"$mout" 2>/dev/null)
+      [[ $lag =~ ^[0-9]+$ ]] && detail+=" (last sync ${lag}min ago)"
+      emit "$root" mirror-lag "$detail"
+    else
+      emit "$root" error "mirror check failed: $(tail -n1 "$merr" 2>/dev/null || echo transport)"
+    fi
+    rm -f "$merr"
+    # --- stale AI reviews (local state, all branches incl. other worktrees) ----
+    local stale_h f verdict at age branch
+    stale_h=$(ci_config REVIEW_STALE_H 24)
+    [[ $stale_h =~ ^[0-9]+$ ]] || stale_h=24
+    for f in "$gitdir"/aidoc-ci/review/*.json; do
+      [[ -f $f && $f != *.history.jsonl ]] || continue
+      verdict=$(jq -r '.verdict // empty' "$f" 2>/dev/null)
+      [[ $verdict == REVISE || $verdict == BLOCK ]] || continue
+      at=$(jq -r '.reviewed_at // empty' "$f" 2>/dev/null)
+      age=$(age_hours "$at" 2>/dev/null) || continue
+      if [[ $age -gt $stale_h ]]; then
+        branch=$(basename "$f" .json); branch=${branch//__/\/}
+        emit "$root" stale-review "AI review $verdict for $age h (threshold ${stale_h}h)" "" "$branch" "" "$age"
+      fi
+    done
+    # --- release due (Unreleased bullets + mainline past the last tag) ---------
+    local changelog mainline tip latest tag_tip
+    changelog=$(ci_config CHANGELOG_PATH CHANGELOG.md)
+    if [[ -f $changelog ]] && awk '/^## Unreleased/{in_unrel=1;next} /^## /{in_unrel=0} in_unrel && /^[-*] /{found=1} END{exit !found}' "$changelog"; then
+      mainline=$(ci_list PROMOTION_BRANCHES "main")
+      mainline=${mainline##* }
+      git fetch "$(ci_push_remote)" "$mainline" --quiet 2>/dev/null || true
+      tip=$(git rev-parse --verify -q "refs/remotes/$(ci_push_remote)/$mainline" 2>/dev/null \
+        || git rev-parse --verify -q "refs/heads/$mainline" 2>/dev/null) || tip=""
+      if [[ -z $tip ]]; then
+        emit "$root" error "cannot resolve mainline '$mainline' for the release check"
+      else
+        latest=$(git tag --list 'v*' --sort=-v:refname 2>/dev/null | head -n1)
+        if [[ -z $latest ]]; then
+          emit "$root" release-due "Unreleased has entries and no v* tag exists yet"
+        else
+          tag_tip=$(git rev-parse --verify -q "$latest^{}" 2>/dev/null) || tag_tip=""
+          [[ $tag_tip != "$tip" ]] && emit "$root" release-due "Unreleased has entries; $mainline is past $latest"
+        fi
+      fi
+    fi
+  )
+}
+
+items="[]"
+while IFS= read -r line || [[ -n $line ]]; do
+  [[ $line =~ ^[[:space:]]*(#|$) ]] && continue
+  echo "inbox: scanning $line" >&2
+  while IFS= read -r item; do
+    items=$(jq -c --argjson it "$item" '. + [$it]' <<<"$items")
+  done < <(scan_project "$line")
+done <"$fleet"
+
+jq . <<<"$items"
+if [[ $(jq -r length <<<"$items") == 0 ]]; then exit 0; else exit 10; fi

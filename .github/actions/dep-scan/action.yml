@@ -1,0 +1,264 @@
+# dep-scan composite action — v3 packaging of the ci/v2.x `dep-scan` reusable.
+# The run body is a VERBATIM PORT (PLAN-025 §1) apart from the `timeout` wrapper
+# and the precondition guard, both of which are additive.
+#
+# CHECKOUT IS THE CALLER'S JOB (§3.2).
+#
+# ── DEFENSES CARRIED (PLAN-025 §2 — do not remove) ───────────────────────────
+#   D20  The osv-scanner binary is SHA-256 verified BEFORE it is made executable.
+#        A release asset is mutable state on infrastructure we do not control.
+#   D21  osv-scanner is installed as a BINARY, never via google/osv-scanner-action:
+#        canon may only `uses:` actions/*, github/*, vladm3105/*, and a
+#        non-allowlisted action is a run-init startup_failure with a web-UI-only
+#        message actionlint cannot catch. THIS is why the body is 60 lines of
+#        shell instead of a three-line wrapper.
+#   D24  `--no-call-analysis=all` is LOAD-BEARING. osv-scanner's Go call-analysis
+#        is ON BY DEFAULT and COMPILES SOURCE — arbitrary code execution at scan
+#        time, on the self-hosted pool. NEVER remove that flag.
+#   D12  Zero-coverage guard. Exit 128 means no manifests matched, i.e. the gate
+#        scanned NOTHING. A security check that inspected nothing must not pass
+#        silently; when manifests are expected AND the gate is blocking, it fails.
+#   D14  `fail-on-findings` is a real toggle the body honours with `exit 1`, not
+#        an incapacity. PLAN-014 Phase 5 graduates it to true — a founder step.
+#   D15  `set -euo pipefail` under GitHub's implicit `bash -e`.
+#   D23  **THE GATE, NOT THE SCANNED PR, DECIDES COVERAGE.** A PR-committed
+#        `osv-scanner.toml` is honoured independently of the flags above and
+#        takes SARIF results 34 -> 8 (MEASURED, #425; a complete ID list gives
+#        0). Stripped RECURSIVELY — the config is discovered PER DIRECTORY —
+#        symlinks and repo root included, with a post-condition that refuses to
+#        scan if one survives. Erasing coverage here also erases Code Scanning
+#        alerts on `push: main`, so it outlives the PR.
+#
+# ── WHAT IS **NOT** HERE, DELIBERATELY (§3.2a) ───────────────────────────────
+#   D27  The fork guard is a JOB-LEVEL `if:` and stays on the CALLER. A
+#        step-level skip runs AFTER the job has already checked the fork's code
+#        out, which turns an admission guard into a no-op.
+#   D35  The SARIF upload stays a CALLER step. `continue-on-error` inside a
+#        composite action is undocumented; if unsupported, a private repo
+#        without GHAS turns a documented 403 no-op into a hard red on every PR.
+name: dep-scan
+description: SCA via osv-scanner (binary, checksum-verified, data-only).
+
+inputs:
+  scan-path:
+    description: 'Path to scan. MUST be "." (the repo root) — a narrower subtree is a COVERAGE choice and is REFUSED (D26/§4.3i), because the caller is PR-mutable on pull_request.'
+    required: false
+    default: '.'
+  fail-on-findings:
+    description: 'Fail on known-vulnerable dependencies. Default false — PLAN-014 Phase 5 graduates this, and that is a founder step.'
+    required: false
+    default: 'false'
+  expect-manifests:
+    description: 'This repo is expected to HAVE dependency manifests. With fail-on-findings, a zero-coverage scan then fails instead of passing quietly (D12). Set false for a dependency-free repo.'
+    required: false
+    default: 'true'
+  sarif-path:
+    description: 'Where to write the SARIF the caller uploads.'
+    required: false
+    default: 'osv.sarif'
+
+runs:
+  using: composite
+  steps:
+    - name: Verify precondition — a checked-out tree
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ ! -e .git ]; then
+          echo "::error::dep-scan action: no checkout detected. The CALLER must check out before invoking this action (PLAN-025 §3.2)."
+          exit 1
+        fi
+
+    - name: Run osv-scanner (binary; data-only SCA)
+      shell: bash
+      env:
+        OSV_VERSION: "2.4.0"
+        OSV_LINUX_AMD64_SHA256: "15314940c10d26af9c6649f150b8a47c1262e8fc7e17b1d1029b0e479e8ed8a0"
+        FAIL: ${{ inputs.fail-on-findings }}
+        SCAN_PATH: ${{ inputs.scan-path }}
+        EXPECT_MANIFESTS: ${{ inputs.expect-manifests }}
+        SARIF: ${{ inputs.sarif-path }}
+      run: |
+        set -euo pipefail
+        command -v jq >/dev/null 2>&1 || { echo "::error::jq not found on the runner — infrastructure error, not a finding."; exit 1; }
+        curl -sSfL --retry 3 --retry-delay 2 "https://github.com/google/osv-scanner/releases/download/v${OSV_VERSION}/osv-scanner_linux_amd64" -o /tmp/osv-scanner
+        printf '%s  %s\n' "$OSV_LINUX_AMD64_SHA256" /tmp/osv-scanner | sha256sum --check --strict
+        BIN_DIR="$RUNNER_TEMP/bin"; mkdir -p "$BIN_DIR"
+        mv /tmp/osv-scanner "$BIN_DIR/osv-scanner"; chmod 0755 "$BIN_DIR/osv-scanner"
+
+        summary() { echo "dep-scan: $1" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"; }
+
+        # ── D23 (extended from sast-scan by #425) ────────────────────────────
+        # THE GATE, NOT THE SCANNED PR, DECIDES COVERAGE. osv-scanner honours files
+        # COMMITTED TO THE REPO BEING SCANNED, independently of every flag below.
+        # MEASURED at the pinned version: an `osv-scanner.toml` with [[IgnoredVulns]] beside the
+        # manifest took SARIF results 24 -> 0.
+        #
+        # The second harm OUTLIVES THE PR. A zeroed scan still writes a LEGITIMATE
+        # empty SARIF, so the caller's report purge cannot see it (that purge catches a
+        # PR SUPPLYING a report, not a PR CAUSING an empty one), `hashFiles` is
+        # non-empty, the upload proceeds — and on `push: main` Code Scanning keys an
+        # analysis by CATEGORY, so the empty analysis REPLACES the previous one and
+        # every open alert it held is erased.
+        #
+        # A repo needing a real exclusion expresses it GATE-SIDE, never in a PR-mutable
+        # file. §4.3e is the rule.
+        #
+        # `-type f` MISSES A SYMLINK — git stores symlinks natively (mode 120000) and
+        # the scanner follows the link. REPRODUCED against sast-scan 2026-08-08.
+        #
+        # scan-path is an INPUT, and on `pull_request` the caller's workflow file comes
+        # from the PR HEAD — the same access level D23 already assumes. `find` reads its
+        # first operand as an OPTION when it begins with `-`: `scan-path: -delete` makes
+        # this `find -delete . …`, which has NO path operand, so `-delete` evaluates
+        # against the whole tree. MEASURED: it EMPTIES THE WORKSPACE, after which the
+        # post-condition finds nothing and certifies the empty tree clean — the strip
+        # becomes the bypass. Validate before the value reaches find.
+        sp_safe="$(printf '%s' "$SCAN_PATH" | tr '\n\r' '??' | cut -c1-200)"
+        case "$SCAN_PATH" in
+          -*) echo "::error::dep-scan: scan-path may not begin with '-' (got '${sp_safe}') — refusing rather than handing it to find as an option (D23)."; exit 1 ;;
+        esac
+        if [ ! -d "$SCAN_PATH" ]; then
+          echo "::error::dep-scan: scan-path '${sp_safe}' is not an existing directory — refusing rather than reporting a clean scan of nothing (D23)."
+          exit 1
+        fi
+        # COVERAGE, NOT JUST SAFETY. The two checks above validate that SCAN_PATH is
+        # safe to hand to `find`; neither constrains what gets SCANNED. `scan-path` is
+        # caller-supplied, and on `on: pull_request` the caller's workflow file comes
+        # from the PR HEAD — the same access level D23 assumes throughout. So
+        # `scan-path: docs` is an existing directory with no leading `-` that passes
+        # both checks, scans a code-free tree, exits 0, writes a valid SARIF with no
+        # results, and the gate goes GREEN. That is bit-for-bit the outcome D26 closes
+        # for `config` — the same bypass through a second door, and only one was shut.
+        #
+        # Costs nothing: `.` is the input's default and what every shipped caller
+        # passes. A repo that genuinely needs a narrower scan asks canon for a
+        # gate-side input, which is the rule restated — THE GATE decides coverage.
+        case "$SCAN_PATH" in
+          .) ;;
+          *) echo "::error::dep-scan: scan-path must be the repo root '.'; got '${sp_safe}'. A PR-chosen subtree is a COVERAGE choice — an existing directory containing no code exits 0 with a valid empty SARIF and the gate goes green having scanned nothing (D26/§4.3i)."; exit 1 ;;
+        esac
+        strip_roots=("$SCAN_PATH")
+        if [ "$SCAN_PATH" != "." ]; then strip_roots+=("."); fi
+        d23_scan() {
+          # $@ = the trailing find action, applied IDENTICALLY to every class, so the
+          # strip and the post-condition can never cover different sets (#423's shape).
+          d23_rc=0
+          # RECURSION IS LOAD-BEARING, and this is the INVERSE of trivy. MEASURED at
+          # osv-scanner 2.4.0: an `osv-scanner.toml` NEXT TO the manifest took results
+          # 24 -> 0, while the same file at the repo ROOT changed nothing. The config is
+          # discovered per-directory, so a root-only strip would miss every one of them.
+          find "${strip_roots[@]}" \( -type f -o -type l \) \( -name 'osv-scanner.toml' \) "$@" || d23_rc=$?
+          return "$d23_rc"
+        }
+
+        # `mktemp` under `set -e` as a BARE assignment aborts the step before any
+        # ::error:: — the very shape `|| fst=$?` exists to prevent, twenty lines down.
+        # Plausible on a ephemeral runner (disk/inode pressure, TMPDIR misconfig).
+        ferr="$(mktemp)" || { echo "::error::dep-scan: D23 could not allocate a temp file — refusing to scan rather than skip the check."; exit 1; }
+
+        # D23 IS A GATE, NOT A BEST EFFORT: `|| true` keeps a partial failure from
+        # aborting the step, so the POST-CONDITION below is what enforces it. The
+        # strip's stderr is APPENDED to $ferr rather than discarded — with `2>/dev/null`
+        # the delete-failure reason ("Permission denied") was destroyed and the refusal
+        # below then reported an EMPTY find_stderr exactly when it mattered.
+        #
+        # The strip's `-print` carries PR-CONTROLLED PATHS: newlines are legal in git
+        # paths and the runner parses EVERY output line for `::command::`, so an
+        # unfolded path could forge `::stop-commands::` and suppress the ::error::
+        # below. Capture, fold, then report.
+        stripped="$(d23_scan -print -delete 2>>"$ferr" || true)"
+        if [ -n "$stripped" ]; then
+          stripped_safe="$(printf '%s' "$stripped" | tr '\n\r' '??' | cut -c1-500)"
+          # A repo that committed one of these ON PURPOSE gets it deleted from the
+          # workspace. Say so, and say where the exclusion belongs instead — silence
+          # here is how a maintainer concludes the scanner is broken.
+          echo "::warning::dep-scan: D23 removed PR-supplied scanner config before scanning — it was NOT honoured. Express a real exclusion gate-side (ruleset or action input), never in a repo file (REPO_STANDARDS §4.3e). Removed: ${stripped_safe}"
+          summary "⚠️ D23 removed PR-supplied scanner config — NOT honoured: ${stripped_safe}"
+        fi
+
+        # CI-0033 / §27.1: decide on captured OUTPUT, never a pipeline's exit status —
+        # `find … -print -quit | grep -q .` is a REPRODUCED fail-open, because `-quit`
+        # returns non-zero when a traversal error is recorded before it quits WHILE
+        # STILL PRINTING THE MATCH, and `pipefail` takes that over grep's 0.
+        # `|| fst=$?` is load-bearing: a bare assignment takes the substitution's status
+        # and `set -e` would abort HERE, before the ::error:: — a red step with no cause.
+        fst=0
+        survivor="$(d23_scan -print -quit 2>>"$ferr")" || fst=$?
+        if [ -n "$survivor" ] || [ "$fst" -ne 0 ]; then
+          survivor_safe="$(printf '%s' "$survivor" | tr '\n\r' '??')"
+          find_err="$(tr '\n\r' '  ' < "$ferr" | cut -c1-300)"
+          rm -f "$ferr"
+          echo "::error::dep-scan: could not certify the tree clean of PR-supplied osv-scanner config files — refusing to scan rather than accept attacker-controlled coverage (D23). survivor='${survivor_safe}' find_rc=${fst} find_stderr='${find_err}'"
+          exit 1
+        fi
+        rm -f "$ferr"
+
+
+        # `--no-ignore` IS A D23 DEFENSE, not a tuning knob (#425). MEASURED at
+        # osv-scanner 2.4.0: osv-scanner honours `.gitignore` BY DEFAULT, so a PR
+        # adding a manifest path to `.gitignore` chooses its own coverage —
+        # totally (`requirements.txt` -> rc=128, NO SARIF at all) or, worse,
+        # SELECTIVELY (`svc-b/` -> results 70 -> 24, rc=1, a legitimate-looking
+        # partial scan). D12's zero-coverage arm keys on exit 128 and therefore
+        # NEVER FIRES on the selective case. `.gitignore` cannot be stripped like
+        # the other config files — every repo has a legitimate one — so the
+        # discovery is disabled GATE-SIDE instead, which is what §4.3e rule 6
+        # requires. Consequence to expect: vendored trees (node_modules/, vendor/)
+        # are no longer skipped, so finding counts rise on repos that gitignore
+        # their dependencies. That is coverage the gate previously did not have.
+        # DATA-ONLY scan. `--no-call-analysis=all` is LOAD-BEARING: osv-scanner's Go
+        # call-analysis is ON BY DEFAULT and compiles source (code execution) — this
+        # keeps the scan to manifest/lockfile READING only. Never remove it.
+        # `timeout 900` (§3.2b): one hung scan must fail this check, not eat the
+        # whole consolidated job's budget.
+        rc=0
+        timeout 900 "$BIN_DIR/osv-scanner" scan source -r --no-ignore --no-call-analysis=all \
+          --format sarif --output-file "$SARIF" "$SCAN_PATH" || rc=$?
+
+        # osv-scanner exit codes: 0 = scanned, no vulns · 1–126 = vulnerabilities found
+        # · 127 = general error · 128 = no packages found · 129–255 = other errors.
+        # 124 (`timeout`) is handled by its OWN arm below, BEFORE the 1-126
+        # vulnerability range it would otherwise fall into.
+        if [ "$rc" -eq 0 ]; then
+          echo "::notice::dep-scan: no known-vulnerable dependencies."
+          summary "clean — packages scanned, no known vulnerabilities."
+        elif [ "$rc" -eq 128 ]; then
+          # No manifests matched. A security gate that scanned NOTHING must not pass
+          # silently — surface it as a warning, and (when expected + blocking) fail.
+          echo "::warning::dep-scan: no supported manifests/lockfiles found under '${SCAN_PATH}' — scanned NOTHING (coverage gap). If this repo genuinely has no dependencies, set expect-manifests:false; otherwise check scan-path / the ecosystem."
+          summary "⚠️ NO manifests found — scanned nothing (coverage gap)."
+          if [ "$EXPECT_MANIFESTS" = "true" ] && [ "$FAIL" = "true" ]; then
+            echo "::error::dep-scan: expected dependency manifests but found none — failing (zero-coverage on a blocking gate). Set expect-manifests:false for a dependency-free repo."; exit 1
+          fi
+        elif [ "$rc" -eq 124 ]; then
+          # `timeout`'s own exit code. It falls INSIDE the 1-126 vulnerability
+          # range below, so without this arm a killed scan is read as findings —
+          # and with a partial SARIF and the default fail-on-findings:false it
+          # would EXIT 0 as a completed report-only scan. Infrastructure, not a
+          # finding, and not clean.
+          echo "::error::dep-scan: osv-scanner timed out (timeout 900) — infrastructure failure, not a clean or complete scan. Re-run."; exit 1
+        elif [ "$rc" -ge 1 ] && [ "$rc" -le 126 ]; then
+          # Vulnerability-result range: findings ARE expected. Cross-check the SARIF.
+          n=0
+          [ -s "$SARIF" ] && n=$(jq '[.runs[].results[]] | length' "$SARIF" 2>/dev/null || echo 0)
+          case "$n" in ''|*[!0-9]*) n=0 ;; esac
+          if [ "$n" -gt 0 ]; then
+            echo "::warning::dep-scan: $n known-vulnerable-dependency finding(s) — see $SARIF / the Security tab."
+            summary "❌ $n known-vulnerable-dependency finding(s) (osv-scanner exit $rc)."
+            if [ "$FAIL" = "true" ]; then
+              echo "::error::dep-scan: failing the gate (fail-on-findings: true)."; exit 1
+            fi
+            echo "::notice::dep-scan: report-only (fail-on-findings: false) — not blocking. Flip fail-on-findings to gate."
+          else
+            # Contradiction: the tool signalled findings but the SARIF is empty/unparseable —
+            # a possible MISSED finding (SARIF write/parse failure), NOT clean, NOT mere infra.
+            echo "::error::dep-scan: osv-scanner signalled findings (exit $rc) but the SARIF has no parseable results — a SARIF write/parse failure that may be MASKING a real finding. Treated as a failure, not clean."
+            summary "❌ osv-scanner signalled findings (exit $rc) but SARIF unparseable — possible missed finding."
+            exit 1
+          fi
+        else
+          # 127 or 129-255: genuine infrastructure/tool error. (124 is handled
+          # in its own arm above — it is inside the 1-126 range, not here.)
+          echo "::error::dep-scan: osv-scanner exited $rc (tool/infrastructure error, not a finding). Re-run."; exit 1
+        fi

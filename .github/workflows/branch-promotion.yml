@@ -1,0 +1,105 @@
+name: Branch promotion policy
+
+'on':
+  pull_request:
+    branches: [dev, staging, main]
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+env:
+  # Space-separated promotion branches, baked by install.sh ("none" when
+  # empty). Jurisdiction guards key off this; the chain arms below assume
+  # the standard dev/staging/main names (installer warns otherwise).
+  PROMOTION_TARGETS: none
+  # Canon the ancestry guard is fetched from when the base predates .ci/ entirely (the
+  # adoption PR itself has no base .ci/SOURCE to read). Baked by install.sh from the canon
+  # origin; the release tag still comes from the head's .ci/VERSION.
+  CANON_SOURCE: https://github.com/vladm3105/aidoc-hybrid-ci.git
+
+jobs:
+  verify-source:
+    runs-on: [self-hosted, ci, ephemeral]
+    steps:
+      - name: Require the preceding promotion branch
+        env:
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          TARGET_REPOSITORY: ${{ github.repository }}
+        run: |
+          case " $PROMOTION_TARGETS " in
+            *" $BASE_BRANCH "*) ;;
+            *) exit 0 ;;  # not a promotion target; verify-integration-source judges
+          esac
+          if [ "$HEAD_REPOSITORY" != "$TARGET_REPOSITORY" ]; then
+            echo "Promotion pull requests must originate from this repository."
+            exit 1
+          fi
+
+          case "$BASE_BRANCH:$HEAD_BRANCH" in
+            staging:dev|main:staging) exit 0 ;;
+            *)
+              echo "Only dev -> staging and staging -> main pull requests are permitted."
+              exit 1
+              ;;
+          esac
+
+  verify-integration-source:
+    runs-on: [self-hosted, ci, ephemeral]
+    steps:
+      - name: Require a feature, fix, bot, or back-merge head
+        env:
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          case " $PROMOTION_TARGETS " in
+            *" $BASE_BRANCH "*) exit 0 ;;  # promotion target; verify-source judges
+          esac
+          case "$HEAD_BRANCH" in
+            feature/*|fix/*|dependabot/*|renovate/*|staging) exit 0 ;;
+            *)
+              echo "Integration PRs must come from feature/*, fix/*, dependabot/*, renovate/*, or the staging back-merge."
+              exit 1
+              ;;
+          esac
+
+      # Name checks alone admit a feature branch cut from a promotion branch (issue #8).
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Refuse promotion-line history in the head
+        env:
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          case " $PROMOTION_TARGETS " in
+            *" $BASE_BRANCH "*) exit 0 ;;  # promotion target; verify-source judges
+          esac
+          # The PR never supplies the code that judges it. Use the guard as it exists on the BASE
+          # branch; on first rollout (base predates it) fetch it from the canon release instead:
+          # the canon URL comes from the BASE's .ci/SOURCE (else the baked CANON_SOURCE), the
+          # release tag from the head's .ci/VERSION (strictly validated) — every canon release that ships the guard is trusted.
+          # No trusted copy, no pass.
+          guard="$(mktemp "${RUNNER_TEMP:-/tmp}/ancestry-guard.XXXXXX")"
+          if ! git show "origin/$BASE_BRANCH:.ci/bin/ancestry-guard" >"$guard" 2>/dev/null \
+             && ! git show "origin/$BASE_BRANCH:ci/bin/ancestry-guard" >"$guard" 2>/dev/null; then
+            src="$(git show "origin/$BASE_BRANCH:.ci/SOURCE" 2>/dev/null | sed -n 's/^source=//p' | head -1)"
+            src="${src:-${CANON_SOURCE:-}}"
+            ver="$(tr -d '[:space:]' < .ci/VERSION 2>/dev/null || true)"
+            if [ -z "$src" ] || ! printf '%s' "$ver" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+              echo "::error::no trusted ancestry guard: origin/$BASE_BRANCH has no guard, no usable .ci/SOURCE and no CANON_SOURCE, or the head's .ci/VERSION is not a release version"
+              exit 2
+            fi
+            canon="$(mktemp -d)"
+            if ! { git -C "$canon" init -q && git -C "$canon" fetch -q --depth 1 "$src" "refs/tags/v$ver" \
+                   && git -C "$canon" show "FETCH_HEAD:ci/bin/ancestry-guard" >"$guard"; } 2>/dev/null; then
+              echo "::error::no trusted ancestry guard: cannot load ci/bin/ancestry-guard from $src at v$ver"
+              exit 2
+            fi
+            echo "ancestry-guard: first rollout — using the canon release v$ver from $src"
+          fi
+          bash "$guard" "$BASE_BRANCH" "$HEAD_SHA" "$HEAD_BRANCH"

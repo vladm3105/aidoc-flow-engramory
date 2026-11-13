@@ -1,0 +1,269 @@
+#!/usr/bin/env bash
+# aidoc-local-flow-ci promote — move already-verified integration content to a promotion branch
+# (dev-staging-main model). HUMAN-APPROVED, except `task autopromote` into PROMOTION_AUTONOMOUS
+# targets (PLAN-007). Staging/main never use local CI: the gate here is the
+# SERVER verification of the exact commit being promoted.
+#
+#   task promote -- staging
+#
+# .ci-config:
+#   BASE_BRANCH=dev                      integration branch (chain head)
+#   PROMOTION_BRANCHES="staging main"    chain tail, in promotion order
+#   PROMOTION_MODE=ff                    ff: fast-forward push of the verified commit (same SHA)
+#                                        pr: open a promotion PR <predecessor> -> <target>
+#   PROMOTION_REQUIRED_CHECKS=verify     server checks that must be green on the commit
+#
+# One hop at a time: the chain is BASE_BRANCH followed by PROMOTION_BRANCHES in listed
+# order, and <target> must immediately follow its source (dev->staging->main; dev->main
+# is refused). Verifies: HEAD == origin/<source> (reviewed + merged content only) ·
+# every PROMOTION_REQUIRED_CHECKS is "success" on that commit on GitHub · (ff) the target is an
+# ancestor, i.e. a true fast-forward · (gitea mirror) the GitHub replica head equals the
+# source head (D2 freshness gate; run task mirror first — the mirror is verified, never trusted).
+#
+#   promote --ready <target>    read-only readiness: gates + mirror freshness as JSON,
+#                               no side effects. Exit 0 ready · 10 not ready · 3 error.
+set -euo pipefail
+# shellcheck source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+cd "$(ci_root)"
+die() { echo "promote: $*" >&2; exit 3; }
+
+ready=0; auto=0
+if [[ ${1:-} == --ready ]]; then ready=1; shift; fi
+if [[ ${1:-} == --auto ]]; then auto=1; shift; fi
+target=${1:-}; [[ -n $target ]] || die "usage: task promote -- [--ready] <target-branch> | task autopromote -- <target-branch>"
+promote_source() {  # TARGET -> prints its source hop, or dies
+  local integration chain b prev=""
+  integration=$(ci_base_branch)
+  chain="$integration $(ci_list PROMOTION_BRANCHES "")"
+  # shellcheck disable=SC2086
+  for b in $chain; do
+    if [[ $b == "$1" ]]; then
+      [[ -n $prev ]] || die "'$1' is not a declared promotion step (chain: $chain) — one hop at a time"
+      echo "$prev"; return
+    fi
+    prev=$b
+  done
+  die "'$1' is not a declared promotion step (chain: $chain) — one hop at a time"
+}
+source=$(promote_source "$target")
+mode=$(ci_config PROMOTION_MODE ff)
+[[ $mode == ff || $mode == pr ]] || die "PROMOTION_MODE must be ff or pr (got '$mode')"
+# Autonomous promotion (PLAN-007 recommendation 2): only into PROMOTION_AUTONOMOUS targets (e.g.
+# staging), only as a PR, and the merge is GitHub auto-merge, so it lands only after every required
+# check (verify, verify-source) is green. main and releases stay with a human (task promote).
+if [[ $auto == 1 ]]; then
+  [[ " $(ci_list PROMOTION_AUTONOMOUS "") " == *" $target "* ]] \
+    || die "autopromote is not allowed into '$target' (PROMOTION_AUTONOMOUS in .ci-config) — a human runs 'task promote'"
+  [[ $mode == pr ]] || die "autopromote needs PROMOTION_MODE=pr (merge on green through the promotion PR)"
+fi
+
+# Split forge (#48): promotion branches live on GitHub. The D2 freshness gate compares the
+# Gitea source with its GitHub copy, so it runs on the integration side first; only the
+# dev -> first-promotion hop has a Gitea source. Every later step runs on the promotion forge.
+mirror_json=""
+# PLAN-007 (split forge, pr mode): exactly one server verify per promotion, on the promotion PR (the
+# promotion rulesets require it before merge). No verify runs on the mirrored dev, so the first hop is
+# gated on what dev already proved on Gitea: signoff (+ review) on the exact source SHA. Later hops need
+# no pre-check: their source only moves through PRs that required verify.
+split_hop=0; int_checks='{}'; int_fail=()
+if ci_split_forge; then
+  [[ $mode == pr ]] || die "split forge requires PROMOTION_MODE=pr (one verify per promotion PR; PLAN-007)"
+  split_hop=1
+  if [[ $source == "$(ci_base_branch)" ]]; then
+    mirror_json=$(mirror_gate_status "$source")
+    gremote=$(ci_push_remote)
+    git fetch "$gremote" "$source" --quiet || die "cannot fetch $gremote/$source"
+    gsha=$(git rev-parse --verify -q "$gremote/$source") || die "$gremote/$source not found"
+    int_gates="signoff"; [[ $(ci_config REVIEW off) == required ]] && int_gates+=" review"
+    check_sha=$gsha
+    need_lookup=0
+    for c in $int_gates; do
+      st=$(forge_check_status "$gsha" "$c" 2>/dev/null) || st=missing
+      [[ $st == success ]] || { need_lookup=1; break; }
+    done
+
+    if [[ $need_lookup == 1 ]]; then
+      resolved_sha=""
+      # Fast path 1: squash merge commit message carrying (#<N>)
+      subj=$(git log -1 --format=%s "$gsha" 2>/dev/null || true)
+      if [[ $subj =~ \(#([0-9]+)\)$ ]]; then
+        pr_num=${BASH_REMATCH[1]}
+        repo=$(forge_repo 2>/dev/null || true)
+        if [[ -n $repo ]]; then
+          pr_obj=$(forge_api GET "repos/$repo/pulls/$pr_num" 2>/dev/null || true)
+          if [[ -n $pr_obj ]] && jq -e --arg sha "$gsha" '.merge_commit_sha == $sha' <<<"$pr_obj" >/dev/null 2>&1; then
+            resolved_sha=$(jq -r '.head.sha // empty' <<<"$pr_obj")
+          fi
+        fi
+      fi
+
+      # Fast path 2: merge commit with multiple parents (second parent is the PR head)
+      if [[ -z $resolved_sha ]]; then
+        read -r -a parents < <(git rev-list --parents -n1 "$gsha" 2>/dev/null | cut -d' ' -f2-)
+        if [[ ${#parents[@]} -ge 2 ]]; then
+          p2=${parents[1]}
+          p2_ok=1
+          for c in $int_gates; do
+            st=$(forge_check_status "$p2" "$c" 2>/dev/null) || st=missing
+            [[ $st == success ]] || { p2_ok=0; break; }
+          done
+          [[ $p2_ok == 1 ]] && resolved_sha=$p2
+        fi
+      fi
+
+      # Fallback: scan closed PRs matching merge_commit_sha
+      if [[ -z $resolved_sha ]]; then
+        repo=$(forge_repo 2>/dev/null || true)
+        if [[ -n $repo ]]; then
+          closed_prs=$(forge_gitea_pages "repos/$repo/pulls?state=closed" 2>/dev/null || true)
+          if [[ -n $closed_prs ]]; then
+            resolved_sha=$(jq -r --arg sha "$gsha" '[.[] | select(.merge_commit_sha == $sha) | .head.sha] | first // empty' <<<"$closed_prs")
+          fi
+        fi
+      fi
+
+      [[ -n $resolved_sha ]] && check_sha=$resolved_sha
+    fi
+
+    for c in $int_gates; do
+      st=$(forge_check_status "$check_sha" "$c" 2>/dev/null) || st=missing
+      int_checks=$(jq -c --arg c "$c" --arg s "$st" '. + {($c): $s}' <<<"$int_checks")
+      [[ $st == success ]] || int_fail+=("integration check $c is $st on $gremote/$source (${gsha:0:12})")
+    done
+  else
+    mirror_json='{"configured":false,"equal":null,"lag_min":null,"detail":"source lives on the promotion forge"}'
+  fi
+  ci_enter_promotion_forge || die "split forge: cannot switch to the promotion forge"
+fi
+
+if [[ $ready == 1 ]]; then  # read-only: same gates, JSON out, nothing pushed or opened
+  if [[ $(ci_forge) == github ]]; then command -v gh >/dev/null || die "gh CLI needed to verify server checks"; fi
+  remote=$(ci_push_remote)
+  git fetch "$remote" "$source" --quiet || die "cannot fetch $remote/$source"
+  git fetch "$remote" "$target" --quiet 2>/dev/null || true
+  head=$(git rev-parse HEAD)
+  src=$(git rev-parse --verify -q "$remote/$source") || die "$remote/$source not found"
+  head_st=ok; ready_ok=true; reasons="[]"; checks="{}"
+  if [[ $head != "$src" ]]; then
+    head_st=mismatch; ready_ok=false
+    reasons=$(jq -c --arg r "$remote/$source" '. + ["HEAD is not \($r) (promote only merged content)"]' <<<"$reasons")
+  fi
+  if [[ $split_hop == 1 ]]; then  # verify is required on the promotion PR instead (PLAN-007)
+    checks=$int_checks
+    for r in "${int_fail[@]+"${int_fail[@]}"}"; do
+      ready_ok=false; reasons=$(jq -c --arg r "$r" '. + [$r]' <<<"$reasons")
+    done
+  else
+  for check in $(ci_config PROMOTION_REQUIRED_CHECKS verify); do
+    if [[ $(ci_forge) == github ]]; then st=$(ci_remote_check "$head" "$check")
+    else st=$(forge_check_status "$head" "$check" 2>/dev/null) || st=unknown; fi
+    checks=$(jq -c --arg c "$check" --arg s "$st" '. + {($c): $s}' <<<"$checks")
+    if [[ $st != success ]]; then
+      ready_ok=false
+      reasons=$(jq -c --arg c "$check" --arg s "$st" '. + ["check \($c) is \($s) on HEAD"]' <<<"$reasons")
+    fi
+  done
+  fi
+  if [[ $mode == ff ]]; then
+    if tgt=$(git rev-parse --verify -q "$remote/$target" 2>/dev/null); then
+      if git merge-base --is-ancestor "$tgt" "$head" 2>/dev/null; then ff_st=ok
+      else ff_st=blocked; ready_ok=false
+        reasons=$(jq -c '. + ["target is not an ancestor of HEAD (back-merge first)"]' <<<"$reasons"); fi
+    else ff_st=ok; fi
+    existing=null
+  else
+    ff_st=na
+    if existing=$(forge_pr_list 2>/dev/null | jq --arg t "$target" --arg s "$source" \
+      '[.[] | select(.base == $t and .head == $s)][0].number // null'); then :
+    else
+      existing=null; ready_ok=false
+      reasons=$(jq -c '. + ["could not list promotion PRs (transport)"]' <<<"$reasons")
+    fi
+  fi
+  [[ -n $mirror_json ]] || mirror_json=$(mirror_gate_status "$source")
+  if [[ $(jq -r .configured <<<"$mirror_json") == true && $(jq -r .equal <<<"$mirror_json") != true ]]; then
+    ready_ok=false
+    reasons=$(jq -c --arg d "$(jq -r .detail <<<"$mirror_json")" '. + ["mirror: \($d)"]' <<<"$reasons")
+  fi
+  jq -n --arg t "$target" --arg s "$source" --arg m "$mode" --arg h "$head_st" --arg f "$ff_st" \
+    --argjson ready "$ready_ok" --argjson reasons "$reasons" --argjson checks "$checks" --argjson pr "$existing" \
+    --argjson mirror "$mirror_json" \
+    '{target:$t, source:$s, mode:$m, ready:$ready, head:$h, fast_forward:$f, checks:$checks,
+      existing_pr:$pr, mirror:$mirror, reasons:$reasons}'
+  if [[ $ready_ok == true ]]; then exit 0; else exit 10; fi
+fi
+# Write path: same gates through the same forge helpers as --ready above, so
+# the two can never disagree. GitHub keeps check-run semantics (ci_remote_check
+# falls back to statuses); Gitea reads commit statuses (forge_check_status).
+if [[ $(ci_forge) == github ]]; then command -v gh >/dev/null || die "gh CLI needed to verify server checks"; fi
+remote=$(ci_push_remote)
+
+git fetch "$remote" "$source" --quiet || die "cannot fetch $remote/$source"
+git fetch "$remote" "$target" --quiet 2>/dev/null || true
+head=$(git rev-parse HEAD)
+src=$(git rev-parse --verify -q "$remote/$source") || die "$remote/$source not found"
+[[ $head == "$src" ]] || die "HEAD ($head) is not $remote/$source ($src) — promote only merged content: git checkout $source && git merge --ff-only $remote/$source (commit or stash local work first)"
+
+# --- server verification of the exact commit ----------------------------------------------
+if [[ $split_hop == 1 ]]; then
+  for r in "${int_fail[@]+"${int_fail[@]}"}"; do die "$r — ship it on Gitea first"; done
+  [[ $int_checks == '{}' ]] || echo "promote: integration checks green on Gitea: $(jq -r 'keys | join(", ")' <<<"$int_checks")"
+  echo "promote: server verify runs once, on the promotion PR (required before merge)"
+fi
+[[ $split_hop == 1 ]] || for check in $(ci_config PROMOTION_REQUIRED_CHECKS verify); do
+  if [[ $(ci_forge) == github ]]; then state=$(ci_remote_check "$head" "$check")
+  else state=$(forge_check_status "$head" "$check" 2>/dev/null) || state=missing; fi
+  case $state in
+    success) echo "promote: server check '$check' is green on ${head:0:12}" ;;
+    pending) die "server check '$check' is still running on ${head:0:12} — wait for it, then re-run" ;;
+    failure) die "server check '$check' FAILED on ${head:0:12} — fix $source first (revert or fix forward)" ;;
+    *)       die "server check '$check' has not run on ${head:0:12} — did verify.yml run for this commit? (Actions tab)" ;;
+  esac
+done
+
+# --- mirror freshness (D2): the replica must carry the exact commit -----------------------
+[[ -n $mirror_json ]] || mirror_json=$(mirror_gate_status "$source")
+if [[ $(jq -r .configured <<<"$mirror_json") == true ]]; then
+  if [[ $(jq -r .equal <<<"$mirror_json") == true ]]; then
+    echo "promote: mirror replica matches $source (${head:0:12})"
+  else
+    die "mirror not verified for '$source': $(jq -r .detail <<<"$mirror_json")"
+  fi
+fi
+
+if [[ $mode == ff ]]; then
+  # On Gitea, applied branch protections disable direct pushes: the push below
+  # then fails on the server (fail-closed). pr mode is the protected path.
+  if tgt=$(git rev-parse --verify -q "$remote/$target"); then
+    git merge-base --is-ancestor "$tgt" "$head" || die "$remote/$target is not an ancestor of HEAD — back-merge $target into $source first (a forced promotion would discard commits)"
+  fi
+  echo "promote: $source -> $target (fast-forward to ${head:0:12})"
+  LEFTHOOK=0 git push "$remote" "HEAD:refs/heads/$target"
+else
+  title="Promote $source -> $target (${head:0:12})"
+  body_file=$(mktemp)
+  if [[ $split_hop == 1 ]]; then gates="integration checks green on Gitea: $(jq -r 'keys | join(", ")' <<<"$int_checks"); server verify runs on this PR (required before merge)"
+  else gates="server checks green: $(ci_config PROMOTION_REQUIRED_CHECKS verify)"; fi
+  [[ $int_checks == '{}' && $split_hop == 1 ]] && gates="server verify runs on this PR (required before merge)"
+  printf 'Promotion of `%s` content.\n\n- Commit: `%s`\n- Gates: %s\n\nMerge with a merge commit (no squash) so promoted commits keep their identity.\n' \
+    "$source" "$head" "$gates" >"$body_file"
+  if existing=$(forge_pr_list 2>/dev/null | jq -r --arg t "$target" --arg s "$source" \
+      '[.[] | select(.base == $t and .head == $s)][0].number // empty') && [[ -n $existing ]]; then
+    echo "promote: promotion PR #$existing already open ($source -> $target); it tracks $source automatically"
+  else
+    created=$(forge_pr_create "$target" "$source" "$title" "$body_file") || die "failed to open the promotion PR"
+    echo "$created"
+    existing=$(grep -o -E '[0-9]+$' <<<"$created" || true)
+  fi
+  rm -f "$body_file"
+  if [[ $auto == 1 ]]; then
+    [[ $(ci_forge) == github ]] || die "autopromote arms GitHub auto-merge; promotion forge is $(ci_forge)"
+    [[ -n $existing ]] || die "promotion PR number unknown; cannot arm auto-merge"
+    # Merge commit, never squash; no --delete-branch: the head is the promotion source branch.
+    gh pr merge "$existing" --auto --merge >/dev/null || die "cannot arm auto-merge on PR #$existing (repo setting allow_auto_merge?)"
+    echo "promote: auto-merge armed on PR #$existing ($source -> $target); it merges when every required check is green"
+  else
+    echo "promote: a human approves and merges the promotion PR (required: server checks on the PR)"
+  fi
+fi

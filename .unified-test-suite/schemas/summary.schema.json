@@ -1,0 +1,704 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://unified-test-suite/schemas/summary.schema.json",
+  "title": "unified-test-suite summary (<results>/summary.json)",
+  "description": "Contract between scripts/summarize-test-results.mjs and every consumer (agents, CI). Breaking changes bump schemaVersion MAJOR.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "generatedAt",
+    "verdict"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "pattern": "^1\\.\\d+\\.\\d+$"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "target": {
+      "type": "string",
+      "description": "Scope that produced the run: a layer, group or gate name, \"changed\", or \"report\""
+    },
+    "strict": {
+      "type": "boolean"
+    },
+    "verdict": {
+      "type": "object",
+      "required": [
+        "status",
+        "reasons"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "pass",
+            "fail",
+            "error"
+          ],
+          "description": "error = the summarizer itself crashed; treat as fail"
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "git": {
+      "type": "object",
+      "properties": {
+        "sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dirty": {
+          "type": "boolean"
+        },
+        "fingerprint": {
+          "type": "string",
+          "description": "Working-tree content hash; layer results with another fingerprint are stale"
+        }
+      }
+    },
+    "env": {
+      "type": "object",
+      "properties": {
+        "ci": {
+          "type": "boolean"
+        },
+        "backendUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "appUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "backendManaged": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "testRunId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "durationSeconds": {
+      "type": "number"
+    },
+    "layers": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/layer"
+      }
+    },
+    "failures": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/failure"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "flaky": {
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer"
+        },
+        "percent": {
+          "type": "number"
+        },
+        "tests": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "bdd": {
+      "type": "object",
+      "properties": {
+        "covered": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "failing": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "totalScenarios": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "coveredPercent": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "source": {
+          "const": "sdd",
+          "description": "present only in SDD mode: covered/failing are derived from TDD pairing, not test tags"
+        }
+      }
+    },
+    "slowest": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "diff": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "doctor": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "canonVersion": {
+      "type": "string"
+    },
+    "project": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "sdd": {
+      "type": "object",
+      "description": "SDD mode only (config sdd block). Evidence against the SDD chain: TDD cases, BDD and EARS roll-up, runtime findings.",
+      "required": [
+        "mode",
+        "docsRoot",
+        "index",
+        "findings"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "build",
+            "gate-code"
+          ]
+        },
+        "docsRoot": {
+          "type": "string"
+        },
+        "index": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            },
+            "error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "path": {
+              "type": "string"
+            }
+          }
+        },
+        "totals": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "ears": {
+              "type": "integer"
+            },
+            "bdd": {
+              "type": "integer"
+            },
+            "tdd": {
+              "type": "integer"
+            },
+            "mappings": {
+              "type": "integer"
+            },
+            "scenarios": {
+              "type": "integer"
+            }
+          }
+        },
+        "tdd": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "counts": {
+              "type": "object",
+              "properties": {
+                "passed": {
+                  "type": "integer"
+                },
+                "failed": {
+                  "type": "integer"
+                },
+                "flaky": {
+                  "type": "integer"
+                },
+                "skipped": {
+                  "type": "integer"
+                },
+                "missing": {
+                  "type": "integer"
+                },
+                "not_run": {
+                  "type": "integer"
+                }
+              }
+            },
+            "cases": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "status"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "passed",
+                      "failed",
+                      "flaky",
+                      "skipped",
+                      "missing",
+                      "not_run"
+                    ]
+                  },
+                  "reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "testFile": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "testFunction": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "tests": {
+                    "type": "array"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "bdd": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "counts": {
+              "type": "object",
+              "properties": {
+                "verified": {
+                  "type": "integer"
+                },
+                "failing": {
+                  "type": "integer"
+                },
+                "at_risk": {
+                  "type": "integer"
+                },
+                "unpaired": {
+                  "type": "integer"
+                }
+              }
+            },
+            "verifiedPercent": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "scenarios": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "status"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "verified",
+                      "failing",
+                      "at_risk",
+                      "unpaired"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "ears": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "counts": {
+              "type": "object",
+              "properties": {
+                "verified": {
+                  "type": "integer"
+                },
+                "failing": {
+                  "type": "integer"
+                },
+                "at_risk": {
+                  "type": "integer"
+                },
+                "uncovered": {
+                  "type": "integer"
+                }
+              }
+            },
+            "verifiedPercent": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "requirements": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "status"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "enum": [
+                      "verified",
+                      "failing",
+                      "at_risk",
+                      "uncovered"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "unmapped": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "code",
+              "severity",
+              "ref",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string",
+                "pattern": "^UTS-SDD-\\d{3}$"
+              },
+              "implements": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "severity": {
+                "enum": [
+                  "warning",
+                  "error"
+                ]
+              },
+              "ref": {
+                "type": "string"
+              },
+              "file": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "layer": {
+      "type": "object",
+      "required": [
+        "status",
+        "required",
+        "fresh",
+        "counts"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "passed",
+            "failed",
+            "infra_error",
+            "stale",
+            "not_run"
+          ],
+          "description": "failed = fix the code; infra_error = fix the environment (see reason, run `task test:doctor`); stale = results predate the current tree, re-run; not_run = no results"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "fresh": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "granularity": {
+          "enum": [
+            "fine",
+            "coarse"
+          ],
+          "description": "coarse = exit code only, no per-test detail"
+        },
+        "exitCode": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "phase": {
+          "enum": [
+            "preflight",
+            "run",
+            null
+          ]
+        },
+        "startedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "durationMs": {
+          "type": "integer"
+        },
+        "coveragePercent": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "counts": {
+          "type": "object",
+          "required": [
+            "total",
+            "passed",
+            "failed",
+            "skipped",
+            "flaky"
+          ],
+          "properties": {
+            "total": {
+              "type": "integer"
+            },
+            "passed": {
+              "type": "integer"
+            },
+            "failed": {
+              "type": "integer"
+            },
+            "skipped": {
+              "type": "integer"
+            },
+            "flaky": {
+              "type": "integer"
+            }
+          }
+        },
+        "failures": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/failure"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "artifacts": {
+          "type": "object"
+        },
+        "runner": {
+          "enum": [
+            "go",
+            "pytest",
+            "node-test",
+            "node-command",
+            "steps",
+            "playwright",
+            "command",
+            "sdd-lint",
+            "journeys"
+          ]
+        },
+        "gate": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "failure": {
+      "type": "object",
+      "required": [
+        "layer",
+        "title"
+      ],
+      "properties": {
+        "layer": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "file": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Repo-relative path"
+        },
+        "line": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "kind": {
+          "enum": [
+            "test",
+            "build",
+            "timeout",
+            "package",
+            "error",
+            "step",
+            null,
+            "doc",
+            "journey"
+          ]
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Redacted, ANSI-stripped, truncated to 2000 chars"
+        },
+        "bdd": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "retries": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "reproduce": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Single-test command; run this, never the whole gate"
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

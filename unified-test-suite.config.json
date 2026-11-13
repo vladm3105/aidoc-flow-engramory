@@ -1,0 +1,73 @@
+{
+  "$schema": "./.unified-test-suite/schemas/config.schema.json",
+  "project": "platform-engramory",
+  "resultsDir": "test-results",
+  "layers": {
+    "unit": {
+      "runner": "pytest",
+      "python": ".venv/bin/python",
+      "args": [
+        "tests/",
+        "-m",
+        "not integration"
+      ],
+      "coverage": true
+    },
+    "static": {
+      "runner": "steps",
+      "steps": "tests/steps/static.list"
+    },
+    "integration": {
+      "runner": "pytest",
+      "python": ".venv/bin/python",
+      "args": [
+        "tests/",
+        "-m",
+        "integration"
+      ],
+      "needsStack": true
+    }
+  },
+  "gates": {
+    "fast": {
+      "layers": [
+        "unit",
+        "static"
+      ],
+      "budgetSeconds": 300
+    },
+    "pr": {
+      "layers": [
+        "unit",
+        "static",
+        "integration"
+      ],
+      "budgetSeconds": 600
+    },
+    "all": {
+      "layers": [
+        "unit",
+        "static",
+        "integration"
+      ],
+      "strict": true
+    }
+  },
+  "coverage": {
+    "unit": {
+      "minPercent": null
+    }
+  },
+  "stack": {
+    "backendUrl": "http://127.0.0.1:8000",
+    "healthPath": "/health",
+    "compose": null,
+    "dbReset": null
+  },
+  "providers": null,
+  "secrets": {
+    "envKeys": [
+      "DATABASE_URL"
+    ]
+  }
+}

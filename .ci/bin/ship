@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+# aidoc-local-flow-ci ship — the only path to green merge statuses.
+#
+#   ship            HUMAN-APPROVED (task ship): any base branch
+#   ship --auto     AUTONOMOUS (task autoship): only when BASE_BRANCH is listed in
+#                   SHIP_AUTONOMOUS_BRANCHES; arms GitHub auto-merge, or merges on
+#                   observed green on Gitea (poll-to-green; Gitea cannot schedule)
+#
+# Steps: preconditions → fetch base → verify self-review (REVIEW=required) → task ci-full →
+# push (hooks skipped: the gate just ran uncached) → signoff status → "review" commit status →
+# PR (created with audit-trail body + "Closes #N", or updated with a comment) → auto-merge (--auto).
+set -euo pipefail
+# shellcheck source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+CI_BIN=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+root=$(ci_root); cd "$root"
+
+die() { echo "ship: $*" >&2; exit 1; }
+auto=0
+while [[ $# -gt 0 ]]; do case $1 in
+  --auto) auto=1 ;;
+  --forge) shift; CI_FORGE=${1:-}; [[ $CI_FORGE == gitea || $CI_FORGE == github ]] || die "--forge needs gitea or github" ;;
+  *) die "unknown option $1 (usage: ship [--auto] [--forge gitea|github])" ;;
+esac; shift; done
+base=$(ci_base_branch)
+branch=$(git branch --show-current)
+review_mode=$(ci_config REVIEW off)
+remote=$(ci_push_remote)
+
+[[ -n $branch ]] || die "detached HEAD — check out a feature branch"
+[[ $branch != "$base" ]] || die "do not ship from '$base' — use a feature branch and a PR"
+ci_integration_head_check "$branch" || die "branch name refused (#36)"
+[[ -z $(git status --porcelain) ]] || die "working tree is dirty (incl. untracked files) — commit or stash first"
+if [[ $(ci_forge) == github ]]; then
+  command -v gh >/dev/null || die "gh CLI not installed (mise install; gh auth login)"
+else
+  command -v curl >/dev/null || die "curl needed for the gitea backend"
+  [[ -n ${GITEA_TOKEN:-} ]] || die "GITEA_TOKEN not set (gitea backend)"
+fi
+
+if [[ $auto == 1 ]]; then
+  [[ " $(ci_list SHIP_AUTONOMOUS_BRANCHES "") " == *" $base "* ]] \
+    || die "autoship is not allowed into '$base' (SHIP_AUTONOMOUS_BRANCHES in .ci-config) — a human runs 'task ship'"
+  [[ $review_mode == required ]] || die "autoship requires REVIEW=required (independent review is the approval)"
+  [[ ${ALLOW_TEST_DELETION:-0} != 1 ]] || die "test deletion needs a human — use 'task ship'"
+fi
+
+git fetch "$remote" "$base" --quiet || die "cannot fetch $remote/$base"
+
+# conflict gate (canon: https://github.com/vladm3105/aidoc-hybrid-ci/blob/main/docs/CONFLICT_RESOLUTION.md#5-verification-after-a-sync §5): never sign off a branch the forge cannot merge
+if ! git merge-base --is-ancestor "$remote/$base" HEAD; then
+  mt_rc=0; git merge-tree --write-tree --no-messages HEAD "$remote/$base" >/dev/null 2>&1 || mt_rc=$?
+  [[ $mt_rc -le 1 ]] || die "git merge-tree failed (git >= 2.38 required)"
+  [[ $mt_rc -eq 0 ]] || die "branch conflicts with $remote/$base — run: task sync (canon: https://github.com/vladm3105/aidoc-hybrid-ci/blob/main/docs/CONFLICT_RESOLUTION.md)"
+fi
+
+if [[ $review_mode == required ]]; then
+  bash "$CI_BIN/review" --verify || die "no valid self-review PASS for this exact change — run: task review -- --issue <N>"
+fi
+
+task ci-full || die "ci-full failed — see .ci-out/summary.json"
+
+if [[ $auto == 1 ]] && [[ $(jq '.warnings | length' .ci-out/summary.json) -gt 0 ]]; then
+  jq -r '.warnings[] | "  - \(.)"' .ci-out/summary.json
+  die "warnings above need human review (protected config changes or report-only failures) — a human runs 'task ship'"
+fi
+
+head=$(git rev-parse HEAD)
+LEFTHOOK=0 git push -u "$remote" HEAD
+forge_post_status "$head" success signoff "ship: local ci-full green" \
+  || die "signoff post failed"
+
+state_dir="$(git rev-parse --absolute-git-dir)/aidoc-ci/review"
+key=${branch//\//__}
+sync_state="$(git rev-parse --absolute-git-dir)/aidoc-ci/sync/$key.json"
+issue=""
+if [[ $review_mode == required ]]; then
+  model=$(jq -r .reviewer.model "$state_dir/$key.json")
+  round=$(jq -r '"\(.round)/\(.max_rounds)"' "$state_dir/$key.json")
+  diff_sha=$(jq -r .diff_sha256 "$state_dir/$key.json")
+  issue=$(jq -r '.issue // empty' "$state_dir/$key.json")
+  forge_post_status "$head" success review "Independent review PASS (round $round, $model, diff ${diff_sha:0:12})" \
+    || die "review post failed"
+fi
+
+body=$(mktemp); trap 'rm -f "$body"' EXIT
+{
+  [[ $review_mode == required ]] && cat "$state_dir/$key.md" && echo
+  cat .ci-out/summary.md
+  if [[ -f $sync_state ]] && [[ $(jq -r .status "$sync_state") == resolved ]] \
+     && git merge-base --is-ancestor "$(jq -r .merge_commit "$sync_state")" HEAD 2>/dev/null; then
+    echo; echo "### Conflict resolution (aidoc-local-flow-ci sync, class $(jq -r .class "$sync_state"))"; echo
+    echo "| File | Class | Strategy |"; echo "| --- | --- | --- |"
+    jq -r '.files | to_entries[] | "| `\(.key)` | \(.value.class) | \(.value.strategy // "-") |"' "$sync_state"
+    if [[ $(jq '.one_sided | length' "$sync_state") -gt 0 ]]; then
+      echo; echo "One-sided: $(jq -r '.one_sided | join(", ")' "$sync_state") — $(jq -r '.justification // ""' "$sync_state")"
+    fi
+  fi
+  if [[ -n $issue ]]; then
+    # Split mode: the issue lives on GitHub, so name it cross-repo; the Gitea merge template carries
+    # the PR body into the merge commit and GitHub closes it when the mirror lands on dev (G1).
+    if [[ $(ci_issue_forge) == github ]] && ci_split_forge; then
+      printf '\nCloses %s#%s\n' "$(ci_enter_issue_forge && forge_repo)" "$issue"
+    else printf '\nCloses #%s\n' "$issue"; fi
+  fi
+} >"$body"
+
+if num=$(forge_pr_number 2>/dev/null); then
+  forge_pr_comment "$num" "$body" >/dev/null || echo "ship: warning — could not post the audit-trail comment"
+else
+  title=$(set +o pipefail; git log --reverse --format=%s "$remote/$base..HEAD" 2>/dev/null | head -n1)
+  created=$(forge_pr_create "$base" "$branch" "${title:-$branch}" "$body") \
+    || die "failed to create the PR on the forge (the branch and signoff are pushed — re-run task ship to retry)"
+  num=$(grep -o -E '[0-9]+$' <<<"$created" || true)
+  [[ -n $num ]] || die "PR created but no number parsed from the forge reply"
+fi
+[[ $review_mode == required ]] && { forge_label_remove "$num" review:blocked >/dev/null 2>&1 || true; }
+if [[ -f $sync_state ]]; then  # a successful ship ends the conflict episode (attempt counter, label)
+  jq '.attempts = 0' "$sync_state" >"$sync_state.tmp" && mv "$sync_state.tmp" "$sync_state"
+  forge_label_remove "$num" conflict:human >/dev/null 2>&1 || true
+fi
+
+# Verify the forge PR points to the head commit just pushed before arming auto-merge or finishing
+pr_head=""
+for _ in $(seq 1 15); do
+  pr_head=$(forge_pr_view "$branch" 2>/dev/null | jq -r '.headRefOid // empty')
+  [[ -n $pr_head && $pr_head != null && $pr_head == "$head" ]] && break
+  sleep 1
+done
+[[ $pr_head == "$head" ]] || die "forge PR #$num head ($pr_head) does not match local HEAD ($head) — forge has not updated"
+
+if [[ $auto == 1 ]]; then
+  method=$(ci_config AUTO_MERGE_METHOD squash)
+  case $method in squash|merge|rebase) ;; *) die "AUTO_MERGE_METHOD must be squash, merge or rebase (got: $method)" ;; esac
+  if [[ $(ci_forge) == gitea ]]; then
+    # No schedule-while-pending on Gitea 1.27 (MergeWhenChecksSucceed gets a
+    # 405 while checks run — pilot probe, PLAN-006 Phase 4), so Gitea autoship
+    # is poll-to-green-then-merge via pr-status --watch (exit 0 merged; 10 on
+    # a new conflict — sync, then ship again; 3 on red/missing/timeout). The
+    # forge passes explicitly: the watch is a child process and CI_FORGE is
+    # not exported, so it would otherwise re-sniff per branch.
+    rc=0; bash "$CI_BIN/pr-status" --forge gitea --watch || rc=$?
+    [[ $rc -eq 0 ]] && echo "ship: $branch merged into $base (--$method)"
+    exit "$rc"
+  fi
+  forge_merge_auto "$num" "$method"
+  echo "ship: auto-merge armed (--$method) — merges into $base when all required statuses are green"
+fi
+echo "ship: $branch signed off at ${head:0:12}${issue:+ (closes #$issue)}"

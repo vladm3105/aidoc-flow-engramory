@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# aidoc-local-flow-ci cleanup — safe post-merge hygiene for a feature branch and its worktree.
+#   task cleanup -- <branch>     (run from the main checkout, not from the worktree being removed)
+#
+# Deletes nothing unless ALL hold: the PR for <branch> is MERGED on the forge; the local branch tip
+# equals the PR head that was merged (no unpushed work); the worktree has no changes or untracked
+# files. It never force-pushes; the local branch is deleted with -D only after verifying
+# MERGED plus tip equality. Merged work also leaves no live state: the branch's aidoc-ci
+# sync/review state is purged (review histories are audit trails and stay). On any doubt
+# it stops and reports what to check.
+set -uo pipefail
+# shellcheck source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+root=$(ci_root); cd "$root" || exit 1
+die() { echo "cleanup: $*" >&2; exit 1; }
+
+target=${1:-}; [[ -n $target ]] || die "usage: task cleanup -- <branch>"
+base=$(ci_base_branch)
+[[ $target != "$base" ]] || die "refusing to clean up the base branch"
+# cleanup runs from the main checkout, so resolve the TARGET branch's forge, not the
+# current branch's (a gitea feature branch is cleaned from a github-tracking main).
+if [[ -z ${CI_FORGE:-} ]]; then
+  tremote=$(git config "branch.$target.remote" 2>/dev/null || ci_push_remote)
+  turl=$(git remote get-url "$tremote" 2>/dev/null || true)
+  if [[ -z $turl ]]; then CI_FORGE=$(ci_forge)   # no upstream: the checkout's forge, not a guess
+  elif [[ $turl == *github.com* ]]; then CI_FORGE=github
+  else CI_FORGE=gitea; fi
+fi
+[[ $CI_FORGE == gitea || $CI_FORGE == github ]] || die "--forge needs gitea or github"
+if [[ $CI_FORGE == github ]]; then
+  command -v gh >/dev/null || die "gh CLI needed to confirm the merge"
+else
+  command -v curl >/dev/null || die "curl needed for the gitea backend"
+  [[ -n ${GITEA_TOKEN:-} ]] || die "GITEA_TOKEN not set (gitea backend)"
+fi
+remote=${tremote:-origin}
+
+pr=$(forge_pr_view "$target" 2>/dev/null) || die "no PR found for '$target'"
+[[ $(jq -r .state <<<"$pr") == MERGED ]] || die "PR #$(jq -r .number <<<"$pr") is $(jq -r .state <<<"$pr"), not MERGED — nothing removed"
+merged_head=$(jq -r .headRefOid <<<"$pr")
+
+# worktree for the branch (if any)
+wt=$(git worktree list --porcelain | awk -v b="refs/heads/$target" '/^worktree /{p=substr($0,10)} $0=="branch " b {print p}')
+if [[ -n $wt ]]; then
+  [[ $(cd "$wt" && pwd -P) != $(pwd -P) ]] || die "you are inside the worktree for '$target' — run cleanup from the main checkout"
+  dirty=$(git -C "$wt" status --porcelain)
+  [[ -z $dirty ]] || { echo "$dirty" | sed 's/^/  /'; die "worktree $wt has uncommitted/untracked files — save or discard them yourself, then re-run"; }
+fi
+
+if git rev-parse --verify -q "refs/heads/$target" >/dev/null; then
+  tip=$(git rev-parse "refs/heads/$target")
+  [[ $tip == "$merged_head" ]] || die "local '$target' ($tip) differs from the merged PR head ($merged_head) — unpushed or rewritten work; nothing removed"
+fi
+
+[[ -n $wt ]] && { git worktree remove "$wt" || die "git worktree remove failed"; echo "cleanup: removed worktree $wt"; }
+git fetch --prune "$remote" --quiet || true
+if git rev-parse --verify -q "refs/heads/$target" >/dev/null; then
+  git branch -D "$target" >/dev/null && echo "cleanup: deleted local branch $target (verified merged as PR #$(jq -r .number <<<"$pr"))"
+fi
+gitdir=$(git rev-parse --absolute-git-dir)
+purged=0
+for f in "$gitdir/aidoc-ci/sync/${target//\//__}.json" "$gitdir/aidoc-ci/sync/${target//\//__}.stages" \
+         "$gitdir/aidoc-ci/review/${target//\//__}.json" "$gitdir/aidoc-ci/review/${target//\//__}.md" \
+         "$gitdir/aidoc-ci/review/${target//\//__}.raw"; do
+  [[ -e $f ]] || continue
+  rm -rf "$f" && purged=$((purged + 1))
+done
+[[ $purged -gt 0 ]] && echo "cleanup: purged $purged aidoc-ci state file(s) for $target"
+if git ls-remote --exit-code --heads "$remote" "$target" >/dev/null 2>&1; then
+  LEFTHOOK=0 git push "$remote" --delete "$target" --quiet && echo "cleanup: deleted remote branch $target"
+fi
+if [[ $(git branch --show-current) == "$base" && -z $(git status --porcelain) ]]; then
+  git pull --ff-only --quiet "$remote" "$base" && echo "cleanup: $base fast-forwarded to $(git rev-parse --short HEAD)"
+else
+  echo "cleanup: main checkout is not a clean '$base' — skipped fast-forward (git checkout $base && git pull --ff-only)"
+fi
+echo "cleanup: worktrees now:"; git worktree list | sed 's/^/  /'

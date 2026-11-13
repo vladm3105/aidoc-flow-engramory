@@ -1,0 +1,266 @@
+"""Unit tests for Neo4jGraphAdapter."""
+
+from __future__ import annotations
+
+import inspect
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from engramory.adapters.dev.graph_neo4j import Neo4jGraphAdapter, _sanitize_ident
+from engramory.ports import GraphPort
+
+
+def test_neo4j_adapter_satisfies_graph_port_interface() -> None:
+    adapter = Neo4jGraphAdapter()
+    for method_name in (
+        "upsert_node",
+        "upsert_edge",
+        "neighbors",
+        "ancestors",
+        "descendants",
+        "delete_node",
+        "delete_edge",
+    ):
+        assert hasattr(adapter, method_name), f"Missing method {method_name}"
+        port_sig = inspect.signature(getattr(GraphPort, method_name))
+        adapter_sig = inspect.signature(getattr(adapter, method_name))
+        port_params = [p for p in port_sig.parameters.keys() if p != "self"]
+        adapter_params = [p for p in adapter_sig.parameters.keys() if p != "self"]
+        assert port_params == adapter_params
+
+
+def test_sanitize_ident_allows_valid_identifiers() -> None:
+    assert _sanitize_ident("Entity", "label") == "Entity"
+    assert _sanitize_ident("ADR_01", "label") == "ADR_01"
+    assert _sanitize_ident("DEPENDS_ON", "rel") == "DEPENDS_ON"
+
+
+def test_sanitize_ident_rejects_cypher_injection_chars() -> None:
+    with pytest.raises(ValueError, match="invalid label identifier"):
+        _sanitize_ident("Node; DROP DATABASE neo4j;", "label")
+
+    with pytest.raises(ValueError, match="invalid relationship type identifier"):
+        _sanitize_ident("RELATION]-()-[", "relationship type")
+
+    with pytest.raises(ValueError, match="invalid label identifier"):
+        _sanitize_ident("Label With Space", "label")
+
+
+@pytest.mark.asyncio
+async def test_upsert_node_executes_parameterized_query() -> None:
+    mock_session = AsyncMock()
+    mock_driver = MagicMock()
+    mock_driver.session.return_value.__aenter__.return_value = mock_session
+
+    adapter = Neo4jGraphAdapter(driver=mock_driver)
+    await adapter.upsert_node(
+        id="ADR-01",
+        labels=["ADR", "Architecture"],
+        props={"title": "Postgres Spine", "status": "Accepted"},
+    )
+
+    mock_session.run.assert_awaited_once()
+    call_args = mock_session.run.await_args
+    cypher_query = call_args[0][0]
+    parameters = call_args[0][1]
+
+    assert "MERGE (n:Entity {uid: $uid})" in cypher_query
+    assert ":`ADR`:`Architecture`" in cypher_query
+    assert parameters["id"] == "ADR-01"
+    assert parameters["uid"] == "default:ADR-01"
+    assert parameters["props"]["title"] == "Postgres Spine"
+
+
+@pytest.mark.asyncio
+async def test_upsert_edge_executes_parameterized_query() -> None:
+    mock_session = AsyncMock()
+    mock_driver = MagicMock()
+    mock_driver.session.return_value.__aenter__.return_value = mock_session
+
+    adapter = Neo4jGraphAdapter(driver=mock_driver)
+    await adapter.upsert_edge(
+        src="ADR-04",
+        dst="ADR-02",
+        rel="DEPENDS_ON",
+        props={"weight": 1.0},
+    )
+
+    mock_session.run.assert_awaited_once()
+    call_args = mock_session.run.await_args
+    cypher_query = call_args[0][0]
+    parameters = call_args[0][1]
+
+    assert "MERGE (a:Entity {uid: $src_uid})" in cypher_query
+    assert "MERGE (b:Entity {uid: $dst_uid})" in cypher_query
+    assert "-[r:`DEPENDS_ON`]->" in cypher_query
+    assert parameters["src_uid"] == "default:ADR-04"
+    assert parameters["dst_uid"] == "default:ADR-02"
+    assert parameters["props"]["weight"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_neighbors_parses_records() -> None:
+    mock_result = AsyncMock()
+    mock_result.data.return_value = [
+        {
+            "id": "ADR-02",
+            "labels": ["Entity", "ADR"],
+            "properties": {"title": "Ports and Adapters"},
+        },
+    ]
+
+    mock_session = AsyncMock()
+    mock_session.run.return_value = mock_result
+    mock_driver = MagicMock()
+    mock_driver.session.return_value.__aenter__.return_value = mock_session
+
+    adapter = Neo4jGraphAdapter(driver=mock_driver)
+    neighbors = await adapter.neighbors(id="ADR-04", rel="DEPENDS_ON", depth=2)
+
+    assert len(neighbors) == 1
+    assert neighbors[0]["id"] == "ADR-02"
+    assert neighbors[0]["labels"] == ["ADR"]
+    assert neighbors[0]["properties"]["title"] == "Ports and Adapters"
+
+
+@pytest.mark.asyncio
+async def test_delete_node_executes_detach_delete() -> None:
+    mock_session = AsyncMock()
+    mock_driver = MagicMock()
+    mock_driver.session.return_value.__aenter__.return_value = mock_session
+
+    adapter = Neo4jGraphAdapter(driver=mock_driver)
+    await adapter.delete_node(id="ADR-01")
+
+    mock_session.run.assert_awaited_once()
+    call_args = mock_session.run.await_args
+    cypher_query = call_args[0][0]
+    parameters = call_args[0][1]
+
+    assert "MATCH (n:Entity {uid: $uid})" in cypher_query
+    assert "DETACH DELETE n" in cypher_query
+    assert parameters["uid"] == "default:ADR-01"
+
+
+@pytest.mark.asyncio
+async def test_delete_edge_executes_delete_rel() -> None:
+    mock_session = AsyncMock()
+    mock_driver = MagicMock()
+    mock_driver.session.return_value.__aenter__.return_value = mock_session
+
+    adapter = Neo4jGraphAdapter(driver=mock_driver)
+    await adapter.delete_edge(src="ADR-03", dst="ADR-02", rel="DEPENDS_ON")
+
+    mock_session.run.assert_awaited_once()
+    call_args = mock_session.run.await_args
+    cypher_query = call_args[0][0]
+    parameters = call_args[0][1]
+
+    assert (
+        "MATCH (a:Entity {uid: $src_uid})-[r:`DEPENDS_ON`]->(b:Entity {uid: $dst_uid})"
+        in cypher_query
+    )
+    assert "DELETE r" in cypher_query
+    assert parameters["src_uid"] == "default:ADR-03"
+    assert parameters["dst_uid"] == "default:ADR-02"
+
+
+@pytest.mark.asyncio
+async def test_ancestors_executes_directed_path_query() -> None:
+    mock_result = AsyncMock()
+    mock_result.data.return_value = [
+        {"id": "SPEC-03", "labels": ["Entity", "SPEC"], "properties": {"title": "Retrieval"}},
+        {"id": "ADR-03", "labels": ["Entity", "ADR"], "properties": {"title": "Graph Engine"}},
+    ]
+    mock_session = AsyncMock()
+    mock_session.run.return_value = mock_result
+    mock_driver = MagicMock()
+    mock_driver.session.return_value.__aenter__.return_value = mock_session
+
+    adapter = Neo4jGraphAdapter(driver=mock_driver)
+    results = await adapter.ancestors(id="IPLAN-03", depth=4)
+
+    assert len(results) == 2
+    assert results[0]["id"] == "SPEC-03"
+    assert results[0]["labels"] == ["SPEC"]
+    assert results[1]["id"] == "ADR-03"
+
+    mock_session.run.assert_awaited_once()
+    call_args = mock_session.run.await_args
+    cypher_query = call_args[0][0]
+    parameters = call_args[0][1]
+
+    assert "-[*1..4]->(m:Entity)" in cypher_query
+    assert "n.uid = $uid" in cypher_query
+    assert parameters["uid"] == "default:IPLAN-03"
+
+
+@pytest.mark.asyncio
+async def test_descendants_executes_directed_inpath_query() -> None:
+    mock_result = AsyncMock()
+    mock_result.data.return_value = [
+        {"id": "SPEC-03", "labels": ["Entity", "SPEC"], "properties": {"title": "Retrieval"}},
+        {"id": "IPLAN-03", "labels": ["Entity", "IPLAN"], "properties": {"title": "Build"}},
+    ]
+    mock_session = AsyncMock()
+    mock_session.run.return_value = mock_result
+    mock_driver = MagicMock()
+    mock_driver.session.return_value.__aenter__.return_value = mock_session
+
+    adapter = Neo4jGraphAdapter(driver=mock_driver)
+    results = await adapter.descendants(id="ADR-03", depth=5)
+
+    assert len(results) == 2
+    assert results[0]["id"] == "SPEC-03"
+    assert results[1]["id"] == "IPLAN-03"
+
+    mock_session.run.assert_awaited_once()
+    call_args = mock_session.run.await_args
+    cypher_query = call_args[0][0]
+    parameters = call_args[0][1]
+
+    assert "MATCH p = (m:Entity)-[*1..5]->(n)" in cypher_query
+    assert "ALL(" in cypher_query
+    assert "n.uid = $uid" in cypher_query
+    assert parameters["uid"] == "default:ADR-03"
+
+
+@pytest.mark.asyncio
+async def test_upsert_node_guards_label_injection_by_project_id() -> None:
+    mock_session = AsyncMock()
+    mock_driver = MagicMock()
+    mock_driver.session.return_value.__aenter__.return_value = mock_session
+
+    adapter = Neo4jGraphAdapter(driver=mock_driver)
+    await adapter.upsert_node(
+        id="SPEC-01",
+        labels=["SPEC"],
+        props={"tenant_id": "t1", "project_id": "proj-b"},
+    )
+
+    cypher_query = mock_session.run.await_args[0][0]
+    assert "FOREACH (_ IN CASE" in cypher_query
+    assert "n.project_id = $project_id" in cypher_query
+
+
+@pytest.mark.asyncio
+async def test_neighbors_restricts_default_tenant_and_intermediate_hops() -> None:
+    mock_result = AsyncMock()
+    mock_result.data.return_value = []
+    mock_session = AsyncMock()
+    mock_session.run.return_value = mock_result
+    mock_driver = MagicMock()
+    mock_driver.session.return_value.__aenter__.return_value = mock_session
+
+    adapter = Neo4jGraphAdapter(driver=mock_driver)
+    await adapter.neighbors(id="ADR-01", depth=3, tenant_id="default", project_id="proj-a")
+
+    cypher_query = mock_session.run.await_args[0][0]
+    assert "$tenant_id = 'default' OR n.tenant_id = $tenant_id" not in cypher_query
+    assert (
+        "n.tenant_id = $tenant_id OR ($tenant_id = 'default' AND n.tenant_id IS NULL)"
+        in cypher_query
+    )
+    assert "ALL(" in cypher_query
+    assert "x IN nodes(p)" in cypher_query

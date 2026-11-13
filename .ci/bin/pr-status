@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+# aidoc-local-flow-ci pr-status — the forge's view of the current branch's PR, for agents that armed
+# auto-merge and must notice a later conflict (canon: https://github.com/vladm3105/aidoc-hybrid-ci/blob/main/docs/CONFLICT_RESOLUTION.md#4-procedure §4).
+#   pr-status [--json]
+#   pr-status --watch [INTERVAL=15] [TIMEOUT=600] [--json]
+# Exit: 0 mergeable or pending (watch: merged, clean+armed, re-armed, or merged-on-green) ·
+# 10 CONFLICTING (run task sync) · 11 no PR · 12 escalated (conflict:human — a human owns
+# the PR; watch refuses to arm/merge) · 3 error (watch: also timeout, closed-unmerged,
+# red or missing checks on gitea)
+# --watch polls until the PR resolves: MERGED exits 0; CLEAN with auto-merge armed exits
+# 0; CLEAN unarmed re-arms on github (gh pr merge --auto --<AUTO_MERGE_METHOD>
+# --delete-branch, squash default — idempotent; the server merges when green) and exits
+# 0; on gitea the loop waits for observed green, then merges immediately (Gitea 1.27
+# rejects MergeWhenChecksSucceed while checks run — pilot probe, PLAN-006 Phase 4).
+# Pending states wait (BEHIND warns each poll); red checks on gitea exit 3 (waiting
+# cannot help — fix or retry, then re-run).
+set -uo pipefail
+# shellcheck source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+root=$(ci_root) || { echo "pr-status: not in a git repo" >&2; exit 3; }
+cd "$root" || exit 3
+if [[ $(ci_forge) == github ]]; then
+  command -v gh >/dev/null || { echo "pr-status: gh not installed" >&2; exit 3; }
+else
+  command -v curl >/dev/null || { echo "pr-status: curl needed for the gitea backend" >&2; exit 3; }
+  [[ -n ${GITEA_TOKEN:-} ]] || { echo "pr-status: GITEA_TOKEN not set (gitea backend)" >&2; exit 3; }
+fi
+branch=$(git branch --show-current)
+[[ -n $branch ]] || { echo "pr-status: detached HEAD" >&2; exit 3; }
+local_head=$(git rev-parse HEAD)
+
+watch=0; interval=15; timeout=600; json_out=0; positionals=()
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --watch) watch=1; shift ;;
+    --json) json_out=1; shift ;;
+    --forge) shift; CI_FORGE=${1:-}; [[ $CI_FORGE == gitea || $CI_FORGE == github ]] || { echo "pr-status: --forge needs gitea or github" >&2; exit 3; }; shift ;;
+    *) positionals+=("$1"); shift ;;
+  esac
+done
+if [[ ${#positionals[@]} -gt 0 ]]; then
+  [[ $watch == 1 && ${#positionals[@]} -le 2 ]] || { echo "pr-status: usage: pr-status [--json] | pr-status --watch [INTERVAL] [TIMEOUT] [--json]" >&2; exit 3; }
+  interval=${positionals[0]}; timeout=${positionals[1]:-600}
+  [[ $interval =~ ^[0-9]+$ && $timeout =~ ^[0-9]+$ ]] || { echo "pr-status: INTERVAL and TIMEOUT must be non-negative integers" >&2; exit 3; }
+fi
+
+poll() { # one view: prints status, sets globals or exits (11 vanished, 10 conflict)
+  json=$(forge_pr_view "$branch" 2>/dev/null) \
+    || { echo "pr-status: no PR for '$branch'"; exit 11; }
+  [[ $json_out == 1 ]] && echo "$json"
+  read -r num state mergeable mstate auto < <(jq -r '[.number, .state, .mergeable, .mergeStateStatus,
+    (if .autoMergeRequest then "armed" else "off" end)] | @tsv' <<<"$json")
+  sha=$(jq -r .headRefOid <<<"$json")
+  plabels=$(jq -c '.labels // []' <<<"$json")
+  if [[ -z $sha || $sha == null || $sha != "$local_head" ]]; then
+    if [[ $mstate == CLEAN ]]; then
+      mstate="OUTDATED_HEAD"
+    fi
+  fi
+  [[ $json_out == 1 ]] || echo "PR #$num $state · mergeable=$mergeable · mergeState=$mstate · auto-merge=$auto"
+  if [[ $state == OPEN && ( $mergeable == CONFLICTING || $mstate == DIRTY ) ]]; then
+    echo "pr-status: the PR conflicts with its base. Run: task sync, resolve (canon: https://github.com/vladm3105/aidoc-hybrid-ci/blob/main/docs/CONFLICT_RESOLUTION.md), then task ship/autoship again." >&2
+    exit 10
+  fi
+}
+
+if [[ $watch == 0 ]]; then
+  poll
+  [[ $mstate == OUTDATED_HEAD ]] && echo "pr-status: PR #$num head (${sha:-unknown}) differs from local HEAD ($local_head) — forge has not updated or branch not pushed." >&2
+  [[ $mstate == BEHIND ]] && echo "pr-status: branch is behind its base — task sync then ship updates it." >&2
+  exit 0
+fi
+
+say() { if [[ $json_out == 0 ]]; then echo "$1"; fi; }
+SECONDS=0
+last_sha=""
+while true; do
+  poll
+  if [[ $state == MERGED ]]; then
+    if [[ -z $sha || $sha == null || $sha != "$local_head" ]]; then
+      echo "pr-status: PR #$num was merged at ${sha:-unknown}, but local HEAD is $local_head — unmerged branch commits exist" >&2
+      exit 3
+    fi
+    say "pr-status: PR #$num merged"
+    exit 0
+  fi
+  if [[ $state == CLOSED ]]; then echo "pr-status: PR #$num closed without merging" >&2; exit 3; fi
+  if [[ -z $sha || $sha == null || $sha != "$local_head" ]]; then
+    [[ ${last_sha:-} != "$sha" ]] && say "pr-status: PR #$num head (${sha:-unknown}) differs from local HEAD ($local_head) — waiting for forge"
+    last_sha=$sha
+  elif [[ $mstate == CLEAN && $auto == armed ]]; then
+    say "pr-status: PR #$num clean with auto-merge armed"
+    exit 0
+  elif [[ $mstate == CLEAN ]]; then
+    if jq -e 'index("conflict:human")' <<<"$plabels" >/dev/null 2>&1; then
+      echo "pr-status: PR #$num carries conflict:human — a human owns it; refusing to arm/merge" >&2
+      exit 12
+    fi
+    method=$(ci_config AUTO_MERGE_METHOD squash)
+    case $method in squash|merge|rebase) ;; *) echo "pr-status: AUTO_MERGE_METHOD must be squash, merge or rebase (got: $method)" >&2; exit 3 ;; esac
+    if [[ $(ci_forge) == gitea ]]; then  # no schedule-while-pending: merge on observed green
+      gst=$(forge_commit_status "$sha" 2>/dev/null) || gst=unknown
+      case $gst in
+        success)
+          forge_merge_now "$num" "$method" \
+            || { echo "pr-status: merge-now failed for PR #$num" >&2; exit 3; }
+          # Attest merge commit on Gitea so the integration branch directly carries statuses
+          repo=$(forge_repo 2>/dev/null || true)
+          [[ -n ${FORGE_STUB_ATTEST_REPO_FAIL:-} ]] && repo=""
+          attest_ok=1
+          if [[ -z $repo ]]; then
+            echo "pr-status: merged PR #$num but failed to resolve repository for attestation" >&2
+            attest_ok=0
+          else
+            msha=""
+            for _ in 1 2 3; do
+              msha=$(forge_api GET "repos/$repo/pulls/$num" 2>/dev/null | jq -r '.merge_commit_sha // empty' 2>/dev/null || true)
+              [[ -n $msha && $msha != "null" ]] && break
+              sleep 1
+            done
+            if [[ -z $msha || $msha == "null" ]]; then
+              echo "pr-status: merged PR #$num but failed to resolve merge_commit_sha for attestation" >&2
+              attest_ok=0
+            else
+              if ! forge_post_status "$msha" success signoff "merged: PR #$num verified green"; then
+                echo "pr-status: merged PR #$num but failed to post signoff attestation to $msha" >&2
+                attest_ok=0
+              fi
+              if [[ $(ci_config REVIEW off) == required ]]; then
+                if ! forge_post_status "$msha" success review "merged: PR #$num review verified"; then
+                  echo "pr-status: merged PR #$num but failed to post review attestation to $msha" >&2
+                  attest_ok=0
+                fi
+              fi
+            fi
+          fi
+          if [[ $attest_ok -eq 0 ]]; then
+            echo "pr-status: PR #$num merged (--$method), but post-merge attestation failed" >&2
+            exit 3
+          fi
+          say "pr-status: PR #$num green — merged (--$method)"
+          exit 0 ;;
+        failure)
+          echo "pr-status: PR #$num checks FAILED (not pending) — fix or retry (task sync -- --all), then re-run" >&2
+          exit 3 ;;
+        missing)
+          echo "pr-status: PR #$num reports no checks — nothing to wait for; merge manually when ready" >&2
+          exit 3 ;;
+        *)
+          [[ $gst != "${last_gst:-}" ]] && say "pr-status: PR #$num clean, checks $gst — waiting for green"
+          last_gst=$gst ;;
+      esac
+    else
+      forge_merge_auto "$num" "$method" \
+        || { echo "pr-status: re-arm failed for PR #$num" >&2; exit 3; }
+      say "pr-status: PR #$num clean — re-armed auto-merge (--$method)"
+      exit 0
+    fi
+  fi
+  [[ $mstate == BEHIND ]] && echo "pr-status: branch is behind its base — task sync then ship updates it." >&2
+  if [[ $SECONDS -ge $timeout ]]; then echo "pr-status: timed out after ${timeout}s waiting for PR #$num" >&2; exit 3; fi
+  sleep "$interval"
+done

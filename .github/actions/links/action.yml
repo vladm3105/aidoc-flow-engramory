@@ -1,0 +1,155 @@
+# links composite action — v3 packaging of the ci/v2.x `links` reusable.
+# Both run bodies are VERBATIM PORTS (PLAN-025 §1).
+#
+# CHECKOUT IS THE CALLER'S JOB (§3.2).
+#
+# DEFENSES CARRIED (PLAN-025 §2 — do not remove):
+#   D5   actions/* SHA-pinned.
+#   D20  The lychee tarball is SHA-256 verified BEFORE it is unpacked and run.
+#        A release asset is mutable state on infrastructure we do not control;
+#        without this, a substituted tarball executes on the runner.
+#   D21  lychee is installed as a BINARY, never via the marketplace action —
+#        canon may only `uses:` actions/*, github/*, vladm3105/*, and a
+#        non-allowlisted action is a run-init startup_failure with a web-UI-only
+#        message actionlint cannot catch. This is why the body is hand-rolled.
+#   D38  The **musl** static build specifically: the gnu build needs GLIBC 2.38+
+#        and fails on the older Debian ephemeral runners.
+#   D15  `set -euo pipefail` in every run.
+#   Injection: consumer inputs go through `env:`, never source interpolation, so
+#        a hostile `paths`/`config-file` cannot inject a `${{ }}` expression.
+#        `--` stops a caller-supplied PATHS from being parsed as lychee options.
+#
+# TOKEN IS AN INPUT, NOT A SECRET REFERENCE (§3.2a). The `secrets` context is
+# unavailable inside a composite action; the caller must pass
+# `github-token: ${{ secrets.GITHUB_TOKEN }}`. Without it lychee hits github.com
+# anonymous rate limits and reports false dead links.
+name: links
+description: Check links with lychee (musl static binary, checksum-verified).
+
+inputs:
+  paths:
+    description: 'Space-separated paths to check. Word-split by design.'
+    required: false
+    default: '.'
+  mode:
+    description: '"internal" adds --offline (no network, PR-blocking); "external" checks external URLs (scheduled, non-blocking).'
+    required: false
+    # v2 parity: the BLOCKING PR job is internal/offline. An earlier draft
+    # defaulted to `external`, which would have made the required PR gate do
+    # live network link-checking — flaky by construction and blocking.
+    default: 'internal'
+  config-file:
+    description: 'Path to the consumer lychee config. Must exist when non-empty — a missing file refuses loudly; empty means discover.'
+    required: false
+    # v2 parity AND the path canon actually installs (manifest.json ships
+    # `.lychee.toml`). An earlier draft said `lychee.toml`: the guard is
+    # `[ -f "$CONFIG" ]`, so the file was silently not found and the consumer's
+    # whole tolerance profile — accept 200/206/429, exclude_path, the 403/999
+    # host excludes — was dropped without a word in the log.
+    default: '.lychee.toml'
+  fail-on-error:
+    description: 'Fail the step on broken links. Scheduled/external runs typically set false.'
+    required: false
+    default: 'true'
+  github-token:
+    description: 'Token for github.com rate limits. The secrets context is not available inside a composite action, so the CALLER must pass this.'
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    # PLAN-025 §3.2: verify the precondition, fail loudly if unmet. lychee over
+    # an absent tree reports zero links checked and exits 0 — a green check that
+    # inspected nothing.
+    - name: Verify precondition — a checked-out tree
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [ ! -e .git ]; then
+          echo "::error::links action: no checkout detected. The CALLER must check out before invoking this action (PLAN-025 §3.2)."
+          exit 1
+        fi
+
+    - name: Install lychee (musl static binary)
+      shell: bash
+      env:
+        LYCHEE_VERSION: "0.24.2"
+        LYCHEE_SHA256_X86_64: "73657a111819a30c47c08352896796f23d64e4eb2b3ed39b6d32149241566fc5"
+        LYCHEE_SHA256_AARCH64: "5d0b0e3aeab240f41920c633a6eaf97599be6eedda034b36e858ede7dba5e535"
+      run: |
+        set -euo pipefail
+        # Linux musl-static builds only (D38: the gnu build needs GLIBC 2.38+
+        # and dies on the older Debian ephemeral runners). Anything else fails
+        # HERE with its name on it — not later as an exec-format error or a
+        # missing sha256sum that reads as broken links (#579.2). Both SHAs are
+        # the release's published .sha256 files, verified against downloads.
+        case "${RUNNER_OS}-${RUNNER_ARCH}" in
+          Linux-X64)   asset="x86_64-unknown-linux-musl";  sha="${LYCHEE_SHA256_X86_64}" ;;
+          Linux-ARM64) asset="aarch64-unknown-linux-musl"; sha="${LYCHEE_SHA256_AARCH64}" ;;
+          *)
+            echo "::error::links: unsupported runner '${RUNNER_OS}-${RUNNER_ARCH}' — lychee install supports Linux X64/ARM64 only."
+            exit 1
+            ;;
+        esac
+        curl -sSfL --retry 3 --retry-delay 2 "https://github.com/lycheeverse/lychee/releases/download/lychee-v${LYCHEE_VERSION}/lychee-${asset}.tar.gz" -o /tmp/lychee.tgz
+        echo "${sha}  /tmp/lychee.tgz" | sha256sum -c -
+        tar -xzf /tmp/lychee.tgz -C /tmp
+        BIN_DIR="$RUNNER_TEMP/bin"
+        mkdir -p "$BIN_DIR"
+        install -m 0755 "/tmp/lychee-${asset}/lychee" "$BIN_DIR/lychee"
+        echo "$BIN_DIR" >> "$GITHUB_PATH"
+        "$BIN_DIR/lychee" --version
+
+    - name: Run lychee
+      shell: bash
+      env:
+        MODE: ${{ inputs.mode }}
+        CONFIG: ${{ inputs.config-file }}
+        PATHS: ${{ inputs.paths }}
+        FAIL: ${{ inputs.fail-on-error }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set -euo pipefail
+        args=(--no-progress --cache --max-cache-age 1d)
+        # Internal (offline) mode performs zero network fetches, so a token is
+        # present exactly where it is useless — including on PR runs against
+        # untrusted content. Unset it (#579.1). Upstream scope, version-pinned:
+        # lychee reads GITHUB_TOKEN only as its "GitHub API token to use when
+        # checking github.com links, to avoid rate limiting" (README @
+        # lychee-v0.24.2) — an offline run never reaches that code.
+        [ "${MODE}" = "internal" ] && unset GITHUB_TOKEN
+        # External mode without a token runs against the anonymous 60 req/hr
+        # quota: live links 403/429 and report dead, which reads as link rot
+        # rather than rate limiting (#579.3). Loud, but not fatal — scheduled
+        # runs stay green while naming the degradation.
+        if [ "${MODE}" = "external" ] && [ -z "${GITHUB_TOKEN:-}" ]; then
+          echo "::warning::links: external mode with no github-token — running against anonymous rate limits; 403/429s will report as dead links. Pass github-token for reliable results."
+        fi
+        # An EXPLICITLY requested config that does not exist is an error, not a
+        # shrug. The prior incident was exactly this: the whole tolerance profile
+        # (accept 200/206/429, exclude_path, the 403/999 host excludes) vanished
+        # with nothing in the log. An EMPTY value still means "discover".
+        if [ -n "${CONFIG}" ] && [ ! -f "${CONFIG}" ]; then
+          echo "::error::links: config-file '${CONFIG}' was requested but does not exist. Refusing to run with lychee defaults — that silently drops the consumer's tolerance profile."
+          exit 1
+        fi
+        [ -n "${CONFIG}" ] && args+=(--config "${CONFIG}")
+        [ "${MODE}" = "internal" ] && args+=(--offline)
+        read -r -a path_args <<< "$PATHS"
+        [ "${#path_args[@]}" -gt 0 ] || { echo "::error::paths input is empty"; exit 1; }
+        set +e
+        # `--` stops a caller-supplied PATHS value from being parsed as lychee
+        # options (defense-in-depth against argument injection).
+        timeout 1200 lychee "${args[@]}" -- "${path_args[@]}"
+        rc=$?
+        # 124 is `timeout`'s own code: the run was KILLED, not completed. It must
+        # not ride the report-only path — `links-external` sets fail-on-error
+        # false, so a lychee that hangs for 20 minutes would otherwise report
+        # success. Infrastructure failure, always loud.
+        if [ "$rc" -eq 124 ]; then
+          echo "::error::links: lychee timed out — infrastructure failure, not a clean link check. Re-run."; exit 1
+        fi
+        # fail-on-error=false (external/scheduled mode) never fails the job.
+        [ "${FAIL}" = "true" ] || exit 0
+        exit "${rc}"

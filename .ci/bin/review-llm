@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# aidoc-local-flow-ci default reviewer client: one OpenAI-compatible chat completion
+# (platform default: the platform-litellm-laya gateway; any LiteLLM/vLLM/Ollama /v1 works). Invoked by .ci/bin/review in a clean
+# environment: prompt on stdin, model text on stdout. No tools, no repo access.
+#   LLM_URL       base URL (…/v1) or full …/chat/completions URL
+#   LLM_API_KEY   Bearer [REDACTED] (optional for local servers)
+#   REVIEW_MODEL  model id (.ci-config)
+# Transient failures (DNS/resolve/connect/timeout, HTTP 429/5xx) retry 3 times.
+set -euo pipefail
+: "${LLM_URL:?LLM_URL is not set — export it (or put it in the reviewer environment)}"
+: "${REVIEW_MODEL:?REVIEW_MODEL is not set in .ci-config}"
+command -v curl >/dev/null || { echo "review-llm: curl not installed" >&2; exit 1; }
+url=${LLM_URL%/}; [[ $url == */chat/completions ]] || url="$url/chat/completions"
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+cat >"$tmp/prompt"
+jq -n --arg m "$REVIEW_MODEL" --rawfile p "$tmp/prompt" \
+  '{model: $m, temperature: 0, messages: [{role: "user", content: $p}]}' >"$tmp/body.json"
+hdr=(-H "Content-Type: application/json")
+[[ -n ${LLM_API_KEY:-} ]] && hdr+=(-H "Authorization: Bearer $LLM_API_KEY")
+[[ -n ${TRACEPARENT:-} ]] && hdr+=(-H "traceparent: $TRACEPARENT")
+hdr+=(-H "x-langfuse-trace-name: ci-self-review")
+hdr+=(-H "x-langfuse-tags: hybrid-ci,review,${REVIEW_MODEL}")
+attempt=1 code=000 rc=0
+while :; do
+  rc=0
+  # --fail-with-body exits 22 for EVERY HTTP error, so the code comes from -w;
+  # the body goes to a file, never mixed with the code on stdout.
+  code=$(curl -sS -o "$tmp/resp.json" -w '%{http_code}' --fail-with-body \
+    --max-time "${REVIEW_HTTP_TIMEOUT:-300}" "${hdr[@]}" \
+    --data-binary "@$tmp/body.json" "$url") || rc=$?
+  retryable=0
+  if (( rc == 22 )) && [[ $code == 429 || $code == 5* ]]; then retryable=1; fi
+  [[ $rc == 6 || $rc == 7 || $rc == 28 ]] && retryable=1
+  if (( retryable == 1 && attempt < 3 )); then sleep $((attempt * 2)); attempt=$((attempt + 1)); continue; fi
+  break
+done
+if (( rc != 0 )); then
+  if [[ $code == 401 ]]; then
+    echo "review-llm: 401 from $url — the Bearer [REDACTED] was rejected. GitHub secrets are write-only: re-provision the secret, do not debug code." >&2; exit 1
+  elif [[ $code == 403 ]]; then
+    echo "review-llm: 403 from $url — authenticated but forbidden (scope/quota). Do NOT re-provision; check the key's scope." >&2; exit 1
+  elif [[ $url =~ ^https?://(localhost|127\.0\.0\.1|\[::1\])([:/]|$) ]]; then
+    echo "review-llm: request to loopback $url failed (curl rc=$rc). If the reviewer runs in a container, localhost is the container, not your host — use host networking or a reachable address." >&2; exit 1
+  fi
+  echo "review-llm: request failed: $(head -c 500 "$tmp/resp.json" 2>/dev/null)" >&2; exit 1
+fi
+jq -er '.choices[0].message.content // empty' "$tmp/resp.json" \
+  || { echo "review-llm: unexpected response shape: $(head -c 500 "$tmp/resp.json")" >&2; exit 1; }

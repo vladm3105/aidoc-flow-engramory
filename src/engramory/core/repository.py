@@ -9,17 +9,29 @@ via the VectorPort dev adapter) and by recency otherwise.
 Failure mode: ``StoreUnavailable`` wraps driver connectivity errors so callers
 can fail closed with a retryable error (EARS.01.03.c900).
 """
+
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
 
-from engramory.core.models import AgentProfile, Episode, KBSection, Memory
+from engramory.core.models import (
+    AUTONOMY_TIERS,
+    AgentProfile,
+    Episode,
+    GraphEntity,
+    GraphRelation,
+    KBDocument,
+    KBRunbookStep,
+    KBSection,
+    Memory,
+    ValidationError,
+)
 
 # memory_retrievals.feedback CHECK domain (migration 0003) — enforced here so a
 # bad outcome fails before it reaches Postgres.
@@ -57,6 +69,11 @@ _MEMORY_COLUMNS = (
     "summary, embedding_model, embedding_dims, provenance, confidence, status, "
     "source_trust, valid_from, valid_to, supersedes"
 )  # explicit list: never drag embedding/ts_lex over the wire on reads
+
+_KB_SECTION_COLUMNS = (
+    "id, tenant_id, project_id, domain_id, scope, doc_id, citation, text, version, "
+    "modality, blob_sha256, blob_uri, media_metadata"
+)
 
 
 class StoreUnavailable(RuntimeError):
@@ -100,10 +117,11 @@ class Repository:
                 await conn.close()
 
     async def add_episode(self, episode: Episode) -> str:
-        """Persist idempotently by content hash within scope (BDD.01.03.c900).
+        """Persist idempotently by content hash or event_id within scope (BDD.01.03.c900).
 
         Returns the episode id — the existing row's id on duplicate submission.
         """
+        params = _episode_params(episode)
         async with self._conn() as conn:
             row = await (
                 await conn.execute(
@@ -113,11 +131,10 @@ class Repository:
                          content_raw, content_hash, metadata)
                     VALUES (%(agent_id)s, %(project_id)s, %(domain_id)s, %(tenant_id)s,
                             %(kind)s, %(content_raw)s, %(content_hash)s, %(metadata)s)
-                    ON CONFLICT (tenant_id, agent_id, coalesce(project_id, ''), content_hash)
-                        DO NOTHING
+                    ON CONFLICT DO NOTHING
                     RETURNING id
                     """,
-                    _episode_params(episode),
+                    params,
                 )
             ).fetchone()
             if row is not None:
@@ -126,11 +143,22 @@ class Repository:
                 await conn.execute(
                     """
                     SELECT id FROM episodes
-                    WHERE tenant_id = %(tenant_id)s AND agent_id = %(agent_id)s
-                      AND coalesce(project_id, '') = coalesce(%(project_id)s, '')
-                      AND content_hash = %(content_hash)s
+                    WHERE tenant_id = %(tenant_id)s
+                      AND (
+                        (
+                            agent_id = %(agent_id)s
+                            AND coalesce(project_id, '') = coalesce(%(project_id)s, '')
+                            AND content_hash = %(content_hash)s
+                        )
+                        OR (
+                            %(event_id)s::text IS NOT NULL
+                            AND metadata ? 'event_id'
+                            AND metadata->>'event_id' = %(event_id)s
+                        )
+                      )
+                    LIMIT 1
                     """,
-                    _episode_params(episode),
+                    params,
                 )
             ).fetchone()
             if existing is None:  # unreachable: episodes are never hard-deleted
@@ -157,7 +185,8 @@ class Repository:
                     _memory_params(memory),
                 )
             ).fetchone()
-            assert row is not None
+            if row is None:
+                raise RuntimeError("INSERT INTO memories did not return id")
             if memory.supersedes is not None:
                 # tenant_id guard: the tenant wall (ADR-07) holds on the write
                 # path too — a supersede can never end-date a foreign-tenant row.
@@ -180,8 +209,12 @@ class Repository:
         async with self._conn() as conn:
             row = await (
                 await conn.execute(
-                    f"""
-                    SELECT {_MEMORY_COLUMNS} FROM memories
+                    """
+                    SELECT id, agent_id, project_id, domain_id, tenant_id, scope, type,
+                           content_raw, summary, embedding_model, embedding_dims,
+                           provenance, confidence, status, source_trust,
+                           valid_from, valid_to, supersedes
+                    FROM memories
                     WHERE id = %(id)s AND tenant_id = %(tenant_id)s
                     """,
                     {"id": memory_id, "tenant_id": tenant_id},
@@ -207,9 +240,7 @@ class Repository:
             if cur.rowcount != 1:
                 raise KeyError(memory_id)
 
-    async def record_feedback(
-        self, retrieval_id: str, outcome: str, *, tenant_id: str
-    ) -> None:
+    async def record_feedback(self, retrieval_id: str, outcome: str, *, tenant_id: str) -> None:
         """Stamp a retrieval outcome (SPEC-01 memory_feedback -> SPEC-04
         confidence rule). Tenant-guarded; KeyError when the retrieval is
         missing or foreign."""
@@ -218,20 +249,51 @@ class Repository:
                 f"feedback outcome must be one of {sorted(FEEDBACK_OUTCOMES)}: {outcome!r}"
             )
         async with self._conn() as conn:
-            cur = await conn.execute(
-                """
-                UPDATE memory_retrievals
-                SET feedback = %(outcome)s, feedback_at = now()
-                WHERE id = %(id)s AND tenant_id = %(tenant_id)s
-                """,
-                {"id": retrieval_id, "outcome": outcome, "tenant_id": tenant_id},
-            )
-            if cur.rowcount != 1:
-                raise KeyError(retrieval_id)
+            async with conn.transaction():
+                row = await (
+                    await conn.execute(
+                        """
+                        UPDATE memory_retrievals
+                        SET feedback = %(outcome)s, feedback_at = now()
+                        WHERE id = %(id)s AND tenant_id = %(tenant_id)s
+                        RETURNING memory_id
+                        """,
+                        {"id": retrieval_id, "outcome": outcome, "tenant_id": tenant_id},
+                    )
+                ).fetchone()
+                if row is None:
+                    raise KeyError(retrieval_id)
+                memory_id = row["memory_id"]
+                if outcome == "useful":
+                    await conn.execute(
+                        """
+                        UPDATE memories
+                        SET confidence = LEAST(1.0, confidence + 0.05)
+                        WHERE id = %(memory_id)s AND tenant_id = %(tenant_id)s
+                        """,
+                        {"memory_id": memory_id, "tenant_id": tenant_id},
+                    )
+                elif outcome == "not_useful":
+                    await conn.execute(
+                        """
+                        UPDATE memories
+                        SET confidence = GREATEST(0.0, confidence - 0.10)
+                        WHERE id = %(memory_id)s AND tenant_id = %(tenant_id)s
+                        """,
+                        {"memory_id": memory_id, "tenant_id": tenant_id},
+                    )
+                elif outcome == "harmful":
+                    await conn.execute(
+                        """
+                        UPDATE memories
+                        SET confidence = GREATEST(0.0, confidence - 0.30),
+                            status = 'quarantined'
+                        WHERE id = %(memory_id)s AND tenant_id = %(tenant_id)s
+                        """,
+                        {"memory_id": memory_id, "tenant_id": tenant_id},
+                    )
 
-    async def get_retrieval_feedback(
-        self, *, tenant_id: str, memory_id: str
-    ) -> list[str | None]:
+    async def get_retrieval_feedback(self, *, tenant_id: str, memory_id: str) -> list[str | None]:
         """Feedback values for a memory's retrievals, oldest first (tests/eval)."""
         async with self._conn() as conn:
             rows = await (
@@ -246,21 +308,19 @@ class Repository:
             ).fetchall()
             return [row["feedback"] for row in rows]
 
-    async def get_agent_profile(self, agent_id: str) -> AgentProfile | None:
-        """L3 identity row, or None when the agent has no profile yet.
-
-        NOTE: agent_profiles is keyed by agent_id alone (no tenant column) —
-        acceptable only under the single-tenant dev tier; revisit with the
-        gateway (PLAN-002 Phase 1.3 stated assumption).
-        """
+    async def get_agent_profile(
+        self, agent_id: str, *, tenant_id: str = "default"
+    ) -> AgentProfile | None:
+        """L3 identity row scoped by (tenant_id, agent_id), or None when absent."""
         async with self._conn() as conn:
             row = await (
                 await conn.execute(
                     """
-                    SELECT agent_id, display_name, standing_preferences
-                    FROM agent_profiles WHERE agent_id = %(agent_id)s
+                    SELECT tenant_id, agent_id, display_name, standing_preferences
+                    FROM agent_profiles
+                    WHERE tenant_id = %(tenant_id)s AND agent_id = %(agent_id)s
                     """,
-                    {"agent_id": agent_id},
+                    {"tenant_id": tenant_id, "agent_id": agent_id},
                 )
             ).fetchone()
             if row is None:
@@ -269,20 +329,23 @@ class Repository:
                 agent_id=row["agent_id"],
                 display_name=row["display_name"],
                 standing_preferences=row["standing_preferences"] or {},
+                tenant_id=row["tenant_id"],
             )
 
     async def upsert_agent_profile(self, profile: AgentProfile) -> None:
-        """Create/update the L3 identity row (updated_at kept by trigger)."""
+        """Create/update the L3 identity row scoped by (tenant_id, agent_id)."""
         async with self._conn() as conn:
             await conn.execute(
                 """
-                INSERT INTO agent_profiles (agent_id, display_name, standing_preferences)
-                VALUES (%(agent_id)s, %(display_name)s, %(standing_preferences)s)
-                ON CONFLICT (agent_id) DO UPDATE
+                INSERT INTO agent_profiles
+                    (tenant_id, agent_id, display_name, standing_preferences)
+                VALUES (%(tenant_id)s, %(agent_id)s, %(display_name)s, %(standing_preferences)s)
+                ON CONFLICT (tenant_id, agent_id) DO UPDATE
                     SET display_name = EXCLUDED.display_name,
                         standing_preferences = EXCLUDED.standing_preferences
                 """,
                 {
+                    "tenant_id": profile.tenant_id,
                     "agent_id": profile.agent_id,
                     "display_name": profile.display_name,
                     "standing_preferences": json.dumps(dict(profile.standing_preferences)),
@@ -327,6 +390,28 @@ class Repository:
                 for row in rows
             ]
 
+    async def get_active_agents_with_unreflected_episodes(
+        self, *, tenant_id: str | None = None
+    ) -> list[tuple[str, str]]:
+        """Distinct (tenant_id, agent_id) pairs carrying unreflected episodes."""
+        async with self._conn() as conn:
+            rows = await (
+                await conn.execute(
+                    """
+                    SELECT DISTINCT tenant_id, agent_id
+                    FROM episodes e
+                    WHERE (%(tenant_id)s::text IS NULL OR tenant_id = %(tenant_id)s::text)
+                      AND NOT EXISTS (
+                          SELECT 1 FROM memories m
+                          WHERE m.tenant_id = e.tenant_id
+                            AND m.provenance->>'episode_id' = e.id::text
+                      )
+                    """,
+                    {"tenant_id": tenant_id},
+                )
+            ).fetchall()
+            return [(str(row["tenant_id"]), str(row["agent_id"])) for row in rows]
+
     async def get_memories(
         self,
         *,
@@ -335,6 +420,7 @@ class Repository:
         project_id: str | None = None,
         domain_id: str | None = None,
         k: int = 8,
+        query: str | None = None,
         query_vec: Sequence[float] | None = None,
         scopes: Sequence[str] | None = None,
     ) -> list[Memory]:
@@ -344,31 +430,70 @@ class Repository:
         means the full ladder (repo-level tooling — the access surface always
         passes the caller's granted subset).
 
-        Ranked by cosine similarity to ``query_vec`` when given (rows without
-        an embedding projection are excluded — they cannot be ranked), by
-        recency otherwise.
+        Ranked by cosine similarity to ``query_vec`` when given (with fallback
+        lexical/substring boost for ``query``), by recency otherwise.
         """
+        _visibility_sql(scopes)
+        levels = tuple(scopes) if scopes is not None else tuple(_SCOPE_CLAUSES)
+        has_qv = query_vec is not None and len(query_vec) == 1536
+        has_q = bool(query and query.strip())
         params: dict[str, Any] = {
             "tenant_id": tenant_id,
             "agent_id": agent_id,
             "project_id": project_id,
             "domain_id": domain_id,
             "k": k,
+            "inc_agent": "agent" in levels,
+            "inc_project": "project" in levels,
+            "inc_domain": "domain" in levels,
+            "inc_space": "space" in levels,
+            "qv": vector_literal(query_vec) if has_qv and query_vec is not None else None,
+            "q_like": f"%{query.strip()}%" if has_q and query is not None else None,
         }
-        if query_vec is not None:
-            extra = "AND embedding IS NOT NULL"
-            order = "embedding <=> %(qv)s::vector"
-            params["qv"] = vector_literal(query_vec)
-        else:
-            extra = ""
-            order = "valid_from DESC"
         async with self._conn() as conn:
             rows = await (
                 await conn.execute(
-                    f"""
-                    SELECT {_MEMORY_COLUMNS} FROM memories
-                    WHERE {_visibility_sql(scopes)} {extra}
-                    ORDER BY {order}
+                    """
+                    SELECT id, agent_id, project_id, domain_id, tenant_id, scope, type,
+                           content_raw, summary, embedding_model, embedding_dims,
+                           provenance, confidence, status, source_trust,
+                           valid_from, valid_to, supersedes
+                    FROM memories
+                    WHERE tenant_id = %(tenant_id)s
+                      AND valid_to IS NULL
+                      AND status = 'active'
+                      AND (
+                          (%(inc_agent)s AND scope = 'agent' AND agent_id = %(agent_id)s)
+                          OR (
+                              %(inc_project)s
+                              AND scope = 'project'
+                              AND project_id IS NOT NULL
+                              AND project_id = %(project_id)s
+                          )
+                          OR (
+                              %(inc_domain)s
+                              AND scope = 'domain'
+                              AND domain_id IS NOT NULL
+                              AND domain_id = %(domain_id)s
+                          )
+                          OR (%(inc_space)s AND scope = 'space')
+                      )
+                    ORDER BY
+                      CASE
+                        WHEN %(qv)s::text IS NOT NULL AND embedding IS NOT NULL
+                          THEN embedding <=> %(qv)s::vector
+                        ELSE 2.0
+                      END ASC,
+                      CASE
+                        WHEN %(q_like)s::text IS NOT NULL
+                             AND (
+                                 content_raw ILIKE %(q_like)s
+                                 OR coalesce(summary, '') ILIKE %(q_like)s
+                             )
+                          THEN 1
+                        ELSE 0
+                      END DESC,
+                      valid_from DESC
                     LIMIT %(k)s
                     """,
                     params,
@@ -384,11 +509,22 @@ class Repository:
                     """
                     INSERT INTO kb_sections
                         (tenant_id, project_id, domain_id, scope, doc_id, citation,
-                         text, version)
+                         text, version, modality, blob_sha256, blob_uri, media_metadata)
                     VALUES (%(tenant_id)s, %(project_id)s, %(domain_id)s, %(scope)s,
-                            %(doc_id)s, %(citation)s, %(text)s, %(version)s)
+                            %(doc_id)s, %(citation)s, %(text)s, %(version)s,
+                            %(modality)s, %(blob_sha256)s, %(blob_uri)s, %(media_metadata)s::jsonb)
                     ON CONFLICT (tenant_id, doc_id, citation, version)
-                        DO UPDATE SET text = EXCLUDED.text
+                        DO UPDATE SET
+                            project_id = COALESCE(EXCLUDED.project_id, kb_sections.project_id),
+                            domain_id = COALESCE(EXCLUDED.domain_id, kb_sections.domain_id),
+                            scope = EXCLUDED.scope,
+                            text = EXCLUDED.text,
+                            modality = EXCLUDED.modality,
+                            blob_sha256 = COALESCE(EXCLUDED.blob_sha256, kb_sections.blob_sha256),
+                            blob_uri = COALESCE(EXCLUDED.blob_uri, kb_sections.blob_uri),
+                            media_metadata = EXCLUDED.media_metadata
+                        WHERE kb_sections.project_id IS NULL
+                           OR kb_sections.project_id = EXCLUDED.project_id
                     RETURNING id
                     """,
                     {
@@ -400,11 +536,496 @@ class Repository:
                         "citation": section.citation,
                         "text": section.text,
                         "version": section.version,
+                        "modality": section.modality,
+                        "blob_sha256": section.blob_sha256,
+                        "blob_uri": section.blob_uri,
+                        "media_metadata": json.dumps(dict(section.media_metadata)),
                     },
                 )
             ).fetchone()
-            assert row is not None
+            if row is None:
+                raise ValidationError(
+                    f"Cross-project kb_section collision: '{section.doc_id}' "
+                    f"({section.citation} v{section.version}) is already owned by another "
+                    f"project in tenant '{section.tenant_id}'"
+                )
             return str(row["id"])
+
+    async def set_kb_section_embedding(
+        self,
+        section_id: str,
+        *,
+        embedding: Sequence[float],
+        embedding_model: str = "text-embedding-3-small",
+    ) -> None:
+        """Store vector projection for a kb_section (rebuildable projection per ADR-05)."""
+        async with self._conn() as conn:
+            await conn.execute(
+                """
+                UPDATE kb_sections
+                SET embedding = %(vec)s::vector,
+                    embedding_model = %(model)s,
+                    embedding_dims = %(dims)s
+                WHERE id = %(id)s
+                """,
+                {
+                    "vec": vector_literal(embedding),
+                    "model": embedding_model,
+                    "dims": len(embedding),
+                    "id": section_id,
+                },
+            )
+
+    async def upsert_kb_sections_batch(
+        self, sections: Sequence[KBSection]
+    ) -> dict[tuple[str, str, str, int], str]:
+        """Insert or update a batch of knowledge sections in a single statement.
+        Keyed by (tenant_id, doc_id, citation, version).
+        Returns a mapping of (tenant_id, doc_id, citation, version) -> section_id.
+        """
+        if not sections:
+            return {}
+
+        # Deduplicate within batch by (tenant_id, doc_id, citation, version) keeping latest
+        deduped: dict[tuple[str, str, str, int], KBSection] = {}
+        for s in sections:
+            deduped[(s.tenant_id, s.doc_id, s.citation, s.version)] = s
+        unique_sections = list(deduped.values())
+
+        chunk_size = 100
+        section_id_map: dict[tuple[str, str, str, int], str] = {}
+
+        async with self._conn() as conn:
+            for i in range(0, len(unique_sections), chunk_size):
+                chunk = unique_sections[i : i + chunk_size]
+                params: dict[str, Any] = {
+                    "tenants": [sec.tenant_id for sec in chunk],
+                    "projects": [sec.project_id for sec in chunk],
+                    "domains": [sec.domain_id for sec in chunk],
+                    "scopes": [sec.scope for sec in chunk],
+                    "doc_ids": [sec.doc_id for sec in chunk],
+                    "citations": [sec.citation for sec in chunk],
+                    "texts": [sec.text for sec in chunk],
+                    "versions": [sec.version for sec in chunk],
+                    "modalities": [sec.modality for sec in chunk],
+                    "blob_sha256s": [sec.blob_sha256 for sec in chunk],
+                    "blob_uris": [sec.blob_uri for sec in chunk],
+                    "media_metadatas": [json.dumps(dict(sec.media_metadata)) for sec in chunk],
+                }
+                rows = await (
+                    await conn.execute(
+                        """
+                        INSERT INTO kb_sections
+                            (tenant_id, project_id, domain_id, scope, doc_id, citation,
+                             text, version, modality, blob_sha256, blob_uri, media_metadata)
+                        SELECT * FROM UNNEST(
+                            %(tenants)s::text[],
+                            %(projects)s::text[],
+                            %(domains)s::text[],
+                            %(scopes)s::text[],
+                            %(doc_ids)s::text[],
+                            %(citations)s::text[],
+                            %(texts)s::text[],
+                            %(versions)s::int[],
+                            %(modalities)s::text[],
+                            %(blob_sha256s)s::text[],
+                            %(blob_uris)s::text[],
+                            %(media_metadatas)s::jsonb[]
+                        )
+                        ON CONFLICT (tenant_id, doc_id, citation, version)
+                            DO UPDATE SET
+                                project_id = COALESCE(
+                                    EXCLUDED.project_id, kb_sections.project_id
+                                ),
+                                domain_id = COALESCE(
+                                    EXCLUDED.domain_id, kb_sections.domain_id
+                                ),
+                                scope = EXCLUDED.scope,
+                                text = EXCLUDED.text,
+                                modality = EXCLUDED.modality,
+                                blob_sha256 = COALESCE(
+                                    EXCLUDED.blob_sha256, kb_sections.blob_sha256
+                                ),
+                                blob_uri = COALESCE(
+                                    EXCLUDED.blob_uri, kb_sections.blob_uri
+                                ),
+                                media_metadata = EXCLUDED.media_metadata
+                            WHERE kb_sections.project_id IS NULL
+                               OR kb_sections.project_id = EXCLUDED.project_id
+                        RETURNING id, tenant_id, doc_id, citation, version
+                        """,
+                        params,
+                    )
+                ).fetchall()
+                if len(rows) != len(chunk):
+                    raise ValidationError(
+                        "Cross-project kb_section batch collision: one or more sections "
+                        "are already owned by another project in this tenant"
+                    )
+                for row in rows:
+                    key = (
+                        str(row["tenant_id"]),
+                        str(row["doc_id"]),
+                        str(row["citation"]),
+                        int(row["version"]),
+                    )
+                    section_id_map[key] = str(row["id"])
+
+        return section_id_map
+
+    async def delete_kb_sections_for_doc(
+        self, tenant_id: str, doc_id: str, *, project_id: str | None = None
+    ) -> int:
+        """Delete all kb_sections for a document within a tenant (and optional project_id)."""
+        async with self._conn() as conn:
+            res = await conn.execute(
+                """
+                DELETE FROM kb_sections
+                WHERE tenant_id = %(t)s
+                  AND doc_id = %(d)s
+                  AND (%(p)s::text IS NULL OR project_id = %(p)s)
+                RETURNING id
+                """,
+                {"t": tenant_id, "d": doc_id, "p": project_id},
+            )
+            rows = await res.fetchall()
+            return len(rows)
+
+    async def set_kb_sections_embedding_batch(
+        self,
+        updates: Sequence[tuple[str, Sequence[float]]],
+        *,
+        embedding_model: str = "text-embedding-3-small",
+    ) -> None:
+        """Store vector projections for multiple kb_sections."""
+        if not updates:
+            return
+        async with self._conn() as conn:
+            for section_id, embedding in updates:
+                await conn.execute(
+                    """
+                    UPDATE kb_sections
+                    SET embedding = %(vec)s::vector,
+                        embedding_model = %(model)s,
+                        embedding_dims = %(dims)s
+                    WHERE id = %(id)s
+                    """,
+                    {
+                        "vec": vector_literal(embedding),
+                        "model": embedding_model,
+                        "dims": len(embedding),
+                        "id": section_id,
+                    },
+                )
+
+    async def get_kb_section(self, section_id: str, *, tenant_id: str) -> KBSection | None:
+        """Fetch a knowledge section by ID; None when missing or cross-tenant."""
+        async with self._conn() as conn:
+            row = await (
+                await conn.execute(
+                    """
+                    SELECT id, tenant_id, project_id, domain_id, scope, doc_id, citation, text,
+                           version, modality, blob_sha256, blob_uri, media_metadata
+                    FROM kb_sections
+                    WHERE id = %(id)s AND tenant_id = %(tenant_id)s
+                    """,
+                    {"id": section_id, "tenant_id": tenant_id},
+                )
+            ).fetchone()
+            if row is None:
+                return None
+            return _hydrate_kb_section(row)
+
+    async def list_kb_sections(
+        self,
+        *,
+        tenant_id: str,
+        project_id: str | None = None,
+        doc_id: str | None = None,
+        limit: int = 50,
+    ) -> list[KBSection]:
+        """List knowledge sections matching tenant and optional project/doc_id."""
+        params: dict[str, Any] = {
+            "tenant_id": tenant_id,
+            "project_id": project_id,
+            "doc_id": doc_id,
+            "limit": limit,
+        }
+        async with self._conn() as conn:
+            rows = await (
+                await conn.execute(
+                    """
+                    SELECT id, tenant_id, project_id, domain_id, scope, doc_id, citation, text,
+                           version, modality, blob_sha256, blob_uri, media_metadata
+                    FROM kb_sections
+                    WHERE tenant_id = %(tenant_id)s
+                      AND (%(project_id)s::text IS NULL OR project_id = %(project_id)s)
+                      AND (%(doc_id)s::text IS NULL OR doc_id = %(doc_id)s)
+                    ORDER BY doc_id, version DESC, id
+                    LIMIT %(limit)s
+                    """,
+                    params,
+                )
+            ).fetchall()
+            return [_hydrate_kb_section(row) for row in rows]
+
+    async def search_kb_sections(
+        self,
+        query: str,
+        *,
+        tenant_id: str,
+        project_id: str | None = None,
+        domain_id: str | None = None,
+        query_vec: Sequence[float] | None = None,
+        scope: str | None = None,
+        modality: str | None = None,
+        hybrid_rrf: bool = True,
+        rrf_k: int = 60,
+        limit: int = 5,
+    ) -> list[KBSection]:
+        """Search knowledge sections via 3-leg hybrid RRF (vector + ts_lex BM25 + citation)
+        or lexical fallback. Guarded by tenant, scope hierarchy, and optional modality."""
+        candidate_pool = max(limit * 4, 20)
+        params: dict[str, Any] = {
+            "tenant_id": tenant_id,
+            "project_id": project_id,
+            "domain_id": domain_id,
+            "scope": scope,
+            "modality": modality,
+            "limit": limit,
+            "candidate_pool": candidate_pool,
+            "rrf_k": max(1, int(rrf_k)),
+            "query": query,
+            "qv": vector_literal(query_vec) if query_vec is not None else None,
+            "pattern": f"%{query}%",
+        }
+        async with self._conn() as conn:
+            if query_vec is not None and hybrid_rrf and query.strip():
+                rows = await (
+                    await conn.execute(
+                        """
+                        WITH scoped_kb AS (
+                            SELECT id, tenant_id, project_id, domain_id, scope, doc_id, citation,
+                                   text, version, modality, blob_sha256, blob_uri, media_metadata,
+                                   embedding, ts_lex
+                            FROM kb_sections
+                            WHERE tenant_id = %(tenant_id)s
+                              AND (%(modality)s::text IS NULL OR modality = %(modality)s)
+                              AND (
+                                  (
+                                      %(scope)s::text = 'space'
+                                      AND (
+                                          scope IN ('domain', 'space')
+                                          OR (
+                                              %(project_id)s::text IS NOT NULL
+                                              AND project_id = %(project_id)s
+                                          )
+                                      )
+                                  )
+                                  OR (
+                                      %(scope)s::text = 'domain'
+                                      AND (
+                                          (
+                                              scope = 'domain'
+                                              AND domain_id IS NOT NULL
+                                              AND domain_id = %(domain_id)s
+                                          )
+                                          OR scope = 'space'
+                                          OR (
+                                              %(project_id)s::text IS NOT NULL
+                                              AND project_id = %(project_id)s
+                                          )
+                                      )
+                                  )
+                                  OR (
+                                      coalesce(%(scope)s::text, '') NOT IN ('space', 'domain')
+                                      AND (
+                                          %(project_id)s::text IS NULL
+                                          OR project_id = %(project_id)s
+                                          OR scope = 'space'
+                                      )
+                                      AND (
+                                          %(scope)s::text IS NULL
+                                          OR scope IN (%(scope)s, 'space')
+                                      )
+                                  )
+                              )
+                        ),
+                        vec_leg AS (
+                            SELECT id,
+                                   ROW_NUMBER() OVER (
+                                       ORDER BY embedding <=> %(qv)s::vector ASC, id ASC
+                                   ) AS r_vec
+                            FROM scoped_kb
+                            WHERE embedding IS NOT NULL
+                            ORDER BY embedding <=> %(qv)s::vector ASC, id ASC
+                            LIMIT %(candidate_pool)s
+                        ),
+                        lex_leg AS (
+                            SELECT id,
+                                   ROW_NUMBER() OVER (
+                                       ORDER BY
+                                           ts_rank_cd(
+                                               COALESCE(ts_lex, to_tsvector('english', '')),
+                                               websearch_to_tsquery('english', %(query)s)
+                                           ) DESC,
+                                           (
+                                               CASE
+                                                   WHEN citation ILIKE %(pattern)s THEN 1
+                                                   ELSE 0
+                                               END
+                                           ) DESC,
+                                           version DESC,
+                                           id ASC
+                                   ) AS r_lex
+                            FROM scoped_kb
+                            WHERE (
+                                ts_lex @@ websearch_to_tsquery('english', %(query)s)
+                                OR text ILIKE %(pattern)s
+                                OR citation ILIKE %(pattern)s
+                            )
+                            LIMIT %(candidate_pool)s
+                        ),
+                        rrf_fused AS (
+                            SELECT COALESCE(v.id, l.id) AS sec_id,
+                                   COALESCE(1.0 / (%(rrf_k)s + v.r_vec), 0.0)
+                                   + COALESCE(1.0 / (%(rrf_k)s + l.r_lex), 0.0) AS rrf_score
+                            FROM vec_leg v
+                            FULL OUTER JOIN lex_leg l ON v.id = l.id
+                        )
+                        SELECT s.id, s.tenant_id, s.project_id, s.domain_id, s.scope,
+                               s.doc_id, s.citation, s.text, s.version, s.modality,
+                               s.blob_sha256, s.blob_uri, s.media_metadata
+                        FROM rrf_fused f
+                        JOIN scoped_kb s ON s.id = f.sec_id
+                        ORDER BY f.rrf_score DESC, s.version DESC, s.id ASC
+                        LIMIT %(limit)s
+                        """,
+                        params,
+                    )
+                ).fetchall()
+            elif query_vec is not None:
+                rows = await (
+                    await conn.execute(
+                        """
+                        SELECT id, tenant_id, project_id, domain_id, scope, doc_id, citation, text,
+                               version, modality, blob_sha256, blob_uri, media_metadata
+                        FROM kb_sections
+                        WHERE tenant_id = %(tenant_id)s
+                          AND (%(modality)s::text IS NULL OR modality = %(modality)s)
+                          AND (
+                              (
+                                  %(scope)s::text = 'space'
+                                  AND (
+                                      scope IN ('domain', 'space')
+                                      OR (
+                                          %(project_id)s::text IS NOT NULL
+                                          AND project_id = %(project_id)s
+                                      )
+                                  )
+                              )
+                              OR (
+                                  %(scope)s::text = 'domain'
+                                  AND (
+                                      (
+                                          scope = 'domain'
+                                          AND domain_id IS NOT NULL
+                                          AND domain_id = %(domain_id)s
+                                      )
+                                      OR scope = 'space'
+                                      OR (
+                                          %(project_id)s::text IS NOT NULL
+                                          AND project_id = %(project_id)s
+                                      )
+                                  )
+                              )
+                              OR (
+                                  coalesce(%(scope)s::text, '') NOT IN ('space', 'domain')
+                                  AND (
+                                      %(project_id)s::text IS NULL
+                                      OR project_id = %(project_id)s
+                                      OR scope = 'space'
+                                  )
+                                  AND (
+                                      %(scope)s::text IS NULL
+                                      OR scope IN (%(scope)s, 'space')
+                                  )
+                              )
+                          )
+                          AND embedding IS NOT NULL
+                        ORDER BY embedding <=> %(qv)s::vector
+                        LIMIT %(limit)s
+                        """,
+                        params,
+                    )
+                ).fetchall()
+            else:
+                rows = await (
+                    await conn.execute(
+                        """
+                        SELECT id, tenant_id, project_id, domain_id, scope, doc_id, citation, text,
+                               version, modality, blob_sha256, blob_uri, media_metadata
+                        FROM kb_sections
+                        WHERE tenant_id = %(tenant_id)s
+                          AND (%(modality)s::text IS NULL OR modality = %(modality)s)
+                          AND (
+                              (
+                                  %(scope)s::text = 'space'
+                                  AND (
+                                      scope IN ('domain', 'space')
+                                      OR (
+                                          %(project_id)s::text IS NOT NULL
+                                          AND project_id = %(project_id)s
+                                      )
+                                  )
+                              )
+                              OR (
+                                  %(scope)s::text = 'domain'
+                                  AND (
+                                      (
+                                          scope = 'domain'
+                                          AND domain_id IS NOT NULL
+                                          AND domain_id = %(domain_id)s
+                                      )
+                                      OR scope = 'space'
+                                      OR (
+                                          %(project_id)s::text IS NOT NULL
+                                          AND project_id = %(project_id)s
+                                      )
+                                  )
+                              )
+                              OR (
+                                  coalesce(%(scope)s::text, '') NOT IN ('space', 'domain')
+                                  AND (
+                                      %(project_id)s::text IS NULL
+                                      OR project_id = %(project_id)s
+                                      OR scope = 'space'
+                                  )
+                                  AND (
+                                      %(scope)s::text IS NULL
+                                      OR scope IN (%(scope)s, 'space')
+                                  )
+                              )
+                          )
+                          AND (
+                              ts_lex @@ websearch_to_tsquery('english', %(query)s)
+                              OR text ILIKE %(pattern)s
+                              OR citation ILIKE %(pattern)s
+                          )
+                        ORDER BY
+                            ts_rank_cd(
+                                COALESCE(ts_lex, to_tsvector('english', '')),
+                                websearch_to_tsquery('english', %(query)s)
+                            ) DESC,
+                            (CASE WHEN citation ILIKE %(pattern)s THEN 1 ELSE 0 END) DESC,
+                            version DESC,
+                            id ASC
+                        LIMIT %(limit)s
+                        """,
+                        params,
+                    )
+                ).fetchall()
+            return [_hydrate_kb_section(row) for row in rows]
 
     async def record_audit(
         self,
@@ -435,9 +1056,7 @@ class Repository:
                 },
             )
 
-    async def get_audit_records(
-        self, *, tenant_id: str, limit: int = 20
-    ) -> list[dict[str, Any]]:
+    async def get_audit_records(self, *, tenant_id: str, limit: int = 20) -> list[dict[str, Any]]:
         """Most-recent-first audit rows for a tenant (tests/operators)."""
         async with self._conn() as conn:
             return await (
@@ -485,7 +1104,8 @@ class Repository:
                         },
                     )
                 ).fetchone()
-                assert row is not None
+                if row is None:
+                    raise RuntimeError("INSERT INTO memory_retrievals did not return id")
                 retrieval_ids.append(str(row["id"]))
             # tenant guard: defense-in-depth — this public method must never
             # bump a foreign tenant's usage signals.
@@ -499,29 +1119,984 @@ class Repository:
             )
         return retrieval_ids
 
+    async def upsert_graph_entity(self, entity: GraphEntity) -> None:
+        """Insert or update a canonical graph entity (ADR-01/03/05)."""
+        async with self._conn() as conn:
+            await conn.execute(
+                """
+                INSERT INTO graph_entities
+                    (id, tenant_id, domain_id, entity_type, name, properties, updated_at)
+                VALUES
+                    (%(id)s, %(tenant_id)s, %(domain_id)s, %(entity_type)s,
+                     %(name)s, %(properties)s, NOW())
+                ON CONFLICT (tenant_id, id)
+                    DO UPDATE SET
+                        domain_id = EXCLUDED.domain_id,
+                        entity_type = EXCLUDED.entity_type,
+                        name = EXCLUDED.name,
+                        properties = EXCLUDED.properties,
+                        updated_at = NOW()
+                    WHERE graph_entities.properties->>'project_id' IS NULL
+                       OR graph_entities.properties->>'project_id' =
+                          EXCLUDED.properties->>'project_id'
+                """,
+                {
+                    "id": entity.id,
+                    "tenant_id": entity.tenant_id,
+                    "domain_id": entity.domain_id,
+                    "entity_type": entity.entity_type,
+                    "name": entity.name,
+                    "properties": json.dumps(dict(entity.properties)),
+                },
+            )
+
+    async def upsert_graph_relation(self, relation: GraphRelation) -> str:
+        """Insert or update a canonical graph relationship (ADR-01/03/05)."""
+        async with self._conn() as conn:
+            row = await (
+                await conn.execute(
+                    """
+                    INSERT INTO graph_relations (tenant_id, src_id, dst_id, rel_type, properties)
+                    VALUES (%(tenant_id)s, %(src_id)s, %(dst_id)s, %(rel_type)s, %(properties)s)
+                    ON CONFLICT (tenant_id, src_id, dst_id, rel_type)
+                        DO UPDATE SET properties = EXCLUDED.properties
+                        WHERE graph_relations.properties->>'project_id' IS NULL
+                           OR graph_relations.properties->>'project_id' =
+                              EXCLUDED.properties->>'project_id'
+                    RETURNING id
+                    """,
+                    {
+                        "tenant_id": relation.tenant_id,
+                        "src_id": relation.src_id,
+                        "dst_id": relation.dst_id,
+                        "rel_type": relation.rel_type,
+                        "properties": json.dumps(dict(relation.properties)),
+                    },
+                )
+            ).fetchone()
+            if row is None:
+                raise ValidationError(
+                    f"Cross-project graph_relation collision: '{relation.src_id}'->"
+                    f"'{relation.dst_id}' ({relation.rel_type}) is owned by another project"
+                )
+            return str(row["id"])
+
+    async def bulk_upsert_graph_entities(self, entities: Sequence[GraphEntity]) -> int:
+        """Bulk insert or update canonical graph entities in a single transaction."""
+        if not entities:
+            return 0
+        async with self._conn() as conn:
+            async with conn.transaction():
+                async with conn.cursor() as cur:
+                    await cur.executemany(
+                        """
+                        INSERT INTO graph_entities
+                            (id, tenant_id, domain_id, entity_type, name, properties, updated_at)
+                        VALUES
+                            (%(id)s, %(tenant_id)s, %(domain_id)s, %(entity_type)s,
+                             %(name)s, %(properties)s, NOW())
+                        ON CONFLICT (tenant_id, id)
+                            DO UPDATE SET
+                                domain_id = EXCLUDED.domain_id,
+                                entity_type = EXCLUDED.entity_type,
+                                name = EXCLUDED.name,
+                                properties = EXCLUDED.properties,
+                                updated_at = NOW()
+                            WHERE (
+                                graph_entities.properties->>'project_id' IS NULL
+                                OR graph_entities.properties->>'project_id' =
+                                   EXCLUDED.properties->>'project_id'
+                            )
+                            AND NOT (
+                                COALESCE((EXCLUDED.properties->>'stub')::boolean, false)
+                                AND NOT COALESCE(
+                                    (graph_entities.properties->>'stub')::boolean, false
+                                )
+                            )
+                        """,
+                        [
+                            {
+                                "id": e.id,
+                                "tenant_id": e.tenant_id,
+                                "domain_id": e.domain_id,
+                                "entity_type": e.entity_type,
+                                "name": e.name,
+                                "properties": json.dumps(dict(e.properties)),
+                            }
+                            for e in entities
+                        ],
+                    )
+        return len(entities)
+
+    async def bulk_upsert_graph_relations(self, relations: Sequence[GraphRelation]) -> int:
+        """Bulk insert or update canonical graph relationships in a single transaction."""
+        if not relations:
+            return 0
+        async with self._conn() as conn:
+            async with conn.transaction():
+                async with conn.cursor() as cur:
+                    await cur.executemany(
+                        """
+                        INSERT INTO graph_relations (
+                            tenant_id, src_id, dst_id, rel_type, properties
+                        )
+                        VALUES (%(tenant_id)s, %(src_id)s, %(dst_id)s, %(rel_type)s, %(properties)s)
+                        ON CONFLICT (tenant_id, src_id, dst_id, rel_type)
+                            DO UPDATE SET properties = EXCLUDED.properties
+                            WHERE graph_relations.properties->>'project_id' IS NULL
+                               OR graph_relations.properties->>'project_id' =
+                                  EXCLUDED.properties->>'project_id'
+                        """,
+                        [
+                            {
+                                "tenant_id": r.tenant_id,
+                                "src_id": r.src_id,
+                                "dst_id": r.dst_id,
+                                "rel_type": r.rel_type,
+                                "properties": json.dumps(dict(r.properties)),
+                            }
+                            for r in relations
+                        ],
+                    )
+        return len(relations)
+
+    async def delete_graph_entity(self, id: str, *, tenant_id: str = "default") -> None:
+        """Delete a canonical graph entity. Foreign keys cascade-delete relations."""
+        async with self._conn() as conn:
+            cur = await conn.execute(
+                """
+                DELETE FROM graph_entities
+                WHERE tenant_id = %(tenant_id)s AND id = %(id)s
+                """,
+                {"tenant_id": tenant_id, "id": id},
+            )
+            if cur.rowcount != 1:
+                raise KeyError(id)
+
+    async def delete_graph_relation(
+        self, *, src_id: str, dst_id: str, rel_type: str, tenant_id: str = "default"
+    ) -> None:
+        """Delete a canonical graph relation."""
+        async with self._conn() as conn:
+            cur = await conn.execute(
+                """
+                DELETE FROM graph_relations
+                WHERE tenant_id = %(tenant_id)s AND src_id = %(src_id)s
+                  AND dst_id = %(dst_id)s AND rel_type = %(rel_type)s
+                """,
+                {
+                    "tenant_id": tenant_id,
+                    "src_id": src_id,
+                    "dst_id": dst_id,
+                    "rel_type": rel_type,
+                },
+            )
+            if cur.rowcount != 1:
+                raise KeyError(f"{src_id}->{dst_id}:{rel_type}")
+
+    async def purge_stale_graph_entities(
+        self,
+        *,
+        tenant_id: str = "default",
+        project_id: str = "default",
+        active_ids: Sequence[str],
+    ) -> list[str]:
+        """Purge canonical graph entities for a tenant and project no longer in active_ids.
+
+        Foreign keys automatically cascade-delete associated relations.
+        Returns the list of deleted entity IDs.
+        """
+        async with self._conn() as conn:
+            async with conn.transaction():
+                query = """
+                SELECT id FROM graph_entities
+                WHERE tenant_id = %(tenant_id)s
+                  AND properties->>'project_id' = %(project_id)s
+                  AND entity_type NOT IN ('DOCUMENT', 'SECTION', 'MEDIA_BLOB', 'CONCEPT')
+                  AND NOT id = ANY(%(active_ids)s::text[])
+                """
+                cur = await conn.execute(
+                    query,
+                    {
+                        "tenant_id": tenant_id,
+                        "project_id": project_id,
+                        "active_ids": list(active_ids),
+                    },
+                )
+                rows = await cur.fetchall()
+                stale_ids = [r["id"] for r in rows]
+                if not stale_ids:
+                    return []
+
+                await conn.execute(
+                    """
+                    DELETE FROM graph_entities
+                    WHERE tenant_id = %(tenant_id)s
+                      AND id = ANY(%(stale_ids)s::text[])
+                    """,
+                    {"tenant_id": tenant_id, "stale_ids": stale_ids},
+                )
+                return stale_ids
+
+    async def get_graph_entity(self, id: str, *, tenant_id: str = "default") -> GraphEntity | None:
+        """Retrieve a canonical graph entity by id and tenant_id."""
+        async with self._conn() as conn:
+            row = await (
+                await conn.execute(
+                    """
+                    SELECT id, tenant_id, domain_id, entity_type, name, properties
+                    FROM graph_entities
+                    WHERE tenant_id = %(tenant_id)s AND id = %(id)s
+                    """,
+                    {"tenant_id": tenant_id, "id": id},
+                )
+            ).fetchone()
+            if not row:
+                return None
+            return GraphEntity(
+                id=row["id"],
+                tenant_id=row["tenant_id"],
+                domain_id=row["domain_id"],
+                entity_type=row["entity_type"],
+                name=row["name"],
+                properties=row["properties"],
+            )
+
+    async def list_graph_entities(
+        self,
+        *,
+        tenant_id: str = "default",
+        entity_type: str | None = None,
+        project_id: str | None = None,
+    ) -> list[GraphEntity]:
+        """List canonical graph entities with optional entity_type and project_id filter."""
+        params: dict[str, Any] = {
+            "tenant_id": tenant_id,
+            "entity_type": entity_type or None,
+            "project_id": project_id,
+        }
+
+        async with self._conn() as conn:
+            rows = await (
+                await conn.execute(
+                    """
+                    SELECT id, tenant_id, domain_id, entity_type, name, properties
+                    FROM graph_entities
+                    WHERE tenant_id = %(tenant_id)s
+                      AND (%(entity_type)s::text IS NULL OR entity_type = %(entity_type)s)
+                      AND (
+                          %(project_id)s::text IS NULL
+                          OR properties->>'project_id' IS NULL
+                          OR properties->>'project_id' = %(project_id)s
+                      )
+                    ORDER BY id ASC
+                    """,
+                    params,
+                )
+            ).fetchall()
+            return [
+                GraphEntity(
+                    id=row["id"],
+                    tenant_id=row["tenant_id"],
+                    domain_id=row["domain_id"],
+                    entity_type=row["entity_type"],
+                    name=row["name"],
+                    properties=row["properties"],
+                )
+                for row in rows
+            ]
+
+    async def list_graph_relations(
+        self, *, tenant_id: str = "default", entity_id: str | None = None
+    ) -> list[GraphRelation]:
+        """List canonical graph relations, optionally connected to entity_id."""
+        params: dict[str, Any] = {
+            "tenant_id": tenant_id,
+            "eid": entity_id or None,
+        }
+
+        async with self._conn() as conn:
+            rows = await (
+                await conn.execute(
+                    """
+                    SELECT id, tenant_id, src_id, dst_id, rel_type, properties
+                    FROM graph_relations
+                    WHERE tenant_id = %(tenant_id)s
+                      AND (
+                          %(eid)s::text IS NULL
+                          OR src_id = %(eid)s
+                          OR dst_id = %(eid)s
+                      )
+                    ORDER BY created_at ASC
+                    """,
+                    params,
+                )
+            ).fetchall()
+            return [
+                GraphRelation(
+                    id=str(row["id"]),
+                    tenant_id=row["tenant_id"],
+                    src_id=row["src_id"],
+                    dst_id=row["dst_id"],
+                    rel_type=row["rel_type"],
+                    properties=row["properties"],
+                )
+                for row in rows
+            ]
+
+    async def find_neighbors(
+        self,
+        *,
+        id: str,
+        tenant_id: str = "default",
+        rel: str | None = None,
+        depth: int = 1,
+        project_id: str | None = None,
+    ) -> Sequence[Mapping[str, Any]]:
+        """Return bidirectional neighbor nodes reachable from `id` within `depth` hops."""
+        safe_depth = max(1, min(depth, 6))
+        prefixed_id = (
+            f"{project_id}:{id}" if project_id and not id.startswith(f"{project_id}:") else id
+        )
+        async with self._conn() as conn:
+            rows = await (
+                await conn.execute(
+                    """
+                    WITH RECURSIVE walk AS (
+                        SELECT
+                            CASE
+                                WHEN r.src_id IN (%(id)s, %(prefixed_id)s) THEN r.dst_id
+                                ELSE r.src_id
+                            END AS neighbor_id,
+                            1 AS depth,
+                            ARRAY[r.src_id, r.dst_id] AS path
+                        FROM graph_relations r
+                        JOIN graph_entities src_e
+                          ON src_e.tenant_id = r.tenant_id AND src_e.id = r.src_id
+                        JOIN graph_entities dst_e
+                          ON dst_e.tenant_id = r.tenant_id AND dst_e.id = r.dst_id
+                        WHERE r.tenant_id = %(tenant_id)s
+                          AND (
+                              r.src_id IN (%(id)s, %(prefixed_id)s)
+                              OR r.dst_id IN (%(id)s, %(prefixed_id)s)
+                          )
+                          AND (%(rel)s::text IS NULL OR r.rel_type = %(rel)s)
+                          AND (
+                              %(project_id)s::text IS NULL
+                              OR (
+                                  (
+                                      src_e.properties->>'project_id' IS NULL
+                                      OR src_e.properties->>'project_id' = %(project_id)s
+                                  )
+                                  AND (
+                                      dst_e.properties->>'project_id' IS NULL
+                                      OR dst_e.properties->>'project_id' = %(project_id)s
+                                  )
+                                  AND (
+                                      r.properties->>'project_id' IS NULL
+                                      OR r.properties->>'project_id' = %(project_id)s
+                                  )
+                              )
+                          )
+                        UNION ALL
+                        SELECT
+                            CASE
+                                WHEN r.src_id = w.neighbor_id THEN r.dst_id
+                                ELSE r.src_id
+                            END AS neighbor_id,
+                            w.depth + 1 AS depth,
+                            w.path || (
+                                CASE
+                                    WHEN r.src_id = w.neighbor_id THEN r.dst_id
+                                    ELSE r.src_id
+                                END
+                            ) AS path
+                        FROM graph_relations r
+                        JOIN walk w
+                          ON (r.src_id = w.neighbor_id OR r.dst_id = w.neighbor_id)
+                        JOIN graph_entities mid_e
+                          ON mid_e.tenant_id = r.tenant_id AND mid_e.id = w.neighbor_id
+                        WHERE r.tenant_id = %(tenant_id)s
+                          AND w.depth < %(max_depth)s
+                          AND (%(rel)s::text IS NULL OR r.rel_type = %(rel)s)
+                          AND NOT (
+                              (
+                                  CASE
+                                      WHEN r.src_id = w.neighbor_id THEN r.dst_id
+                                      ELSE r.src_id
+                                  END
+                              ) = ANY(w.path)
+                          )
+                          AND (
+                              %(project_id)s::text IS NULL
+                              OR (
+                                  (
+                                      mid_e.properties->>'project_id' IS NULL
+                                      OR mid_e.properties->>'project_id' = %(project_id)s
+                                  )
+                                  AND (
+                                      r.properties->>'project_id' IS NULL
+                                      OR r.properties->>'project_id' = %(project_id)s
+                                  )
+                              )
+                          )
+                    )
+                    SELECT DISTINCT e.id, e.entity_type, e.name, e.properties
+                    FROM walk w
+                    JOIN graph_entities e ON e.tenant_id = %(tenant_id)s AND e.id = w.neighbor_id
+                    WHERE e.id <> %(id)s AND e.id <> %(prefixed_id)s
+                      AND (
+                          %(project_id)s::text IS NULL
+                          OR e.properties->>'project_id' IS NULL
+                          OR e.properties->>'project_id' = %(project_id)s
+                      )
+                    ORDER BY e.id ASC
+                    """,
+                    {
+                        "tenant_id": tenant_id,
+                        "id": id,
+                        "prefixed_id": prefixed_id,
+                        "rel": rel,
+                        "project_id": project_id,
+                        "max_depth": safe_depth,
+                    },
+                )
+            ).fetchall()
+            return [
+                {
+                    "id": row["id"],
+                    "labels": [row["entity_type"]],
+                    "properties": {
+                        "name": row["name"],
+                        "tenant_id": tenant_id,
+                        **(
+                            row["properties"]
+                            if isinstance(row["properties"], dict)
+                            else json.loads(row["properties"])
+                            if row["properties"]
+                            else {}
+                        ),
+                    },
+                }
+                for row in rows
+            ]
+
+    async def find_ancestors(
+        self,
+        *,
+        id: str,
+        tenant_id: str = "default",
+        depth: int = 6,
+        project_id: str | None = None,
+    ) -> Sequence[Mapping[str, Any]]:
+        """Return upstream ancestor nodes reachable from `id` (directed out-edges src -> dst)."""
+        safe_depth = max(1, min(depth, 10))
+        prefixed_id = (
+            f"{project_id}:{id}" if project_id and not id.startswith(f"{project_id}:") else id
+        )
+        async with self._conn() as conn:
+            rows = await (
+                await conn.execute(
+                    """
+                    WITH RECURSIVE lineage AS (
+                        SELECT r.dst_id, 1 AS depth, ARRAY[r.src_id] AS path
+                        FROM graph_relations r
+                        JOIN graph_entities src_e
+                          ON src_e.tenant_id = r.tenant_id AND src_e.id = r.src_id
+                        WHERE r.tenant_id = %(tenant_id)s
+                          AND (r.src_id = %(id)s OR r.src_id = %(prefixed_id)s)
+                          AND (
+                              %(project_id)s::text IS NULL
+                              OR src_e.properties->>'project_id' IS NULL
+                              OR src_e.properties->>'project_id' = %(project_id)s
+                          )
+                        UNION ALL
+                        SELECT r.dst_id, l.depth + 1, l.path || r.src_id
+                        FROM graph_relations r
+                        JOIN lineage l ON r.src_id = l.dst_id
+                        JOIN graph_entities mid_e
+                          ON mid_e.tenant_id = r.tenant_id AND mid_e.id = r.src_id
+                        WHERE r.tenant_id = %(tenant_id)s
+                          AND l.depth < %(max_depth)s
+                          AND NOT (r.dst_id = ANY(l.path))
+                          AND (
+                              %(project_id)s::text IS NULL
+                              OR mid_e.properties->>'project_id' IS NULL
+                              OR mid_e.properties->>'project_id' = %(project_id)s
+                          )
+                    )
+                    SELECT DISTINCT e.id, e.entity_type, e.name, e.properties
+                    FROM lineage l
+                    JOIN graph_entities e ON e.tenant_id = %(tenant_id)s AND e.id = l.dst_id
+                    WHERE e.id <> %(id)s AND e.id <> %(prefixed_id)s
+                      AND (
+                          %(project_id)s::text IS NULL
+                          OR e.properties->>'project_id' IS NULL
+                          OR e.properties->>'project_id' = %(project_id)s
+                      )
+                    ORDER BY e.id ASC
+                    """,
+                    {
+                        "tenant_id": tenant_id,
+                        "id": id,
+                        "prefixed_id": prefixed_id,
+                        "project_id": project_id,
+                        "max_depth": safe_depth,
+                    },
+                )
+            ).fetchall()
+            return [
+                {
+                    "id": row["id"],
+                    "labels": [row["entity_type"]],
+                    "properties": {
+                        "name": row["name"],
+                        "tenant_id": tenant_id,
+                        **(
+                            row["properties"]
+                            if isinstance(row["properties"], dict)
+                            else json.loads(row["properties"])
+                            if row["properties"]
+                            else {}
+                        ),
+                    },
+                }
+                for row in rows
+            ]
+
+    async def find_descendants(
+        self,
+        *,
+        id: str,
+        tenant_id: str = "default",
+        depth: int = 6,
+        project_id: str | None = None,
+    ) -> Sequence[Mapping[str, Any]]:
+        """Return downstream descendant nodes reachable from `id` (directed in-edges dst <- src)."""
+        safe_depth = max(1, min(depth, 10))
+        prefixed_id = (
+            f"{project_id}:{id}" if project_id and not id.startswith(f"{project_id}:") else id
+        )
+        async with self._conn() as conn:
+            rows = await (
+                await conn.execute(
+                    """
+                    WITH RECURSIVE blast AS (
+                        SELECT r.src_id, 1 AS depth, ARRAY[r.dst_id] AS path
+                        FROM graph_relations r
+                        JOIN graph_entities dst_e
+                          ON dst_e.tenant_id = r.tenant_id AND dst_e.id = r.dst_id
+                        WHERE r.tenant_id = %(tenant_id)s
+                          AND (r.dst_id = %(id)s OR r.dst_id = %(prefixed_id)s)
+                          AND (
+                              %(project_id)s::text IS NULL
+                              OR dst_e.properties->>'project_id' IS NULL
+                              OR dst_e.properties->>'project_id' = %(project_id)s
+                          )
+                        UNION ALL
+                        SELECT r.src_id, b.depth + 1, b.path || r.dst_id
+                        FROM graph_relations r
+                        JOIN blast b ON r.dst_id = b.src_id
+                        JOIN graph_entities mid_e
+                          ON mid_e.tenant_id = r.tenant_id AND mid_e.id = r.dst_id
+                        WHERE r.tenant_id = %(tenant_id)s
+                          AND b.depth < %(max_depth)s
+                          AND NOT (r.src_id = ANY(b.path))
+                          AND (
+                              %(project_id)s::text IS NULL
+                              OR mid_e.properties->>'project_id' IS NULL
+                              OR mid_e.properties->>'project_id' = %(project_id)s
+                          )
+                    )
+                    SELECT DISTINCT e.id, e.entity_type, e.name, e.properties
+                    FROM blast b
+                    JOIN graph_entities e ON e.tenant_id = %(tenant_id)s AND e.id = b.src_id
+                    WHERE e.id <> %(id)s AND e.id <> %(prefixed_id)s
+                      AND (
+                          %(project_id)s::text IS NULL
+                          OR e.properties->>'project_id' IS NULL
+                          OR e.properties->>'project_id' = %(project_id)s
+                      )
+                    ORDER BY e.id ASC
+                    """,
+                    {
+                        "tenant_id": tenant_id,
+                        "id": id,
+                        "prefixed_id": prefixed_id,
+                        "project_id": project_id,
+                        "max_depth": safe_depth,
+                    },
+                )
+            ).fetchall()
+            return [
+                {
+                    "id": row["id"],
+                    "labels": [row["entity_type"]],
+                    "properties": {
+                        "name": row["name"],
+                        "tenant_id": tenant_id,
+                        **(
+                            row["properties"]
+                            if isinstance(row["properties"], dict)
+                            else json.loads(row["properties"])
+                            if row["properties"]
+                            else {}
+                        ),
+                    },
+                }
+                for row in rows
+            ]
+
     async def count_episodes(self, *, tenant_id: str) -> int:
         return await self._count("episodes", tenant_id)
 
     async def count_kb_sections(self, *, tenant_id: str) -> int:
         return await self._count("kb_sections", tenant_id)
 
+    async def count_graph_entities(self, *, tenant_id: str = "default") -> int:
+        return await self._count("graph_entities", tenant_id)
+
+    async def count_graph_relations(self, *, tenant_id: str = "default") -> int:
+        return await self._count("graph_relations", tenant_id)
+
     async def _count(self, table: str, tenant_id: str) -> int:
         # Security guard, not an assert: asserts vanish under `python -O`,
-        # and this is the only barrier before f-string SQL interpolation.
-        if table not in {"episodes", "kb_sections"}:
+        # and this is the only barrier before table lookup.
+        count_queries = {
+            "episodes": "SELECT count(*) AS n FROM episodes WHERE tenant_id = %(t)s",
+            "kb_sections": "SELECT count(*) AS n FROM kb_sections WHERE tenant_id = %(t)s",
+            "graph_entities": "SELECT count(*) AS n FROM graph_entities WHERE tenant_id = %(t)s",
+            "graph_relations": "SELECT count(*) AS n FROM graph_relations WHERE tenant_id = %(t)s",
+        }
+        query_sql = count_queries.get(table)
+        if query_sql is None:
             raise ValueError(f"refusing to interpolate table name: {table!r}")
         async with self._conn() as conn:
             row = await (
                 await conn.execute(
-                    f"SELECT count(*) AS n FROM {table} WHERE tenant_id = %(t)s",
+                    query_sql,
                     {"t": tenant_id},
                 )
             ).fetchone()
-            assert row is not None
+            if row is None:
+                raise RuntimeError("SELECT count(*) returned no row")
             return int(row["n"])
+
+    async def upsert_kb_document(self, doc: KBDocument) -> str:
+        """Insert or update a canonical L0 documentation/runbook record in kb_documents."""
+        async with self._conn() as conn:
+            row = await (
+                await conn.execute(
+                    """
+                    INSERT INTO kb_documents (
+                        tenant_id, doc_id, project_id, domain_id, scope, repo_path,
+                        title, kind, namespace, status, autonomy_tier, frontmatter,
+                        watched_paths, trigger_alerts, last_verified, review_ttl_days,
+                        git_commit_sha, updated_at
+                    )
+                    VALUES (
+                        %(tenant_id)s, %(doc_id)s, %(project_id)s, %(domain_id)s, %(scope)s,
+                        %(repo_path)s, %(title)s, %(kind)s, %(namespace)s, %(status)s,
+                        %(autonomy_tier)s, %(frontmatter)s, %(watched_paths)s,
+                        %(trigger_alerts)s, %(last_verified)s, %(review_ttl_days)s,
+                        %(git_commit_sha)s, NOW()
+                    )
+                    ON CONFLICT (tenant_id, doc_id) DO UPDATE SET
+                        project_id = COALESCE(EXCLUDED.project_id, kb_documents.project_id),
+                        domain_id = COALESCE(EXCLUDED.domain_id, kb_documents.domain_id),
+                        scope = EXCLUDED.scope,
+                        repo_path = EXCLUDED.repo_path,
+                        title = EXCLUDED.title,
+                        kind = EXCLUDED.kind,
+                        namespace = EXCLUDED.namespace,
+                        status = EXCLUDED.status,
+                        autonomy_tier = EXCLUDED.autonomy_tier,
+                        frontmatter = EXCLUDED.frontmatter,
+                        watched_paths = EXCLUDED.watched_paths,
+                        trigger_alerts = EXCLUDED.trigger_alerts,
+                        last_verified = EXCLUDED.last_verified,
+                        review_ttl_days = EXCLUDED.review_ttl_days,
+                        git_commit_sha = EXCLUDED.git_commit_sha,
+                        updated_at = NOW()
+                    WHERE kb_documents.project_id IS NULL
+                       OR kb_documents.project_id = EXCLUDED.project_id
+                    RETURNING doc_id
+                    """,
+                    {
+                        "tenant_id": doc.tenant_id,
+                        "doc_id": doc.doc_id,
+                        "project_id": doc.project_id,
+                        "domain_id": doc.domain_id,
+                        "scope": doc.scope,
+                        "repo_path": doc.repo_path,
+                        "title": doc.title,
+                        "kind": doc.kind,
+                        "namespace": doc.namespace,
+                        "status": doc.status,
+                        "autonomy_tier": doc.autonomy_tier,
+                        "frontmatter": json.dumps(dict(doc.frontmatter)),
+                        "watched_paths": list(doc.watched_paths),
+                        "trigger_alerts": list(doc.trigger_alerts),
+                        "last_verified": doc.last_verified,
+                        "review_ttl_days": doc.review_ttl_days,
+                        "git_commit_sha": doc.git_commit_sha,
+                    },
+                )
+            ).fetchone()
+            if row is None:
+                raise ValidationError(
+                    f"Cross-project doc_id collision: '{doc.doc_id}' is already owned "
+                    f"by another project in tenant '{doc.tenant_id}'"
+                )
+        return doc.doc_id
+
+    async def upsert_kb_runbook_steps(
+        self,
+        tenant_id: str,
+        doc_id: str,
+        steps: Sequence[KBRunbookStep],
+    ) -> int:
+        """Atomically replace stale steps for (tenant_id, doc_id) and upsert current steps."""
+        async with self._conn() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "DELETE FROM kb_runbook_steps "
+                    "WHERE tenant_id = %(tenant_id)s AND doc_id = %(doc_id)s",
+                    {"tenant_id": tenant_id, "doc_id": doc_id},
+                )
+                if not steps:
+                    return 0
+                async with conn.cursor() as cur:
+                    await cur.executemany(
+                        """
+                        INSERT INTO kb_runbook_steps (
+                            tenant_id, step_uid, doc_id, step_order, step_id,
+                            heading_path, tier, mode, expect_exit, timeout_sec,
+                            command_body, prose_context, rollback_step
+                        )
+                        VALUES (
+                            %(tenant_id)s, %(step_uid)s, %(doc_id)s, %(step_order)s,
+                            %(step_id)s, %(heading_path)s, %(tier)s, %(mode)s,
+                            %(expect_exit)s, %(timeout_sec)s, %(command_body)s,
+                            %(prose_context)s, %(rollback_step)s
+                        )
+                        ON CONFLICT (tenant_id, step_uid) DO UPDATE SET
+                            step_order = EXCLUDED.step_order,
+                            step_id = EXCLUDED.step_id,
+                            heading_path = EXCLUDED.heading_path,
+                            tier = EXCLUDED.tier,
+                            mode = EXCLUDED.mode,
+                            expect_exit = EXCLUDED.expect_exit,
+                            timeout_sec = EXCLUDED.timeout_sec,
+                            command_body = EXCLUDED.command_body,
+                            prose_context = EXCLUDED.prose_context,
+                            rollback_step = EXCLUDED.rollback_step
+                        """,
+                        [
+                            {
+                                "tenant_id": tenant_id,
+                                "step_uid": s.step_uid,
+                                "doc_id": doc_id,
+                                "step_order": s.step_order,
+                                "step_id": s.step_id,
+                                "heading_path": s.heading_path,
+                                "tier": s.tier,
+                                "mode": s.mode,
+                                "expect_exit": s.expect_exit,
+                                "timeout_sec": s.timeout_sec,
+                                "command_body": s.command_body,
+                                "prose_context": s.prose_context,
+                                "rollback_step": s.rollback_step,
+                            }
+                            for s in steps
+                        ],
+                    )
+        return len(steps)
+
+    async def delete_kb_document(
+        self,
+        tenant_id: str,
+        doc_id: str,
+        *,
+        repo_path: str | None = None,
+        project_id: str | None = None,
+    ) -> int:
+        """Delete a kb_documents record by doc_id or repo_path (cascades to kb_runbook_steps)."""
+        async with self._conn() as conn:
+            if repo_path:
+                cur = await conn.execute(
+                    """
+                    DELETE FROM kb_documents
+                    WHERE tenant_id = %(tenant_id)s
+                      AND (%(project_id)s::text IS NULL OR project_id = %(project_id)s)
+                      AND (doc_id = %(doc_id)s OR repo_path = %(repo_path)s)
+                    """,
+                    {
+                        "tenant_id": tenant_id,
+                        "doc_id": doc_id,
+                        "repo_path": repo_path,
+                        "project_id": project_id,
+                    },
+                )
+            else:
+                cur = await conn.execute(
+                    """
+                    DELETE FROM kb_documents
+                    WHERE tenant_id = %(tenant_id)s
+                      AND (%(project_id)s::text IS NULL OR project_id = %(project_id)s)
+                      AND doc_id = %(doc_id)s
+                    """,
+                    {"tenant_id": tenant_id, "doc_id": doc_id, "project_id": project_id},
+                )
+            return int(cur.rowcount or 0)
+
+    async def slice_runbook(
+        self,
+        *,
+        tenant_id: str,
+        project_id: str | None = None,
+        domain_id: str | None = None,
+        scope: str = "project",
+        doc_id: str | None = None,
+        alert_id: str | None = None,
+        max_tier: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Query ordered L0 runbook steps joined with kb_documents metadata."""
+        if max_tier is not None and max_tier not in AUTONOMY_TIERS:
+            raise ValidationError(
+                f"Invalid max_tier '{max_tier}'; must be one of {sorted(AUTONOMY_TIERS)}"
+            )
+        allowed_tiers: list[str]
+        if max_tier == "green":
+            allowed_tiers = ["green"]
+        elif max_tier == "yellow":
+            allowed_tiers = ["green", "yellow"]
+        else:
+            allowed_tiers = ["green", "yellow", "red"]
+
+        params: dict[str, Any] = {
+            "tenant_id": tenant_id,
+            "tiers": allowed_tiers,
+            "project_id": project_id,
+            "domain_id": domain_id,
+            "scope": scope,
+            "doc_id": doc_id,
+            "alert_id": alert_id,
+        }
+        async with self._conn() as conn:
+            cur = await conn.execute(
+                """
+                SELECT
+                    s.step_uid, s.doc_id, d.project_id, d.scope, d.title, d.repo_path,
+                    d.trigger_alerts, s.step_order, s.step_id, s.heading_path, s.tier,
+                    s.mode, s.expect_exit, s.timeout_sec, s.command_body, s.prose_context,
+                    s.rollback_step
+                FROM kb_runbook_steps s
+                JOIN kb_documents d
+                  ON d.tenant_id = s.tenant_id AND d.doc_id = s.doc_id
+                WHERE d.tenant_id = %(tenant_id)s
+                  AND d.status = 'active'
+                  AND s.tier = ANY(%(tiers)s)
+                  AND (
+                      (
+                          %(scope)s IN ('agent', 'project')
+                          AND d.scope IN ('agent', 'project', 'space')
+                          AND (
+                              %(project_id)s::text IS NULL
+                              OR d.project_id = %(project_id)s
+                              OR d.scope = 'space'
+                          )
+                      )
+                      OR (
+                          %(scope)s = 'domain'
+                          AND (
+                              (
+                                  d.scope = 'domain'
+                                  AND d.domain_id IS NOT NULL
+                                  AND d.domain_id = %(domain_id)s
+                              )
+                              OR d.scope = 'space'
+                              OR (
+                                  %(project_id)s::text IS NOT NULL
+                                  AND d.project_id = %(project_id)s
+                              )
+                          )
+                      )
+                      OR (
+                          %(scope)s = 'space'
+                          AND (
+                              d.scope IN ('domain', 'space')
+                              OR (
+                                  %(project_id)s::text IS NOT NULL
+                                  AND d.project_id = %(project_id)s
+                              )
+                          )
+                      )
+                  )
+                  AND (%(doc_id)s::text IS NULL OR d.doc_id = %(doc_id)s)
+                  AND (%(alert_id)s::text IS NULL OR %(alert_id)s = ANY(d.trigger_alerts))
+                ORDER BY d.doc_id ASC, s.step_order ASC
+                """,
+                params,
+            )
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]
+
+    async def get_learning_health_summary(
+        self,
+        *,
+        tenant_id: str,
+        project_id: str | None = None,
+        limit: int = 500,
+    ) -> dict[str, Any]:
+        """Compute closed-loop learning health metrics over recent episodes for tenant_id."""
+        from engramory.core.experience import compute_learning_health_metrics
+
+        safe_limit = max(1, min(int(limit), 5000))
+        async with self._conn() as conn:
+            rows = await (
+                await conn.execute(
+                    """
+                    SELECT id, agent_id, project_id, domain_id, tenant_id, kind,
+                           content_raw, metadata
+                    FROM (
+                        SELECT id, agent_id, project_id, domain_id, tenant_id, kind,
+                               content_raw, metadata, ts
+                        FROM episodes
+                        WHERE tenant_id = %(tenant_id)s
+                          AND (%(project_id)s::text IS NULL OR project_id = %(project_id)s::text)
+                        ORDER BY ts DESC, id DESC
+                        LIMIT %(limit)s
+                    ) recent_ep
+                    ORDER BY ts ASC, id ASC
+                    """,
+                    {
+                        "tenant_id": tenant_id,
+                        "project_id": project_id,
+                        "limit": safe_limit,
+                    },
+                )
+            ).fetchall()
+            episodes = [
+                Episode(
+                    agent_id=row["agent_id"],
+                    content_raw=row["content_raw"],
+                    project_id=row["project_id"],
+                    domain_id=row["domain_id"],
+                    tenant_id=row["tenant_id"],
+                    kind=row["kind"],
+                    metadata=row["metadata"] or {},
+                    id=str(row["id"]),
+                )
+                for row in rows
+            ]
+            return compute_learning_health_metrics(episodes)
 
 
 def _episode_params(episode: Episode) -> dict[str, Any]:
+    event_id_val = (
+        episode.metadata.get("event_id") if isinstance(episode.metadata, Mapping) else None
+    )
     return {
         "agent_id": episode.agent_id,
         "project_id": episode.project_id,
@@ -531,6 +2106,7 @@ def _episode_params(episode: Episode) -> dict[str, Any]:
         "content_raw": episode.content_raw,
         "content_hash": episode.content_hash,
         "metadata": json.dumps(dict(episode.metadata)),
+        "event_id": str(event_id_val) if event_id_val else None,
     }
 
 
@@ -574,4 +2150,33 @@ def _hydrate_memory(row: dict[str, Any]) -> Memory:
         valid_to=row["valid_to"],
         supersedes=str(row["supersedes"]) if row["supersedes"] is not None else None,
         id=str(row["id"]),
+    )
+
+
+def _hydrate_kb_section(row: dict[str, Any]) -> KBSection:
+    raw_meta = row.get("media_metadata")
+    if isinstance(raw_meta, str):
+        try:
+            parsed_meta: dict[str, Any] = json.loads(raw_meta)
+        except Exception:
+            parsed_meta = {}
+    elif isinstance(raw_meta, Mapping):
+        parsed_meta = dict(raw_meta)
+    else:
+        parsed_meta = {}
+
+    return KBSection(
+        id=str(row["id"]),
+        tenant_id=row["tenant_id"],
+        project_id=row["project_id"],
+        domain_id=row["domain_id"],
+        scope=row["scope"],
+        doc_id=row["doc_id"],
+        citation=row["citation"],
+        text=row["text"],
+        version=int(row["version"]),
+        modality=str(row.get("modality") or "text"),
+        blob_sha256=row.get("blob_sha256"),
+        blob_uri=row.get("blob_uri"),
+        media_metadata=parsed_meta,
     )

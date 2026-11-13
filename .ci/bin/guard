@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# aidoc-local-flow-ci agent guard — blocks shell commands that bypass or self-certify CI.
+# Agent-agnostic: wire it into any agent's pre-command hook.
+#
+# Usage:
+#   guard --command "<shell command>"     # generic
+#   guard --claude                         # Claude Code PreToolUse hook (JSON on stdin)
+#   guard --stdin-json [jq-path]           # other agents: JSON on stdin, command at jq path
+#                                          # (default path: .tool_input.command // .command)
+# Exit: 0 allow · 2 block (reason on stderr — Claude Code feeds it back to the agent)
+#
+# Config (.ci-config): GUARD_BLOCK_SHIP=1 also blocks `task ship` (use for fully
+# autonomous agent modes where permission prompts are bypassed) — and `task promote`.
+set -uo pipefail
+# shellcheck source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+cmd=""
+case ${1:-} in
+  --command) cmd=${2:-} ;;
+  --claude) command -v jq >/dev/null || { echo "guard: jq is required to parse hook input" >&2; exit 2; }
+    cmd=$(jq -r '.tool_input.command // ""') ;;
+  --stdin-json) command -v jq >/dev/null || { echo "guard: jq is required to parse hook input" >&2; exit 2; }
+    cmd=$(jq -r "${2:-.tool_input.command // .command // \"\"}") ;;
+  *) echo "usage: guard --command CMD | --claude | --stdin-json [PATH]" >&2; exit 2 ;;
+esac
+
+patterns=(
+  '--no-verify'                                    # git commit/push hook bypass
+  'git([[:space:]]+-c[[:space:]]+[^[:space:]]+|[[:space:]]+-C[[:space:]]*[^[:space:]]+|[[:space:]]+--git-dir(=[^[:space:]]+|[[:space:]]+[^[:space:]]+)?|[[:space:]]+--work-tree(=[^[:space:]]+|[[:space:]]+[^[:space:]]+)?|[[:space:]]+(--no-pager|-P))*[[:space:]]+commit[^;&|]*[[:space:]]-[a-zA-Z]*n[a-zA-Z]*([[:space:]]|$)'  # git commit -n / -anm (tolerates -c/-C/--git-dir/--work-tree/--no-pager globals)
+  'LEFTHOOK=0'
+  'LEFTHOOK_EXCLUDE'
+  '(^|[[:space:]])SKIP='                           # pre-commit framework skip
+  'core\.hooksPath'
+  'ALLOW_TEST_DELETION'
+  'HUMAN_CONFIRM'                              # human-only acknowledgements (review/sync --reset)
+  'gh[[:space:]]+signoff'
+  'CI_BASE_BRANCH='                                # moving the comparison base
+  'GITLEAKS_LOG_OPTS='
+  'rm[[:space:]]+(-[a-zA-Z]+[[:space:]]+)*\.git/hooks'
+  'aidoc-ci/'                                      # review/sync state (read via: task review -- --status, task sync -- --check)
+  '(review|sync)[^;&|]*--reset'                    # round/attempt counter resets are human decisions
+  # merge-conflict rules (canon: https://github.com/vladm3105/aidoc-hybrid-ci/blob/main/docs/CONFLICT_RESOLUTION.md): merge-only, no force-push, no wholesale side-taking
+  'git[^;&|]*[[:space:]]push[^;&|]*[[:space:]](--force[a-z-]*|-[a-zA-Z]*f[a-zA-Z]*)([[:space:]=]|$)'
+  'git[^;&|]*[[:space:]]push[^;&|]*[[:space:]]\+[^[:space:]]'   # +refspec = force
+  'git[^;&|]*[[:space:]](checkout|restore)[^;&|]*[[:space:]]--(ours|theirs)'
+  'git[^;&|]*[[:space:]](merge|pull)[^;&|]*[[:space:]](-X[[:space:]]*|--strategy-option[=[:space:]])(ours|theirs)'
+  'git[^;&|]*[[:space:]](merge|pull)[^;&|]*[[:space:]](-s[[:space:]]*|--strategy[=[:space:]])ours'
+  'gh[[:space:]]+api[^;&|]*statuses'               # posting commit statuses (review/signoff) by hand
+  'curl[^;&|]*(-X[[:space:]]*POST|--request[[:space:]]+POST|-d[[:space:]]|--data)[^;&|]*/statuses/'  # Gitea twin: posting commit statuses by hand
+  'gh[[:space:]]+pr([[:space:]]+-[^[:space:];|&]+([[:space:]]+[^[:space:];|&]+)?)*[[:space:]]+merge([[:space:]]|$)'  # merging is done by GitHub auto-merge via task autoship
+  'gh[[:space:]]+pr([[:space:]]+-[^[:space:];|&]+([[:space:]]+[^[:space:];|&]+)?)*[[:space:]]+review[^;&|]*--approve'
+  'rulesets[^;&|]*--apply'                         # branch protection is a human decision
+  'gh[[:space:]]+api[^;&|]*(rulesets|branches/[^[:space:]]*/protection)'
+)
+block_ship="${CI_GUARD_BLOCK_SHIP:-}"
+if [[ -z $block_ship ]] && root=$(ci_root); then block_ship=$(cd "$root" && ci_config GUARD_BLOCK_SHIP 0); fi
+[[ $block_ship == 1 ]] && patterns+=('task[[:space:]]+([^;&|]*[[:space:]])?(ship|promote)([[:space:]]|$)')
+# Direct script invocation must not dodge the task-level block above.
+[[ $block_ship == 1 ]] && patterns+=('(\.ci/bin/|bash[[:space:]]+[^;&|]*\.ci/bin/)(ship|promote)([[:space:]]|$)')
+
+command -v grep >/dev/null || { echo "guard: grep is required to match block patterns" >&2; exit 2; }
+for p in "${patterns[@]}"; do
+  if grep -Eq -- "$p" <<<"$cmd"; then
+    {
+      echo "Blocked by aidoc-local-flow-ci guard (matched: $p)."
+      echo "Do not bypass hooks or self-certify. Run 'task ci', read .ci-out/summary.json, fix the root cause."
+      echo "If you are blocked, stop and report to the human. See AGENTS.md."
+    } >&2
+    exit 2
+  fi
+done
+exit 0

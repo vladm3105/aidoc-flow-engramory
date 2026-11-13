@@ -1,0 +1,228 @@
+# quick-gates — v3 caller consolidating the PR lint checks into ONE job.
+#
+# A `workflow_call` reusable always gets its own runner, so each check paid a
+# full provisioning cycle: on aidoc-flow-operations the audit-trail reusable took
+# ~167s to run a grep, almost entirely provisioning. Composite actions run in
+# THIS job and share one cycle.
+#
+# ── SCOPE: three checks, not four or five (PLAN-025 §3.2d) ───────────────────
+# pre-commit + markdownlint + links. Deliberately NOT here:
+#
+#   audit-trail  — needs `types: [… labeled, unlabeled]` so its skip-label
+#                  escape hatch can fire (D32). Adding those types would re-run
+#                  lint on every label write, which ai-review/labeler/auto-merge
+#                  do routinely. No single `types:` satisfies both, and
+#                  audit-trail additionally needs a job-level event refusal (D31)
+#                  and the D36 credential asymmetry — three defenses for one
+#                  provisioning cycle. It stays its own workflow.
+#   composition  — fires on pull_request_review + workflow_run, never
+#                  pull_request. Only same-trigger checks can share a job.
+#   secret-scan  — fork-visible by design; every scanner runs on the self-hosted
+#                  pool (self-hosted runners only, #49).
+#
+# ── D4: THE JOB ID IS THE REQUIRED STATUS CONTEXT ────────────────────────────
+# Renders as `quick-gates`. Renaming the job id silently un-satisfies
+# branch protection, which then never fires again. Migrate add-new → observe
+# green → remove old → delete old callers, reading BOTH live protection AND
+# rulesets (D19, D40) — never the branch-protection templates: canon's own
+# `main` requires `call / markdownlint` and `suite`, neither of which appears in
+# any template.
+#
+# ── SELF-HOSTED ONLY — safe because repositories are PRIVATE ─────────────────
+# This job runs `pre-commit` over the PR's own files, i.e. it executes PR code.
+# On a PRIVATE repo there is no fork-PR surface, so the ephemeral pool is both
+# safe and REQUIRED: GitHub-hosted minutes are billing exposure and against
+# workspace policy (self-hosted runners only, #49). A PUBLIC repository is out
+# of that policy: a self-hosted runner would execute fork PR code. Keep repos
+# private; install.sh warns when the target is public.
+name: quick-gates
+
+'on':
+  pull_request:
+  # POST-MERGE COVERAGE. Every v2 caller these replace fired on both
+  # `pull_request` and `push: main`, and dropping it was silent. Two losses:
+  # a merge that lands broken (admin merge, merge-queue skew) is never caught,
+  # and — the one that matters for the scanners — Code Scanning alerts are
+  # anchored to the DEFAULT BRANCH, so with no push-to-main run the SARIF
+  # baselines never refresh: fixed alerts stay open forever and new ones never
+  # appear outside PR context. It also makes the `push` arm
+  # of the D3 concurrency allowlist below reachable rather than dead code.
+  push:
+    branches: ["dev"]
+
+# D9: one job, one grant — a composite action has no declaration of its own, so
+# this is the whole ceiling. None of the three checks writes.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # D3 / CI-0025 / REPO_STANDARDS §23: ALLOWLIST of code-changing events, never a
+  # blanket cancel. This job feeds a REQUIRED context. Every other event fires at
+  # the CURRENT head SHA, and a cancelled required check is NOT success — it is
+  # retained alongside any later success, so the rollup stays FAILURE and the PR
+  # becomes --admin-only. Expressed as `==` so an empty `github` context yields
+  # false and cancels nothing; a `!=` denylist would cancel everything in that
+  # degraded state.
+  cancel-in-progress: >-
+    ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      || ((github.event_name == 'pull_request' || github.event_name == 'pull_request_target')
+          && contains(fromJSON('["opened","synchronize"]'), github.event.action)) }}
+
+jobs:
+  quick-gates:
+    name: quick-gates
+    runs-on: [self-hosted, ci, ephemeral]
+    # PLAN-025 §3.2b: a consolidated job's timeout is the SUM of the budgets it
+    # absorbs (pre-commit 15 + markdownlint 10 + links 20), never the max and
+    # never a round number picked by eye. An earlier draft shipped 15 — BELOW
+    # what links alone needs — so a slow lychee run would have killed the two
+    # checks that had already passed.
+    #
+    # SUM + HEADROOM, because the sum alone budgets zero for provisioning. The
+    # `timeout N` wrappers INSIDE the actions already total exactly 45 (900+600+
+    # 1200s), so at 45 the job-level kill lands at or before the inner timeouts —
+    # and the inner ones are the only path that prints "infrastructure failure,
+    # not a clean run". Worse, a job-level timeout CANCELS the `if: always()`
+    # verdict step, so collect-then-fail is lost precisely in the case it exists
+    # for. The extra 10 covers checkout, setup-python, setup-node and
+    # `npm install -g`. Padding costs nothing: the runner is released on
+    # completion either way.
+    timeout-minutes: 55
+    steps:
+      # ONE checkout for all three actions — this is where the saving comes from.
+      #
+      # NO `ref:` — deliberately. On `pull_request` the default is the MERGE
+      # commit (base+head), which is what the v2 pre-commit, markdown-lint and
+      # links reusables lint. An earlier draft pinned
+      # `github.event.pull_request.head.sha` here, copied from audit-trail; that
+      # would have linted the branch tip instead, so a PR whose merge result is
+      # dirty but whose tip is clean would go GREEN. Weaker, not stricter — and
+      # it is why audit-trail is no longer in this job: it is the one check that
+      # genuinely needs the head SHA, and it needs the credential too (D36).
+      - name: Checkout (merge commit — parity with the v2 reusables)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: false
+          fetch-depth: 0
+
+      # EVERY input explicit on every step, none left to a default. This is a
+      # REQUIRED gate: a default that changes in a later release would change
+      # what the gate does, silently. The rule was applied to `links` first and
+      # not to its siblings — which is how the markdownlint globs went missing.
+      # §3.2c COLLECT-THEN-FAIL. `id:` + `continue-on-error: true` on every check,
+      # then one verdict step. Without this, a composite step failure aborts the
+      # job and the FIRST failing check hides the rest — in v2's job-per-check
+      # model every verdict arrived together, and losing that is what makes a
+      # consolidated job unpleasant to work with.
+      #
+      # `continue-on-error` is supported HERE because these are job steps.
+      # §3.2a defers it INSIDE a composite action as unverified; the two are
+      # different surfaces, and that distinction is what makes this shape work.
+      - name: Lint / format / security hooks
+        id: precommit
+        if: hashFiles('.pre-commit-config.yaml') != ''
+        continue-on-error: true
+        uses: ./.github/actions/pre-commit
+        with:
+          config-path: .pre-commit-config.yaml
+
+      # The exclusions are v2 parity and load-bearing: without them cli2 walks
+      # `node_modules`, `vendor` and `.git`, so any repo with dependencies gets a
+      # slow scan and findings in files nobody owns. An earlier draft passed
+      # nothing and inherited the bare `**/*.md` default, dropping all three —
+      # the same silent-default defect the final review caught on `links`.
+      - name: markdownlint
+        id: markdownlint
+        continue-on-error: true
+        uses: ./.github/actions/markdownlint
+        with:
+          # Same file set as local `task check` (`universal markdown` excludes .ci/** and
+          # .ci-config LINT_EXCLUDE): add one `#<path>/**` line per LINT_EXCLUDE entry.
+          globs: |
+            **/*.md
+            #.ci/**
+            #node_modules/**
+            #vendor/**
+            #.git/**
+            #.agents/**
+            #.unified-test-suite/**
+          fail-on-findings: 'true'
+
+      # EVERY input passed explicitly, none left to a default. This is a
+      # REQUIRED gate; a default that changes in a later release would change
+      # what the gate does silently. An earlier draft passed only the token and
+      # inherited `mode: external` + `fail-on-error: true`, which would have made
+      # the blocking PR check do live external network link-checking.
+      #
+      # `mode: internal` (--offline) is the v2 PR-blocking posture. External link
+      # rot is time-based, not change-based, so it belongs on the weekly
+      # `links-external.yml` caller, non-blocking — NOT here.
+      #
+      # NO `github-token` HERE, deliberately — and this is a change from the
+      # first draft, which copied the input from `links-external`. That caller
+      # needs it: `mode: external` makes real requests and hits github.com's
+      # anonymous rate limits without one (PLAN-025 §3.2a). This one runs
+      # `mode: internal`, which adds `--offline` (`actions/links/action.yml:110`),
+      # so lychee makes no network request at all and the token is never read.
+      #
+      # It is worth removing rather than leaving harmless, because v3 changed
+      # what "harmless" means. In v2, `pre-commit` and `links` were separate
+      # reusables on separate runners. Consolidating them puts a credential in
+      # the same job — same workspace, same PATH, same process namespace — as a
+      # step that executes the PR's OWN `.pre-commit-config.yaml`, where a
+      # `repo: local` hook's `entry:` is arbitrary code. On a public repo the
+      # fork token is read-only under `permissions: contents: read`, so this is
+      # least-privilege rather than a hole; an unused credential next to
+      # attacker-controlled code is still not worth keeping.
+      - name: links
+        id: links
+        continue-on-error: true
+        uses: ./.github/actions/links
+        with:
+          mode: internal
+          fail-on-error: 'true'
+          config-file: .lychee.toml
+
+      # THE VERDICT. Fails CLOSED (D6, and CI-0026: a fail-closed guard that
+      # cannot fail open is only a cost). Any outcome that is not exactly
+      # `success` fails the job — including `skipped` and `cancelled`, and
+      # including the empty string a step that never ran produces.
+      #
+      # `skipped` matters specifically: P3a establishes that a skipped JOB
+      # satisfies a required context, so treating a skipped STEP as a pass would
+      # launder a crashed check into a green gate by the same mechanism.
+      #
+      # `if: always()` so a cancelled or failed predecessor still reaches this.
+      - name: verdict
+        if: always()
+        shell: bash
+        env:
+          R_PRECOMMIT: ${{ steps.precommit.outcome }}
+          R_MARKDOWNLINT: ${{ steps.markdownlint.outcome }}
+          R_LINKS: ${{ steps.links.outcome }}
+        run: |
+          set -euo pipefail
+          rc=0
+          for chk in PRECOMMIT MARKDOWNLINT LINKS; do
+            var="R_${chk}"; out="${!var-}"
+            case "$out" in
+              success) printf '  %-14s %s\n' "$chk" "pass" ;;
+              skipped)
+                if [ "$chk" = "PRECOMMIT" ]; then
+                  printf '  %-14s %s\n' "$chk" "skipped (no .pre-commit-config.yaml)"
+                else
+                  printf '::error::%s skipped unexpectedly — failing closed\n' "$chk"
+                  rc=1
+                fi
+                ;;
+              failure) printf '::error::%s failed\n' "$chk"; rc=1 ;;
+              *)
+                printf '::error::%s did not report a verdict (outcome=%s) — failing closed\n' \
+                  "$chk" "${out:-<empty>}"
+                rc=1
+                ;;
+            esac
+          done
+          exit "$rc"

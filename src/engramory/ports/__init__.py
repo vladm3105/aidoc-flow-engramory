@@ -17,6 +17,7 @@ The eight ports:
 Identity / auth is deliberately NOT a core port: it is enforced at the MCP gateway via
 Keycloak/OIDC (dev) or Identity Platform / Entra ID (cloud). See docs/ARCHITECTURE.md.
 """
+
 from __future__ import annotations
 
 from .cache import CachePort

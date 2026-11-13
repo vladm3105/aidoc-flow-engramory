@@ -1,0 +1,16 @@
+# aidoc-hybrid-ci git hooks. Hooks call `task` / `.ci/bin` / `scripts/` only.
+pre-commit:
+  parallel: true
+  commands:
+    check:
+      run: task check
+    secrets:
+      run: bash .ci/bin/secrets --staged
+
+pre-push:
+  commands:
+    guard:
+      # lefthook runs this under /bin/sh (dash on Debian/Ubuntu): POSIX `[ ]` only. git passes
+      # the remote/URL as {1}/{2} and the pushed refs on stdin, which the guard reads.
+      use_stdin: true
+      run: if [ -f scripts/pre_push_guard.sh ]; then bash scripts/pre_push_guard.sh {1} {2}; else task ci; fi

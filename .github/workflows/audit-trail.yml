@@ -1,17 +1,61 @@
-# audit-trail — consumer caller of aidoc-flow-ci's audit-trail-check.yml
-# reusable per PLAN-002 §5.5 Wave 3 (product-code tier).
+# aidoc-hybrid-ci audit-trail workflow
+# OPS-0069 audit-trail phrase gate — verifies that every non-exempt PR carries
+# the OPS-0065/0069 audit-trail phrase in at least one commit message body.
+# Renders as `audit-trail`.
 
 name: audit-trail
 
-on:
+'on':
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: >-
+    ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      || ((github.event_name == 'pull_request' || github.event_name == 'pull_request_target')
+          && contains(fromJSON('["opened","synchronize"]'), github.event.action)) }}
+
+permissions:
+  contents: read
+  pull-requests: read
 
 jobs:
-  call:
-    uses: vladm3105/aidoc-flow-ci/.github/workflows/audit-trail-check.yml@ci/v1.9.5
-    with:
-      runner_labels: '"ubuntu-latest"'
-    permissions:
-      contents: read
-      pull-requests: read
+  audit-trail:
+    name: audit-trail
+    runs-on: [self-hosted, ci, ephemeral]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: 0
+
+      # skip-audit-trail override (LABELS.md): the label alone is never enough —
+      # a commit body in the PR must also carry the [skip-audit-trail] marker,
+      # so the override is attributable in history, not just mutable metadata.
+      - name: Check skip-audit-trail override
+        id: skip
+        if: contains(github.event.pull_request.labels.*.name, 'skip-audit-trail')
+        shell: bash
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if git log --format=%B "origin/$BASE_REF..HEAD" | grep -qF '[skip-audit-trail]'; then
+            echo "audit-trail: skip-audit-trail override active (label + commit-body marker)"
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "audit-trail: skip-audit-trail label present but no [skip-audit-trail] marker in any commit body" >&2
+            exit 1
+          fi
+
+      - name: Validate audit trail phrase
+        if: steps.skip.outputs.skip != '1'
+        shell: bash
+        run: |
+          if [[ -f .ci/bin/audit-trail ]]; then
+            bash .ci/bin/audit-trail
+          else
+            echo "audit-trail: .ci/bin/audit-trail not found" >&2
+            exit 1
+          fi

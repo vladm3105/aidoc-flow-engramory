@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "aidoc-local-flow-ci review verdict (reviewer output)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "summary", "findings"],
+  "properties": {
+    "verdict": { "type": "string", "enum": ["PASS", "REVISE", "BLOCK"] },
+    "summary": { "type": "string", "minLength": 1 },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["lens", "severity", "path", "line", "body", "fix"],
+        "properties": {
+          "lens": { "type": "string" },
+          "severity": { "type": "string", "enum": ["critical", "medium", "low", "acknowledged"] },
+          "path": { "type": "string" },
+          "line": { "type": "integer", "minimum": 0 },
+          "body": { "type": "string" },
+          "fix": { "type": "string" }
+        }
+      }
+    }
+  },
+  "x-consistency": [
+    "PASS must not contain critical or medium findings (coerced to REVISE)",
+    "REVISE must contain at least one critical or medium finding (otherwise invalid)",
+    "BLOCK must have a non-empty summary stating the dissent"
+  ]
+}

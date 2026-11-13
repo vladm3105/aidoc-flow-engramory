@@ -1,0 +1,204 @@
+# =============================================================================
+#  CHG-006: Retire aidoc-flow-interlog and Consolidate Experience Pipeline
+# =============================================================================
+#  Flow: F2 / direct (experience pipeline & interlog retirement) · Level: C3 · Entry gate: GATE-CODE
+#  Semver: minor (additive core experience domain, NatsEventsAdapter, provenance propagation, CLI)
+#  Plan: plans/PLAN-020_interlog-retirement-and-experience-pipeline.md
+# =============================================================================
+
+id: CHG-006
+doc_id: CHG-006
+title: "Retire aidoc-flow-interlog and Consolidate Deterministic Agent Experience Pipeline"
+
+metadata:
+  document_type: "chg-document"
+  layer: 9
+  purpose: governance
+  last_updated: "2026-11-10"
+  framework_version: "0.96.4"
+  change_level:
+    value: C3
+  change_source:
+    value: direct
+
+document_control:
+  project_name: "aidoc-flow-engramory"
+  document_id: "CHG-006"
+  version: "1.0"
+  status: Completed
+  author: "AI coding agent + owner"
+  created_date: "2026-11-10"
+  last_updated: "2026-11-10"
+  framework_version: "0.96.4"
+  revision_history:
+    - version: "1.0"
+      date: "2026-11-10"
+      author: "AI coding agent"
+      description: "Initial C3 change request for retiring aidoc-flow-interlog and consolidating experience pipeline contracts into platform-engramory"
+
+change_control:
+  chg_id: "CHG-006"
+  status: Completed
+  change_level: C3
+  change_source: direct
+  entry_gate: GATE-CODE
+  semver_impact: minor
+  version_action: none
+  author: "AI coding agent + owner"
+  date_proposed: "2026-11-10T12:30:00Z"
+  date_approved: "2026-11-10T13:26:00Z"
+  date_implemented: "2026-11-10T13:30:00Z"
+  supersedes: []
+  decision: "DEC-CHG-006"
+  decision_title: "Retire aidoc-flow-interlog and absorb its 4 domain contracts into platform-engramory and platform-observability-monitoring"
+  decision_rationale: "Consolidate deterministic UUIDv5 event deduplication, OriginProvenance, the 9 canonical milestone event kinds, and closed-loop learning effectiveness signals into platform-engramory (with NatsEventsAdapter) and platform-observability-monitoring, eliminating the legacy GitTransport event bus."
+
+change_description:
+  summary: "Implement PLAN-020 phases 1-6 to absorb aidoc-flow-interlog domain contracts into platform-engramory and platform-observability-monitoring and formally archive aidoc-flow-interlog."
+  why: "Eliminate architectural overlap and Git push contention while preserving deterministic event deduplication, origin provenance, and closed-loop learning telemetry."
+  trigger: "User prompt: review aidoc-flow-interlog vs platform-observability-monitoring and implement all 3 recommendations."
+  emergency_exclusion: "Not emergency: planned architecture consolidation and legacy spoke retirement."
+  scope:
+    in:
+      - "src/engramory/core/experience.py"
+      - "src/engramory/workers/distillation.py"
+      - "src/engramory/workers/runner.py"
+      - "src/engramory/adapters/dev/events_nats.py"
+      - "src/engramory/adapters/factory.py"
+      - "src/engramory/cli.py"
+      - "sdd/06_SPEC/SPEC-04_distillation_engine.yaml"
+      - "sdd/06_SPEC/SPEC-06_ports_portability.yaml"
+      - "plans/PLAN-020_interlog-retirement-and-experience-pipeline.md"
+      - "docs/sdd/09_CHG/CHG-006_interlog_retirement_and_experience_pipeline.yaml"
+      - "tests/unit/test_experience_pipeline.py"
+      - "tests/conformance/test_adapters.py"
+    out:
+      - "PostgreSQL schema migrations (existing JSONB metadata and provenance columns suffice)"
+      - "Cloud adapters (gcp/azure - deferred to BRD-02)"
+
+seed_scope:
+  layer: 9
+  affected_documents:
+    - "docs/sdd/09_CHG/CHG-006_interlog_retirement_and_experience_pipeline.yaml"
+    - "sdd/06_SPEC/SPEC-04_distillation_engine.yaml"
+    - "sdd/06_SPEC/SPEC-06_ports_portability.yaml"
+
+decision:
+  decision_id: "DEC-CHG-006"
+  title: "Retire aidoc-flow-interlog and absorb its 4 domain contracts into platform-engramory and platform-observability-monitoring"
+  status: "Ratified"
+  context: "aidoc-flow-interlog duplicated operational telemetry (now in platform-observability-monitoring) and agent memory ingestion (now in platform-engramory + platform-nats), but held valuable domain schemas for deterministic UUIDv5 deduplication, OriginProvenance, 9 milestone event kinds, and learning effectiveness scoring."
+  choice: "Absorb the 4 domain contracts into platform-engramory (core/experience.py, NatsEventsAdapter, distillation provenance propagation) and platform-observability-monitoring (ClickHouse views + two-plane architecture docs), then archive aidoc-flow-interlog."
+  consequences: "Unified two-plane architecture (OTLP telemetry vs. NATS/MCP memory) with zero Git push contention and end-to-end W3C trace_id correlation."
+  alternatives_considered:
+    - option: "Retain aidoc-flow-interlog as an intermediary SDK and GitTransport hub"
+      rationale_rejected: "Creates a 5-attempt git fetch/rebase/push bottleneck on main and duplicates OTLP and NATS transport layers."
+
+impact_assessment:
+  affected_layers:
+    - layer: "SPEC"
+      artifacts:
+        - "sdd/06_SPEC/SPEC-04_distillation_engine.yaml"
+        - "sdd/06_SPEC/SPEC-06_ports_portability.yaml"
+      impact: "Documents ExperienceEvent, OriginProvenance propagation in reflect(), and NatsEventsAdapter for EventsPort."
+    - layer: "CODE"
+      artifacts:
+        - "src/engramory/core/experience.py"
+        - "src/engramory/adapters/dev/events_nats.py"
+        - "src/engramory/workers/distillation.py"
+        - "src/engramory/workers/runner.py"
+        - "src/engramory/adapters/factory.py"
+        - "src/engramory/cli.py"
+      impact: "Adds stdlib-only experience contracts, NatsEventsAdapter, worker event ingestion, and CLI memory ingest-event."
+  cascade_direction: "downward"
+  risk_level: "Low"
+
+implementation:
+  steps:
+    - step: "Author PLAN-020 and CHG-006 governance artifacts"
+      phase: "iplan_creation"
+      artifact: "plans/PLAN-020_interlog-retirement-and-experience-pipeline.md"
+      status: "Completed"
+    - step: "Implement core experience contracts, NatsEventsAdapter, worker ingestion, and tests"
+      phase: "code_implementation"
+      artifact: "src/engramory/core/experience.py"
+      status: "Completed"
+  artifacts_modified:
+    - id: "CHG-006"
+      file: "docs/sdd/09_CHG/CHG-006_interlog_retirement_and_experience_pipeline.yaml"
+      change_type: "created"
+    - id: "SPEC-04"
+      file: "sdd/06_SPEC/SPEC-04_distillation_engine.yaml"
+      change_type: "modified"
+    - id: "SPEC-06"
+      file: "sdd/06_SPEC/SPEC-06_ports_portability.yaml"
+      change_type: "modified"
+
+verification:
+  checks:
+    - check: "Verified planning deterministic gate (check_plan.py)"
+      result: "Pass"
+      method: "python3 .agents/skills/verified-planning/check_plan.py plans/PLAN-020_interlog-retirement-and-experience-pipeline.md"
+    - check: "Unit and conformance test suite"
+      result: "Pass"
+      method: "pytest -q"
+
+gate_approval:
+  gate: "GATE-CODE"
+  approved: true
+  approver: "vladm3105"
+  role: "Owner"
+  approval_date: "2026-11-10"
+  evidence: "PLAN-020 approved after 3 verified-planning review passes"
+  approved_scope_files:
+    - "src/engramory/core/experience.py"
+    - "src/engramory/adapters/dev/events_nats.py"
+    - "src/engramory/workers/distillation.py"
+    - "src/engramory/workers/runner.py"
+    - "src/engramory/adapters/factory.py"
+    - "src/engramory/cli.py"
+  conditions: []
+
+rollback_plan:
+  strategy: "revert-commit"
+  steps:
+    - "Revert feature/plan-020-interlog-retirement-and-experience-pipeline commit on dev branch"
+  estimated_effort: "5m"
+
+emergency_change:
+  emergency_id: null
+  incident_severity: null
+  fix_deployed: null
+  post_mortem_due: null
+  post_mortem_completed: false
+  post_hoc_gate: null
+
+glossary:
+  terms:
+    - term: "OriginProvenance"
+      definition: "Source provenance structure linking an experience event or distilled memory to repo, commit/pr/plan_id/chg_id/run_id, and optional W3C trace_id."
+    - term: "ExperienceEvent"
+      definition: "Canonical agent milestone event (one of 9 kinds) with deterministic UUIDv5 event_id deduplication."
+
+creation_checklist:
+  checks:
+    - id: 1
+      check: "Read every file you reference"
+      status: "Pass"
+    - id: 13
+      check: "SDD-first implementation order"
+      status: "Pass"
+    - id: 14
+      check: "CHG scope: governance, not implementation plan"
+      status: "Pass"
+    - id: 15
+      check: "Mandatory formal decision block"
+      status: "Pass"
+
+validation:
+  document_structure:
+    - id_match: "Verified CHG-006 matches filename"
+  decision_block:
+    - decision_present: "Verified DEC-CHG-006 present"
+  scope:
+    - governance_only: "Verified governance record completeness"

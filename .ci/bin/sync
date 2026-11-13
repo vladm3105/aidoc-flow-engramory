@@ -1,0 +1,413 @@
+#!/usr/bin/env bash
+# aidoc-local-flow-ci sync — bring a feature branch up to date with <remote>/<BASE_BRANCH> and resolve
+# merge conflicts (conflict protocol, canon: https://github.com/vladm3105/aidoc-hybrid-ci/blob/main/docs/CONFLICT_RESOLUTION.md). Merge-only: no rebase, no force-push.
+#
+#   sync --check              read-only prediction (JSON); exit 10 when conflicts would occur
+#   sync                      merge <remote>/<base>; class A/B resolved automatically, class C left for
+#                             the agent (exit 20), class D aborted and escalated (exit 30)
+#   sync --brief              base-side commits + hunks for every file awaiting resolution
+#   sync --continue [-m WHY]  verify the agent's resolution and commit the merge (-m required when a
+#                             file was resolved by taking one side wholesale)
+#   sync --abort              abandon the merge in progress
+#   sync --reset              HUMAN ONLY: reset the attempt counter after an escalation
+#   sync --all                batch-tend every open PR branch: merge <remote>/<base> into each,
+#                             retry red checks once, report JSON; never leaves a merge open and
+#                             never pushes (push via ship). Exit 0 all fresh · 10 attention needed
+# Exit: 0 ok · 10 conflicts predicted (--check) or attention needed (--all) · 20 agent
+# resolution pending · 30 escalated · 3 error
+set -uo pipefail
+# shellcheck source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+root=$(ci_root) || { echo "sync: not in a git repo" >&2; exit 3; }
+cd "$root" || exit 3
+
+die() { echo "sync: $*" >&2; exit 3; }
+mode=${1:-run}; shift || true
+if [[ $mode == --forge ]]; then CI_FORGE=${1:-}; shift || true; mode=${1:-run}; shift || true; fi
+[[ -z ${CI_FORGE:-} || $CI_FORGE == gitea || $CI_FORGE == github ]] || die "--forge needs gitea or github"
+base=$(ci_base_branch)
+branch=$(git branch --show-current)
+remote=$(ci_push_remote)
+gitdir=$(git rev-parse --absolute-git-dir)
+state_dir="$gitdir/aidoc-ci/sync"
+key=${branch//\//__}
+state="$state_dir/$key.json"
+snap="$state_dir/$key.stages"
+max_files=$(ci_config CONFLICT_MAX_FILES 10)
+max_attempts=$(ci_config CONFLICT_MAX_ATTEMPTS 2)
+read -r -a human_paths <<<"$(ci_list CONFLICT_HUMAN_PATHS "*/migrations/* migrations/*")"
+read -r -a union_files <<<"$(ci_list CONFLICT_UNION_FILES "CHANGELOG.md")"
+protected=(".ci/*" ".ci-config" ".ci-local/*" "Taskfile*.yml" "Taskfile*.yaml" "*/Taskfile*.yml" "*/Taskfile*.yaml"
+           "lefthook.yml" "mise.toml" ".mise.toml" ".github/*" ".gitea/*" ".claude/*" "AGENTS.md" ".ci-review/*")
+lockfiles="uv.lock Cargo.lock go.sum pnpm-lock.yaml package-lock.json poetry.lock"
+
+now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+attempts() { [[ -f $state ]] && jq -r '.attempts // 0' "$state" || echo 0; }
+save_state() { mkdir -p "$state_dir"; jq -n "$@" >"$state.tmp" && mv "$state.tmp" "$state"; }
+manifest_for() {  # lockfile -> manifest in the same directory
+  local d; d=$(dirname "$1"); [[ $d == . ]] && d="" || d="$d/"
+  case $(basename "$1") in
+    uv.lock|poetry.lock) echo "${d}pyproject.toml" ;; Cargo.lock) echo "${d}Cargo.toml" ;;
+    go.sum) echo "${d}go.mod" ;; pnpm-lock.yaml|package-lock.json) echo "${d}package.json" ;;
+  esac
+}
+regenerate() {  # minimal lockfile regeneration from the merged manifest, in the lockfile's directory
+  # Offline-first (#19): a local merge must never hang on registry access.
+  # poetry lock has no offline flag and stays online-capable (unchanged).
+  local f=$1 d rc=0; d=$(dirname "$f")
+  case $(basename "$f") in
+    uv.lock)           (cd "$d" && uv lock --quiet --offline) ;;
+    poetry.lock)       (cd "$d" && poetry lock --no-update) ;;
+    Cargo.lock)        (cd "$d" && cargo metadata --format-version 1 --offline >/dev/null) ;;
+    pnpm-lock.yaml)    (cd "$d" && pnpm install --lockfile-only --silent --offline) ;;
+    package-lock.json) (cd "$d" && npm install --package-lock-only --ignore-scripts --silent --offline) ;;
+    go.sum)            union_merge "$f" && (cd "$d" && GOPROXY=off go mod verify >/dev/null) ;;
+  esac; rc=$?
+  [[ $rc -eq 0 ]] || echo "sync: offline regeneration failed for '$f' — cold package cache? warm it with network access, then re-run sync" >&2
+  return $rc
+}
+union_merge() {  # line-union of ours/theirs over the merge base (append-only files)
+  local f=$1 t; t=$(mktemp -d)
+  git show ":1:$f" >"$t/base" 2>/dev/null || : >"$t/base"
+  git show ":2:$f" >"$t/ours" && git show ":3:$f" >"$t/theirs" || { rm -rf "$t"; return 1; }
+  git merge-file --union "$t/ours" "$t/base" "$t/theirs"; cp "$t/ours" "$f"; rm -rf "$t"
+}
+# Process substitution (not a pipeline): only grep's status decides. As a pipeline under
+# pipefail this was racy — grep -q's early exit SIGPIPEs head/git and fails text files.
+is_text_stage() { grep -Iq . < <(git show ":$1:$2" 2>/dev/null | head -c 8000) 2>/dev/null || [[ -z $(git show ":$1:$2" 2>/dev/null | head -c1) ]]; }
+is_submodule() {  # true when <path> is a gitlink (stage-aware) or a .gitmodules entry
+  local f=$1
+  git ls-files -s -- "$f" 2>/dev/null | grep -q '^160000 ' && return 0
+  [[ -f .gitmodules ]] && git config -f .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null \
+    | cut -d' ' -f2- | grep -qxF -- "$f" && return 0
+  return 1
+}
+predict() {  # sets: up_to_date, predicted[] (conflicting paths)
+  git fetch "$remote" "$base" --quiet || die "cannot fetch $remote/$base"
+  predicted=()
+  if git merge-base --is-ancestor "$remote/$base" HEAD; then up_to_date=1; return; fi
+  up_to_date=0
+  local out rc
+  out=$(git merge-tree --write-tree --name-only --no-messages HEAD "$remote/$base" 2>/dev/null); rc=$?
+  [[ $rc -le 1 ]] || die "git merge-tree failed (git >= 2.38 required)"
+  [[ $rc -eq 1 ]] && mapfile -t predicted < <(tail -n +2 <<<"$out" | sed '/^$/d')
+  return 0
+}
+path_class() {  # class by path only: D-submodule | D-protected | D-human | B-lock | B-union | C
+  local f=$1 m
+  is_submodule "$f" && { echo "D:submodule conflict"; return; }
+  ci_glob_match "$f" "${protected[@]}" && { echo "D:CI/governance configuration"; return; }
+  [[ ${#human_paths[@]} -gt 0 ]] && ci_glob_match "$f" "${human_paths[@]}" && { echo "D:CONFLICT_HUMAN_PATHS"; return; }
+  if [[ " $lockfiles " == *" $(basename "$f") "* ]]; then
+    m=$(manifest_for "$f")
+    if [[ " ${all_conflicts[*]:-} " == *" $m "* ]]; then echo "C:lockfile with conflicting manifest (resolve the manifest; the lockfile is regenerated on --continue)"; return; fi
+    echo "B:regenerate"; return
+  fi
+  [[ ${#union_files[@]} -gt 0 ]] && ci_glob_match "$f" "${union_files[@]}" && { echo "B:union"; return; }
+  echo "C:both sides edited"
+}
+label_pr_num() {  # NUM NAME DESC [COMMENT] [COLOR] — label + optional comment
+  forge_ensure_label "$2" "${5:-B60205}" "$3"
+  forge_label_add "$1" "$2" "${5:-}" >/dev/null 2>&1 || true
+  [[ -n ${4:-} ]] && forge_pr_comment "$1" "$4" >/dev/null 2>&1 || true
+}
+label_pr() {  # NAME DESC [COMMENT] — the current branch's PR
+  local num
+  num=$(forge_pr_number 2>/dev/null) || return 0
+  label_pr_num "$num" "$@"
+}
+mode_all() {  # batch-tend every open PR onto <remote>/<base>; JSON summary on stdout
+  # The recursive per-branch sync is a child process: export the resolved forge
+  # so it cannot re-sniff a different one mid-batch (D5 repos: branches without
+  # an upstream would sniff github and merge the wrong remote's base).
+  CI_FORGE="$(ci_forge)"; export CI_FORGE
+  [[ -n $branch ]] || die "detached HEAD"
+  [[ -z $(git status --porcelain) ]] || die "working tree is dirty — commit or stash first"
+  git rev-parse -q --verify MERGE_HEAD >/dev/null && die "a merge is already in progress (finish it first)"
+  local start_branch=$branch
+  git fetch "$remote" "$base" --quiet || die "cannot fetch $remote/$base"
+  local prs
+  prs=$(forge_pr_list 2>/dev/null) || die "cannot list open PRs ($(ci_forge))"
+  local promo
+  promo=" $base $(ci_list PROMOTION_BRANCHES "") "
+  local occupied results="[]" attention=0
+  occupied=$(git worktree list --porcelain 2>/dev/null | awk '/^branch /{print $2}' | sed 's#^refs/heads/##')
+  local pr num head out rc st sha view
+  while read -r pr; do
+    num=$(jq -r .number <<<"$pr"); head=$(jq -r .head <<<"$pr")
+    record() {  # OUTCOME DETAIL [ATTENTION] — append one result row
+      results=$(jq -c --arg n "$num" --arg h "$head" --arg o "$1" --arg d "$2" \
+        '. + [{pr:($n|tonumber), branch:$h, outcome:$o, detail:$d}]' <<<"$results")
+      [[ ${3:-0} == 1 ]] && attention=1
+    }
+    if jq -e '.labels | index("conflict:human")' <<<"$pr" >/dev/null; then
+      record skipped-escalated "conflict:human already set" 1; continue
+    fi
+    if [[ $promo == *" $head "* ]]; then record skipped-promotion "promotion PR (server-side merge)"; continue; fi
+    if ! git show-ref -q --verify "refs/heads/$head"; then record skipped-no-local-branch "no local branch"; continue; fi
+    if [[ $head != "$start_branch" ]] && grep -qxF "$head" <<<"$occupied"; then
+      record skipped-worktree "checked out in another worktree" 1; continue
+    fi
+    if [[ -n $(git status --porcelain) ]]; then
+      record batch-stopped "tree went dirty — resolve, then re-run" 1; break
+    fi
+    if [[ $head != "$(git branch --show-current)" ]]; then
+      git checkout -q "$head" 2>/dev/null || { record checkout-failed "cannot checkout" 1; continue; }
+    fi
+    echo "sync --all: tending PR #$num ($head)" >&2
+    out=$(bash "$0" 2>&1); rc=$?
+    if [[ $rc -eq 20 ]]; then  # class C: probe and retreat — never leave a merge open
+      git merge --abort 2>/dev/null || true
+      st="$gitdir/aidoc-ci/sync/${head//\//__}.json"
+      [[ -f $st ]] && jq '.status = "deferred-batch"' "$st" >"$st.tmp" && mv "$st.tmp" "$st"
+      record needs-agent "class C: run task sync on this branch" 1; continue
+    elif [[ $rc -eq 30 ]]; then
+      record escalated "class D (see the conflict:human PR comment)" 1; continue
+    elif [[ $rc -ne 0 ]]; then
+      record error "$(tail -n1 <<<"$out")" 1; continue
+    fi
+    if [[ $out != *"up to date"* ]]; then
+      # Just merged locally (a batch never pushes): no remote checks exist for
+      # the new HEAD yet, so judge nothing — the statuses on the old SHA are
+      # superseded, and retrying them would re-verify a dead commit.
+      record ok "merged $remote/$base; ship to sign off"; continue
+    fi
+    view=$(forge_pr_view "$head" 2>/dev/null) || { record pr-gone "PR merged or closed mid-run"; continue; }
+    sha=$(jq -r .headRefOid <<<"$view")
+    st=$(forge_commit_status "$sha" 2>/dev/null) || st=unknown
+    case $st in
+      success|pending|missing)
+        record ok "already up to date; checks: $st" ;;
+      failure)
+        if jq -e '.labels | index("ci:auto-retried")' <<<"$pr" >/dev/null; then
+          record red-after-retry "checks red after the single auto-retry" 1
+        elif rid=$(forge_rerun_checks "$sha" 2>/dev/null); then
+          label_pr_num "$num" "ci:auto-retried" "Red checks auto-retried once by sync --all" "" "FBCA04"
+          if [[ $(ci_forge) == gitea ]]; then
+            record retried "reran run $rid (all jobs — Gitea 1.27 has no failed-only rerun)"
+          else
+            record retried "reran failed jobs (run $rid)"
+          fi
+        elif [[ $? -eq 1 ]]; then
+          record red-unretryable "no completed failed run (external contexts?)" 1
+        else
+          record retry-error "rerun call failed (transport)" 1
+        fi ;;
+      *) record checks-unknown "status read failed (transport)" 1 ;;
+    esac
+  done < <(jq -c --arg b "$base" '.[] | select(.base == $b)' <<<"$prs")
+  git checkout -q "$start_branch" 2>/dev/null || die "cannot restore branch '$start_branch'"
+  jq . <<<"$results"
+  if [[ $attention -eq 0 ]]; then exit 0; else exit 10; fi
+}
+
+case $mode in
+  --all) mode_all ;;
+  --reset)
+    [[ ${HUMAN_CONFIRM:-0} == 1 ]] || { echo "sync: --reset is human-only: re-run with HUMAN_CONFIRM=1 to confirm you are the human" >&2; exit 3; }
+    if [[ -f $state ]]; then jq '.attempts = 0 | .status = "reset" | .human_confirmed = true' "$state" >"$state.tmp" && mv "$state.tmp" "$state"
+      echo "sync: attempt counter reset for '$branch' (human-confirmed)"
+    else echo "sync: nothing to reset — no sync state for '$branch'"; fi; exit 0 ;;
+  --abort)
+    if git rev-parse -q --verify MERGE_HEAD >/dev/null; then git merge --abort
+      [[ -f $state ]] && jq '.status = "aborted"' "$state" >"$state.tmp" && mv "$state.tmp" "$state"
+      echo "sync: merge aborted, tree restored"
+    else echo "sync: no merge in progress — nothing to abort"; fi; exit 0 ;;
+  --brief)
+    [[ -f $state ]] || die "no sync state for '$branch'"
+    old=$(jq -r .old_merge_base "$state"); tip=$(jq -r .base_tip "$state")
+    mapfile -t brief_c < <(jq -r '.files | to_entries[] | select(.value.class == "C") | .key' "$state")
+    for f in ${brief_c[@]+"${brief_c[@]}"}; do
+      echo "=== $f — base-side changes ($(git rev-parse --short "$old")..$(git rev-parse --short "$tip")) ==="
+      git log --oneline "$old..$tip" -- "$f" | sed 's/^/  commit /'
+      git diff --no-color "$old" "$tip" -- "$f"
+    done
+    exit 0 ;;
+esac
+
+[[ -n $branch ]] || die "detached HEAD"
+[[ $branch != "$base" ]] || die "sync runs on a feature branch, not $base"
+
+# Abort the merge, record the escalation, label the PR and exit 30. Needs
+# $files (class map), $reasons (markdown), $att, $old_base and $tip — the run
+# path holds them all; --continue reconstructs them from sync state.
+escalate() {
+  git merge --abort 2>/dev/null
+  save_state --arg b "$branch" --arg base "$base" --arg old "$old_base" --arg tip "$tip" --argjson files "$files" \
+    --argjson att "$att" --arg r "$reasons" --arg at "$(now)" \
+    '{schema:1, branch:$b, base:$base, old_merge_base:$old, base_tip:$tip, status:"escalated", class:"D", files:$files, one_sided:[], attempts:$att, reasons:$r, updated_at:$at}'
+  local md; md=$(mktemp)
+  { echo "### Merge conflict needs a human (aidoc-local-flow-ci sync)"; echo
+    echo "Branch \`$branch\` conflicts with \`$remote/$base\` (\`$(git rev-parse --short "$tip")\`). The merge was aborted; nothing was changed."
+    echo; printf '%s' "$reasons"; echo
+    echo "| File | Class | Reason |"; echo "| --- | --- | --- |"
+    jq -r 'to_entries[] | "| `\(.key)` | \(.value.class) | \(.value.reason) |"' <<<"$files"; } >"$md"
+  label_pr "conflict:human" "Merge conflict needs a human decision" "$md"
+  cat "$md"; rm -f "$md"
+  echo "sync: ESCALATED — stop and report to the human (canon: https://github.com/vladm3105/aidoc-hybrid-ci/blob/main/docs/CONFLICT_RESOLUTION.md#6-limits-and-escalation §6)."
+  exit 30
+}
+
+# --- --continue ---------------------------------------------------------------------------------
+if [[ $mode == --continue ]]; then
+  why=""; [[ ${1:-} == -m ]] && why=${2:-}
+  git rev-parse -q --verify MERGE_HEAD >/dev/null || die "no merge in progress (run task sync first)"
+  [[ -f $state && $(jq -r .status "$state") == awaiting-agent ]] || die "no sync awaiting resolution for '$branch'"
+  mapfile -t unmerged < <(git diff --name-only --diff-filter=U)
+  if [[ ${#unmerged[@]} -gt 0 ]]; then
+    echo "sync: still unresolved (edit, then git add): ${unmerged[*]}"; exit 20
+  fi
+  # mapfile + ${arr[@]+"${arr[@]}"}: spaced/glob paths stay intact; empty-safe under set -u.
+  mapfile -t cfiles < <(jq -r '.files | to_entries[] | select(.value.class == "C") | .key' "$state")
+  markers=""
+  for f in ${cfiles[@]+"${cfiles[@]}"}; do
+    [[ -f $f ]] && grep -nE '^(<<<<<<<|>>>>>>>)( |$)|^=======$' "$f" >/dev/null && markers+="$f "
+  done
+  [[ -z $markers ]] || { echo "sync: conflict markers remain in: $markers"; exit 20; }
+  one_sided=()
+  for f in ${cfiles[@]+"${cfiles[@]}"}; do
+    [[ -f $f ]] || continue
+    cur=$(ci_sha256 <"$f")
+    for side in ours theirs; do
+      s="$snap/$(tr '/' '_' <<<"$f").$side"
+      [[ -f $s && $(ci_sha256 <"$s") == "$cur" ]] && one_sided+=("$f=$side")
+    done
+  done
+  if [[ ${#one_sided[@]} -gt 0 && -z $why ]]; then
+    echo "sync: one-sided resolution (one side taken wholesale): ${one_sided[*]}"
+    echo "      If the other side is genuinely superseded, justify it: task sync -- --continue -m \"<why>\""
+    exit 20
+  fi
+  # lockfiles whose manifest conflicted: regenerate now that the manifest is resolved
+  mapfile -t regen < <(jq -r '.files | to_entries[] | select(.value.regen_after == true) | .key' "$state")
+  for f in ${regen[@]+"${regen[@]}"}; do
+    regenerate "$f" && git add "$f" && continue
+    echo "sync: lockfile regeneration failed for $f — escalating" >&2
+    files=$(jq -c --arg p "$f" '.files | .[$p].class = "D" | .[$p].reason = "lockfile regeneration failed after the manifest was resolved"' "$state")
+    att=$(attempts)
+    reasons="- \`$f\`: lockfile regeneration failed after the manifest was resolved"$'\n'
+    old_base=$(jq -r .old_merge_base "$state"); tip=$(jq -r .base_tip "$state")
+    escalate
+  done
+  c=$(jq '[.files | to_entries[] | select(.value.class == "C")] | length' "$state")
+  b=$(jq '[.files | to_entries[] | select(.value.regen_after == true)] | length' "$state")
+  subj="sync: C, $c files"; [[ $b -gt 0 ]] && subj+=", $b regenerated"
+  trailers=$(jq -r '.files | to_entries[] | "Conflict-Resolved: \(.key) \(.value.strategy)"' "$state")
+  git commit --quiet -m "Merge $remote/$base into $branch (aidoc-local-flow-ci $subj)" \
+    ${why:+-m "Resolution note: $why"} -m "$trailers" || die "merge commit failed (hooks?) — fix and re-run --continue"
+  os_json=$(printf '%s\n' "${one_sided[@]+"${one_sided[@]}"}" | jq -R 'select(length > 0)' | jq -sc .)
+  jq --arg c "$(git rev-parse HEAD)" --arg at "$(now)" --argjson os "$os_json" --arg why "$why" \
+    '.status = "resolved" | .merge_commit = $c | .one_sided = $os | .justification = $why | .updated_at = $at' "$state" >"$state.tmp" && mv "$state.tmp" "$state"
+  echo "sync: merge committed ($(git rev-parse --short HEAD)). Next: task ci, task review (the diff changed), then ship/autoship."
+  exit 0
+fi
+
+[[ -z $(git status --porcelain) ]] || die "working tree is dirty — commit or stash first"
+git rev-parse -q --verify MERGE_HEAD >/dev/null && die "a merge is already in progress (task sync -- --continue | --abort)"
+predict
+old_base=$(ci_merge_base)
+tip=$(git rev-parse "$remote/$base")
+
+# --- --check (read-only) --------------------------------------------------------------------------
+if [[ $mode == --check ]]; then
+  all_conflicts=("${predicted[@]+"${predicted[@]}"}")
+  rows="[]"
+  for f in "${predicted[@]+"${predicted[@]}"}"; do
+    c=$(path_class "$f")
+    rows=$(jq -c --arg p "$f" --arg c "${c%%:*}" --arg r "${c#*:}" '. + [{path:$p, predicted_class:$c, reason:$r}]' <<<"$rows")
+  done
+  behind=$(git rev-list --count "HEAD..$remote/$base")
+  jq -n --argjson up "$([[ $up_to_date == 1 ]] && echo true || echo false)" --argjson behind "$behind" --argjson rows "$rows" \
+    --argjson att "$(attempts)" --argjson maxa "$max_attempts" --argjson maxf "$max_files" '
+    { up_to_date: $up, behind: $behind, conflicts: $rows,
+      would_escalate: (any($rows[]; .predicted_class == "D") or ([$rows[] | select(.predicted_class == "C")] | length) > $maxf
+                       or ((([$rows[] | select(.predicted_class == "C")] | length) > 0) and $att >= $maxa)),
+      attempts: $att, max_attempts: $maxa }'
+  [[ ${#predicted[@]} -eq 0 ]] && exit 0 || exit 10
+fi
+
+[[ $mode == run ]] || die "unknown option $mode"
+if [[ $up_to_date == 1 ]]; then echo "sync: up to date with $remote/$base"; exit 0; fi
+
+# --- run: merge ------------------------------------------------------------------------------------
+git merge --no-ff --no-commit "$remote/$base" >/dev/null 2>&1
+mapfile -t all_conflicts < <(git diff --name-only --diff-filter=U)
+
+if [[ ${#all_conflicts[@]} -eq 0 ]]; then
+  git commit --quiet -m "Merge $remote/$base into $branch (aidoc-local-flow-ci sync: A, 0 files)" || { git merge --abort; die "merge commit failed"; }
+  save_state --arg b "$branch" --arg base "$base" --arg old "$old_base" --arg tip "$tip" --arg c "$(git rev-parse HEAD)" \
+    --argjson att "$(attempts)" --arg at "$(now)" \
+    '{schema:1, branch:$b, base:$base, old_merge_base:$old, base_tip:$tip, status:"merged", class:"A", files:{}, one_sided:[], attempts:$att, merge_commit:$c, updated_at:$at}'
+  echo "sync: class A — merged $remote/$base cleanly ($(git rev-parse --short HEAD)). Next: task ci; review stays valid only if the reviewed diff is unchanged."
+  exit 0
+fi
+
+files="{}" nd=0 nc=0 reasons=""
+for f in "${all_conflicts[@]}"; do
+  xy=$(git status --porcelain=v1 -- "$f" | head -n1 | cut -c1-2)
+  if [[ $xy != UU && $xy != AA ]]; then c="D:modify/delete, rename or add conflict ($xy)"
+  elif ! is_text_stage 2 "$f" || ! is_text_stage 3 "$f"; then c="D:binary file"
+  else c=$(path_class "$f"); fi
+  cls=${c%%:*}; why=${c#*:}
+  [[ $cls == D ]] && { nd=$((nd + 1)); reasons+="- \`$f\`: $why"$'\n'; }
+  [[ $cls == C ]] && nc=$((nc + 1))
+  files=$(jq -c --arg p "$f" --arg c "$cls" --arg r "$why" '. + {($p): {class:$c, reason:$r}}' <<<"$files")
+done
+att=$(attempts)
+(( nc > max_files )) && { nd=$((nd + 1)); reasons+="- $nc semantic conflicts exceed CONFLICT_MAX_FILES=$max_files"$'\n'; }
+(( nc > 0 && att >= max_attempts )) && { nd=$((nd + 1)); reasons+="- agent resolution attempts exhausted ($att/$max_attempts)"$'\n'; }
+
+(( nd > 0 )) && escalate
+
+# class B: automatic
+mapfile -t class_b < <(jq -r 'to_entries[] | select(.value.class == "B") | .key' <<<"$files")
+for f in ${class_b[@]+"${class_b[@]}"}; do
+  if [[ $(jq -r --arg p "$f" '.[$p].reason' <<<"$files") == union ]]; then
+    union_merge "$f" && git add "$f"; strat="union"
+  else
+    git checkout --theirs -- "$f" && regenerate "$f" && git add "$f" \
+      || { reasons+="- lockfile regeneration failed for \`$f\`"$'\n'; files=$(jq -c --arg p "$f" '.[$p].class = "D"' <<<"$files"); escalate; }
+    strat="base version + regenerate"
+  fi
+  files=$(jq -c --arg p "$f" --arg s "$strat" '.[$p].strategy = $s' <<<"$files")
+done
+# lockfiles whose manifest conflicts: take base now, regenerate on --continue
+mapfile -t class_c_lock < <(jq -r 'to_entries[] | select(.value.class == "C" and (.value.reason | startswith("lockfile"))) | .key' <<<"$files")
+for f in ${class_c_lock[@]+"${class_c_lock[@]}"}; do
+  git checkout --theirs -- "$f" && git add "$f"
+  files=$(jq -c --arg p "$f" '.[$p].class = "B" | .[$p].strategy = "base version + regenerate after manifest" | .[$p].regen_after = true' <<<"$files")
+  nc=$((nc - 1))
+done
+
+if (( nc == 0 )); then
+  n=$(jq 'length' <<<"$files")
+  trailers=$(jq -r 'to_entries[] | "Conflict-Resolved: \(.key) \(.value.strategy)"' <<<"$files")
+  mapfile -t regen_b < <(jq -r 'to_entries[] | select(.value.regen_after == true) | .key' <<<"$files")
+  for f in ${regen_b[@]+"${regen_b[@]}"}; do regenerate "$f" && git add "$f" || escalate; done
+  git commit --quiet -m "Merge $remote/$base into $branch (aidoc-local-flow-ci sync: B, $n files)" -m "$trailers" || { git merge --abort; die "merge commit failed"; }
+  save_state --arg b "$branch" --arg base "$base" --arg old "$old_base" --arg tip "$tip" --argjson files "$files" \
+    --arg c "$(git rev-parse HEAD)" --argjson att "$att" --arg at "$(now)" \
+    '{schema:1, branch:$b, base:$base, old_merge_base:$old, base_tip:$tip, status:"resolved", class:"B", files:$files, one_sided:[], attempts:$att, merge_commit:$c, updated_at:$at}'
+  echo "sync: class B — resolved automatically ($n file(s)). Next: task ci, task review (the diff changed)."
+  exit 0
+fi
+
+# class C: snapshot stages, hand over to the agent
+rm -rf "$snap"; mkdir -p "$snap"
+mapfile -t class_c < <(jq -r 'to_entries[] | select(.value.class == "C") | .key' <<<"$files")
+for f in ${class_c[@]+"${class_c[@]}"}; do
+  s="$snap/$(tr '/' '_' <<<"$f")"
+  git show ":1:$f" >"$s.base" 2>/dev/null || :
+  git show ":2:$f" >"$s.ours"; git show ":3:$f" >"$s.theirs"
+  files=$(jq -c --arg p "$f" '.[$p].strategy = "agent resolution"' <<<"$files")
+done
+att=$((att + 1))
+save_state --arg b "$branch" --arg base "$base" --arg old "$old_base" --arg tip "$tip" --argjson files "$files" \
+  --argjson att "$att" --arg at "$(now)" \
+  '{schema:1, branch:$b, base:$base, old_merge_base:$old, base_tip:$tip, status:"awaiting-agent", class:"C", files:$files, one_sided:[], attempts:$att, updated_at:$at}'
+echo "sync: class C — $nc file(s) need your resolution (attempt $att/$max_attempts):"
+jq -r 'to_entries[] | select(.value.class == "C") | "  - \(.key)"' <<<"$files"
+echo "  1. task sync -- --brief    (what the base side changed and why)"
+echo "  2. edit each file keeping BOTH intents, remove all markers, git add <file>"
+echo "  3. task sync -- --continue (add -m \"<why>\" only if one side is genuinely superseded)"
+exit 20

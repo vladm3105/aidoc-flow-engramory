@@ -1,0 +1,12 @@
+extends: existence
+message: "Avoid cross-chunk deictic reference '%s'. Name the exact section, command, or step ID so this chunk remains self-contained for RAG."
+level: error
+ignorecase: true
+tokens:
+  - the command above
+  - the script above
+  - as shown below
+  - in the previous section
+  - see above
+  - see below
+  - as mentioned earlier

@@ -1,16 +1,21 @@
 """Adapter factory — wires the active adapter set from ENGRAMORY_PROFILE.
 
 Only the ports with a consumer have adapters so far; the AdapterSet grows a
-field per port as dev adapters land (cache, events, llm, ...). gcp/azure sets
+field per port as dev adapters land (cache, events, llm, storage, ...). gcp/azure sets
 arrive with BRD-02 (cloud migration) and raise until then.
 """
+
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
 
+from engramory.adapters.dev.events_nats import NatsEventsAdapter
+from engramory.adapters.dev.graph_neo4j import Neo4jGraphAdapter
+from engramory.adapters.dev.llm_litellm import LiteLLMAdapter
+from engramory.adapters.dev.storage_pg import PgBlobStorageAdapter
 from engramory.adapters.dev.vector_pg import PgVectorAdapter
-from engramory.ports import VectorPort
+from engramory.ports import EventsPort, GraphPort, LLMPort, StoragePort, VectorPort
 
 PROFILES = ("dev", "gcp", "azure")
 
@@ -21,10 +26,30 @@ class AdapterSet:
 
     profile: str
     vector: VectorPort
+    llm: LLMPort
+    graph: GraphPort | None = None
+    events: EventsPort | None = None
+    storage: StoragePort | None = None
 
 
-def dev_adapters(dsn: str) -> AdapterSet:
-    return AdapterSet(profile="dev", vector=PgVectorAdapter(dsn))
+def dev_adapters(
+    dsn: str,
+    neo4j_uri: str | None = None,
+    nats_url: str | None = None,
+    blob_dsn: str | None = None,
+) -> AdapterSet:
+    # GAP-03: PgBlobStorageAdapter connects directly to PostgreSQL :5432 via
+    # ENGRAMORY_BLOB_DSN in stage/prod (bypassing PgBouncer :6432 transaction pooling),
+    # falling back to dsn in local dev when ENGRAMORY_BLOB_DSN is unset.
+    effective_blob_dsn = blob_dsn or os.environ.get("ENGRAMORY_BLOB_DSN") or dsn
+    return AdapterSet(
+        profile="dev",
+        vector=PgVectorAdapter(dsn),
+        llm=LiteLLMAdapter(),
+        graph=Neo4jGraphAdapter(uri=neo4j_uri),
+        events=NatsEventsAdapter(url=nats_url),
+        storage=PgBlobStorageAdapter(effective_blob_dsn),
+    )
 
 
 def adapters_for_profile(profile: str | None = None, *, dsn: str) -> AdapterSet:

@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# aidoc-local-flow-ci governance-check — verify the Per-repo governance table.
+#   governance-check [--json]   Exit: 0 ok (or skipped: no table) · 1 problems found
+# Doctor-only helper (no task name; doctor maps failures to warnings). Reads the
+# Surface-plus-Path table under `## Per-repo governance` (an em-dash tail after the
+# anchor is accepted) in AGENTS.md. Required surfaces, matched case-insensitively
+# as substrings: handoff, todo|backlog, decisions, plans|iplan, changelog, roadmap.
+# A path cell starting with `Not adopted` exempts the surface; any other path must
+# exist under the repo root. (The legacy CLAUDE.md fallback was removed: AGENTS.md
+# is the single agent file; a governance table in CLAUDE.md is ignored.)
+set -uo pipefail
+# shellcheck source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+root=$(ci_root) || { echo "governance: not in a git repo" >&2; exit 1; }
+cd "$root" || exit 1
+
+json=0; [[ ${1:-} == --json ]] && json=1
+problems=()
+
+# table_rows FILE — print "surface<TAB>path" for the first table after the anchor.
+table_rows() {
+  awk '
+    /^## [Pp]er-repo [Gg]overnance([ \t].*)?$/ { anchor=1; next }
+    anchor && !tried && /^\|/ && !head { head=1; next }
+    anchor && !tried && head && /^\|[ |:\-]+ *$/ { tried=1; next }
+    anchor && !tried && head { head=0; next }
+    anchor && tried && /^\|/ { n=split($0, f, "|"); s=f[2]; p=f[3];
+      gsub(/`/, "", s); gsub(/`/, "", p);
+      gsub(/ *\([^()]*\)/, "", s); gsub(/ *\([^()]*\)/, "", p);
+      gsub(/^ +| +$/, "", s); gsub(/^ +| +$/, "", p);
+      print s "\t" p; next }
+    anchor && tried { exit }
+    anchor && /^## / { exit }
+  ' "$1"
+}
+
+file=""; rows=""
+if [[ -f AGENTS.md ]]; then
+  rows=$(table_rows "AGENTS.md")
+  if [[ -n $rows ]]; then file=AGENTS.md; fi
+fi
+
+if [[ -z $file ]]; then
+  if [[ $json == 1 ]]; then echo '{"status":"skip","file":null,"problems":[]}'
+  else echo "governance: no Per-repo governance table in AGENTS.md — skipping"; fi
+  exit 0
+fi
+
+group_ok=(0 0 0 0 0 0); group_path=("" "" "" "" "" "")
+names=(handoff "todo|backlog" decisions "plans|iplan" changelog roadmap)
+while IFS=$'\t' read -r surface path; do
+  sl=${surface,,}; g=-1
+  case $sl in
+    *handoff*) g=0 ;;
+    *todo*|*backlog*) g=1 ;;
+    *decisions*) g=2 ;;
+    *plans*|*iplan*) g=3 ;;
+    *changelog*) g=4 ;;
+    *roadmap*) g=5 ;;
+  esac
+  if [[ $g -lt 0 || ${group_ok[$g]} -ne 0 ]]; then continue; fi
+  group_ok[$g]=1; group_path[$g]=$path
+done <<<"$rows"
+
+for i in 0 1 2 3 4 5; do
+  if [[ ${group_ok[$i]} -eq 0 ]]; then
+    problems+=("no '${names[$i]}' surface in the Per-repo governance table ($file)"); continue
+  fi
+  p=${group_path[$i]}
+  if [[ $p =~ ^[Nn]ot[[:space:]]+adopted ]]; then continue; fi
+  case $p in
+    "" ) problems+=("'${names[$i]}' surface has an empty path") ;;
+    /*|..|../*|*/../*|*/..) problems+=("'${names[$i]}' path is not under the repo root: $p") ;;
+    *) [[ -e $p ]] || problems+=("'${names[$i]}' path does not exist: $p") ;;
+  esac
+done
+
+if [[ $json == 1 ]]; then
+  jq -n --arg f "$file" \
+    --argjson p "$(printf '%s\n' "${problems[@]+"${problems[@]}"}" | jq -Rsc 'split("\n")|map(select(length>0))')" \
+    '{status: (if ($p|length)>0 then "fail" else "ok" end), file: $f, problems: $p}'
+else
+  for m in "${problems[@]+"${problems[@]}"}"; do echo "FAIL  $m"; done
+  if [[ ${#problems[@]} -eq 0 ]]; then echo "governance: OK — surfaces verified in $file"
+  else echo "governance: ${#problems[@]} problem(s) in $file"; fi
+fi
+[[ ${#problems[@]} -eq 0 ]]

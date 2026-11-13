@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# aidoc-local-flow-ci update — refresh the vendored .ci/ from the canonical repository.
+#   update                      use source + latest default branch recorded in .ci/SOURCE
+#   update --ref v0.2.0         specific tag/branch/commit
+#   update --source <url|path>  different canonical location
+#   update --check [--fleet OWNER/REPO...]
+#                               compare the installed version= against the latest canon tag
+#                               (0 current, 1 stale, 2 undeterminable); --fleet checks every
+#                               listed repo's vendored copy over the API into one status table
+# Replaces .ci/ and the AGENTS.md managed block; never touches project-owned files
+# (reports template drift instead). Commit the result on a branch and ship it (human review).
+set -euo pipefail
+# shellcheck source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+root=$(ci_root); cd "$root"
+
+src=$(sed -n 's/^source=//p' .ci/SOURCE 2>/dev/null || true)
+ref=""; check=0; fleet=()
+usage() { echo "usage: update [--ref REF] [--source URL|PATH] [--check [--fleet OWNER/REPO...]]" >&2; exit "${1:-0}"; }
+need_arg() { [[ -n ${2:-} ]] || { echo "update: $1 needs a value" >&2; usage 2; }; }
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --ref) need_arg "$1" "${2:-}"; ref=$2; shift 2 ;;
+    --source) need_arg "$1" "${2:-}"; src=$2; shift 2 ;;
+    --check) check=1; shift ;;
+    --fleet) shift; while [[ $# -gt 0 && $1 != -* ]]; do fleet+=("$1"); shift; done ;;
+    *) usage 2 ;;
+  esac
+done
+if [[ ${#fleet[@]} -gt 0 ]]; then check=1; fi   # --fleet implies --check
+[[ -n $src ]] || { echo "update: no source — pass --source <git-url|path>" >&2; exit 2; }
+
+if [[ $check == 1 ]]; then
+  # Latest canon version: $src/ci/VERSION for path sources, else the highest v* tag
+  # (one leading v stripped; never the free-form describe ref=). Tag order is resolved
+  # by git itself (--sort=v:refname: version sort, BSD-safe — sort -V is GNU-only).
+  if [[ -d $src ]]; then
+    [[ -f $src/ci/VERSION ]] || { echo "update: undeterminable — no ci/VERSION under path source $src" >&2; exit 2; }
+    latest=$(tr -d '[:space:]' <"$src/ci/VERSION")
+  else
+    if ! refs=$(git ls-remote --sort='v:refname' --tags "$src" 2>/dev/null); then
+      echo "update: undeterminable — cannot list tags at $src" >&2; exit 2
+    fi
+    tag=$(grep -v '\^{}' <<<"$refs" | grep -E 'refs/tags/v[0-9]' | tail -n1 | sed 's#.*refs/tags/##' || true)
+    [[ -n $tag ]] || { echo "update: undeterminable — no tags at $src" >&2; exit 2; }
+    latest=${tag#v}
+  fi
+  [[ -n $latest ]] || { echo "update: undeterminable — empty latest version from $src" >&2; exit 2; }
+  if [[ ${#fleet[@]} -gt 0 ]]; then
+    if [[ $(ci_forge) == github ]]; then
+      command -v gh >/dev/null || { echo "update: --fleet needs the gh CLI (mise install; gh auth login)" >&2; exit 2; }
+    else
+      command -v curl >/dev/null || { echo "update: --fleet needs curl on the gitea backend" >&2; exit 2; }
+      [[ -n ${GITEA_TOKEN:-} ]] || { echo "update: --fleet needs GITEA_TOKEN on the gitea backend" >&2; exit 2; }
+    fi
+    printf '%-32s %-10s %s\n' REPO VERSION STATUS
+    agg=0
+    for r in "${fleet[@]}"; do
+      content=$(forge_contents "$r" .ci/SOURCE 2>/dev/null || true)
+      ver=""
+      if [[ -n $content && $content != null ]]; then
+        ver=$(printf '%s' "$content" | base64 -d 2>/dev/null | sed -n 's/^version=//p' || true)
+      fi
+      if [[ -z $ver ]]; then st=undeterminable; rc=2
+      elif [[ $ver == "$latest" ]]; then st=current; rc=0
+      else st=stale; rc=1; fi
+      printf '%-32s %-10s %s\n' "$r" "${ver:-?}" "$st"
+      if [[ $rc -gt $agg ]]; then agg=$rc; fi
+    done
+    exit "$agg"
+  fi
+  local_ver=$(sed -n 's/^version=//p' .ci/SOURCE 2>/dev/null || true)
+  [[ -n $local_ver ]] || { echo "update: undeterminable — no version= in .ci/SOURCE" >&2; exit 2; }
+  if [[ $local_ver == "$latest" ]]; then echo "update: current ($local_ver)"; exit 0; fi
+  echo "update: stale — local $local_ver, latest $latest; run .ci/bin/update to refresh"
+  exit 1
+fi
+
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+if [[ -d $src ]]; then
+  if [[ -n $ref ]]; then git clone --quiet "$src" "$tmp/canon" && git -C "$tmp/canon" checkout --quiet "$ref"
+  else cp -R "$src" "$tmp/canon"; fi
+else
+  # A commit SHA is not a --branch value: clone full, then check it out.
+  if [[ $ref =~ ^[0-9a-f]{4,40}$ ]]; then git clone --quiet "$src" "$tmp/canon" && git -C "$tmp/canon" checkout --quiet "$ref"
+  else git clone --quiet --depth 1 ${ref:+--branch "$ref"} "$src" "$tmp/canon"; fi
+fi
+base=$(ci_base_branch)
+bash "$tmp/canon/install.sh" --target "$root" --update --base "$base"

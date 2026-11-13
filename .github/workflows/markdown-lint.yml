@@ -22,7 +22,6 @@ concurrency:
 jobs:
   call:
     uses: vladm3105/aidoc-flow-ci/.github/workflows/markdown-lint.yml@ci/v1.9.5
-    secrets: inherit  # pragma: allowlist secret
     with:
       fail-on-findings: true   # graduated to blocking (PLAN-007 W3)
       globs: |

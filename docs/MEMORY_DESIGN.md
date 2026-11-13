@@ -2,7 +2,7 @@
 
 *June 22, 2026 · Designing short-term + long-term + per-agent distilled memory on top of AI Knowledge RAC*
 
-> **Historical design input.** This document is superseded by [ARCHITECTURE.md](ARCHITECTURE.md) and the ADRs where they conflict. Note in particular: RAC has **merged into Engramory** — it is not a live separate platform; dev object storage is **MinIO**, not GCS. Scope/tenant vocabulary here predates [ADR-07](../sdd/05_ADR/ADR-07_scope_model.yaml): the current isolation column is `tenant_id`, and the current scope ladder is **agent → project → domain → space** (`space` = tenant-wide; the old `shared` scope value is retired). Read the body below as design rationale, not current spec.
+> **Historical design input.** This document is superseded by [ARCHITECTURE.md](ARCHITECTURE.md) and the ADRs where they conflict. Note in particular: RAC has **merged into Engramory** — it is not a live separate platform; dev object storage is **MinIO**, not GCS. Scope/tenant vocabulary here predates [ADR-07](sdd/05_ADR/ADR-07_scope_model.yaml): the current isolation column is `tenant_id`, and the current scope ladder is **agent → project → domain → space** (`space` = tenant-wide; the old `shared` scope value is retired). Read the body below as design rationale, not current spec.
 
 ---
 

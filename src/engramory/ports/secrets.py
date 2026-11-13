@@ -3,6 +3,7 @@
 Dev: env / SOPS / Infisical. Cloud: Secret Manager / Key Vault. Resolved values never
 land in logs or the canonical store.
 """
+
 from __future__ import annotations
 
 from typing import Protocol

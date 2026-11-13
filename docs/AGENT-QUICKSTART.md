@@ -8,7 +8,7 @@ outcomes feed back into memory confidence.
 the authorized access surface. Any agent with a shell runs the same commands;
 there is no per-vendor tool. Install first: [`INSTALL.md`](INSTALL.md).
 Flag reference: `engramory <cmd> --help` and
-[`../sdd/06_SPEC/SPEC-07_cli_face.yaml`](../sdd/06_SPEC/SPEC-07_cli_face.yaml)
+[`sdd/06_SPEC/SPEC-07_cli_face.yaml`](sdd/06_SPEC/SPEC-07_cli_face.yaml)
 (do not restate flags from memory — they drift).
 
 Three tracks; all end with a retrieved memory and a recorded outcome.
@@ -96,7 +96,7 @@ OIDC-verified identity (ADR-10). Every call — either face — is authorized
 |---|---|
 | Install / stand up the store | [`INSTALL.md`](INSTALL.md) |
 | Wire any agent vendor | [`AGENT-INTEGRATION.md`](AGENT-INTEGRATION.md) |
-| Every flag + exit code | `engramory <cmd> --help` · [`../sdd/06_SPEC/SPEC-07_cli_face.yaml`](../sdd/06_SPEC/SPEC-07_cli_face.yaml) |
-| The tool contract (all six agent tools) | `../sdd/06_SPEC/SPEC-01_access_surface.yaml` |
-| Why CLI + Skill now, MCP gateway for production | `../sdd/05_ADR/ADR-10_agent_facing_packaging.yaml` |
+| Every flag + exit code | `engramory <cmd> --help` · [`sdd/06_SPEC/SPEC-07_cli_face.yaml`](sdd/06_SPEC/SPEC-07_cli_face.yaml) |
+| The tool contract (memory, knowledge, SDD & docs tools) | `sdd/06_SPEC/SPEC-01_access_surface.yaml` |
+| Why CLI + Skill now, MCP gateway for production | `sdd/05_ADR/ADR-10_agent_facing_packaging.yaml` |
 | Memory model (L0–L3, distillation) | [`MEMORY_DESIGN.md`](MEMORY_DESIGN.md) |

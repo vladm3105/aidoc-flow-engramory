@@ -1,0 +1,8 @@
+# tests/steps/static.list — the `static` layer (project-owned). Every step runs even if an earlier
+# one fails; each becomes one JUnit testcase. Format: <name> :: <command>
+uts-check  :: node .unified-test-suite/bin/uts.mjs check
+bdd-ids    :: node .unified-test-suite/bin/uts.mjs bdd-check
+freeze     :: node .unified-test-suite/bin/uts.mjs freeze-check
+# Add project checks, for example:
+# lint       :: npm run -s lint
+# secrets    :: python3 scripts/secret_scan.py

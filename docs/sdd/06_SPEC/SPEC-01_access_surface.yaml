@@ -1,0 +1,177 @@
+# SPEC-01 — Access Surface & Authorization (C4-L3). Upstream: ADR-02, ADR-06.
+metadata:
+  schema_version: "1.0"
+  document_type: "spec-document"
+  layer: 6
+  total_sections: 8
+  deliverable_type: code
+  c4_level: { value: component }
+  id_standard: { format: "{doc_type}.{doc_id}.{section_id}.{hash}", hash_algorithm: SHA256, hash_length: 4 }
+  tags: [spec-document, layer-6-artifact, shared-architecture]
+
+id: SPEC-01
+doc_id: SPEC-01
+title: "Access Surface & Authorization"
+
+document_control:
+  status: Draft
+  version: "1.0"
+  date_created: "2026-06-22T00:00:00"
+  last_updated: "2026-06-22T00:00:00"
+  author: "Engramory team"
+  component: "AccessSurface"
+  tdd_ready_score: "[Pending]/100"
+
+component_overview:
+  description: |
+    The single access surface (AccessSurface) through which all agents read/write
+    knowledge and memory, reached via thin transport faces (ADR-10): the MCP gateway
+    is the authenticated production face; the `engramory` CLI is the dev/CI face.
+    Faces add no logic — every call is authorized and scoped by agent/project/tenant,
+    audited, and fails closed on uncertainty inside AccessSurface itself. Implements
+    the governed-write gate for SDD-artifact writes.
+    TRUST (ADR-10 dev-tier carve-out): in production, ActorContext is constructed
+    exclusively from OIDC claims verified by the gateway; the one fenced exception is
+    the dev tier, where the CLI (arrives with PLAN-002 Phase 2) builds ActorContext
+    from local config — permitted only under ENGRAMORY_PROFILE=dev (single-tenant,
+    local store; the factory's require_dev_profile fence lands with the CLI).
+  architecture_decision: "@adr: ADR-02"
+  diagram:
+    tags: ["@diagram: c4-l3", "@diagram: dfd-l3"]
+    mermaid: |
+      flowchart LR
+        Agent --> AccessSurface
+        AccessSurface --> AuthzService
+        AccessSurface --> KnowledgeService
+        AccessSurface --> MemoryService
+        AccessSurface --> AuditSink
+  language: "Python"
+  dependencies:
+    - { name: "MCP server lib", version: ">=current", purpose: "Expose tools to agents" }
+
+interfaces:
+  exports:
+    - name: "memory_search"
+      type: "async function"
+      signature: "async def memory_search(ctx: ActorContext, query: str, k: int = 8, token_budget: int | None = None) -> list[MemoryHit]"
+      description: "Scoped retrieval of knowledge + distilled memory. Token budget defaults to @threshold:PRD.01.perf.context_token_budget . Deliberately does NOT expose include_advisory: advisory/quarantined memories are unreachable through the agent-facing surface (EARS.01.03.b800); include_advisory exists only on the internal MemoryPort/retrieve layer for ops and evaluation."
+      errors: ["AuthzError: caller scope insufficient", "StoreUnavailable: fail closed"]
+    - name: "memory_add"
+      type: "async function"
+      signature: "async def memory_add(ctx: ActorContext, episode: EpisodeIn) -> EpisodeId"
+      description: "Append an episode in the caller's scope."
+      errors: ["AuthzError"]
+    - name: "memory_feedback"
+      type: "async function"
+      signature: "async def memory_feedback(ctx: ActorContext, retrieval_id: RetrievalId, outcome: str) -> None"
+      description: "Record a retrieval outcome (useful | not_useful | harmful); drives the SPEC-04 confidence-update rule via the memory_retrievals log (migration 0003)."
+      errors: ["AuthzError"]
+    - name: "memory_forget"
+      type: "async function"
+      signature: "async def memory_forget(ctx: ActorContext, memory_id: MemoryId, reason: str) -> None"
+      description: "Retire a memory in the caller's scope: end-date + mark superseded (soft; provenance retained). Audited."
+      errors: ["AuthzError"]
+    - name: "agent_profile_get"
+      type: "async function"
+      signature: "async def agent_profile_get(ctx: ActorContext) -> AgentProfile"
+      description: "Load the caller's L3 identity profile (MEMORY_DESIGN task step 1)."
+      errors: ["AuthzError"]
+    - name: "knowledge_ingest"
+      type: "async function"
+      signature: "async def knowledge_ingest(ctx: ActorContext, entry: KBEntryIn, evidence_ref: str | None) -> EntryId"
+      description: "Create/update an SDD-artifact KB entry; requires evidence_ref (governed write)."
+      errors: ["GovernedWriteRejected: missing/invalid evidence_ref", "AuthzError"]
+    - name: "knowledge_ingest_media"
+      type: "async function"
+      signature: "async def knowledge_ingest_media(ctx: ActorContext, *, file_path: Path, evidence_ref: str | None, scope: str = 'project', embed: bool = True, project_graph: bool = True) -> dict[str, Any]"
+      description: "Governed multimodal ingestion (image, audio, 20 GB+ video, PDF/Office) streaming raw bytes into PostgreSQL 18 Chunked Blob CAS (Rule D14b) and indexing time/region-coded KBSection rows + Neo4j/PG graph projections."
+      errors: ["GovernedWriteRejected", "AuthzError", "BlobTooLargeError", "StoreUnavailable"]
+    - name: "blob_put"
+      type: "async function"
+      signature: "async def blob_put(ctx: ActorContext, *, file_path: Path | None = None, data: bytes | None = None, content_type: str = 'application/octet-stream', scope: str = 'project', metadata: Mapping[str, Any] | None = None) -> dict[str, Any]"
+      description: "Governed content-addressable blob write into kb_blobs / kb_blob_chunks(_large)."
+      errors: ["AuthzError", "BlobTooLargeError", "StoreUnavailable"]
+    - name: "blob_head"
+      type: "async function"
+      signature: "async def blob_head(ctx: ActorContext, *, sha256: str, scope: str = 'project') -> dict[str, Any] | None"
+      description: "Tenant-scoped manifest + chunk completeness inspection for a SHA-256 blob."
+      errors: ["AuthzError", "StoreUnavailable"]
+    - name: "blob_get"
+      type: "async function"
+      signature: "async def blob_get(ctx: ActorContext, *, sha256: str, scope: str = 'project') -> bytes"
+      description: "Tenant-scoped content-addressable blob read (bounded bytes or streamed via StoragePort.get_stream)."
+      errors: ["AuthzError", "BlobNotFoundError", "BlobTruncatedError", "BlobIntegrityError", "StoreUnavailable"]
+    - name: "memory_ingest_event"
+      type: "async function"
+      signature: "async def memory_ingest_event(ctx: ActorContext, event_data: Mapping[str, Any] | ExperienceEvent) -> dict[str, Any]"
+      description: "Validate, screen, and persist a structured ExperienceEvent into L1 episodes."
+      errors: ["ValidationError", "MemoryPoisoningError", "AuthzError", "StoreUnavailable"]
+    - name: "memory_learning_health"
+      type: "async function"
+      signature: "async def memory_learning_health(ctx: ActorContext, *, project_id: str | None = None, limit: int = 500) -> dict[str, Any]"
+      description: "Compute closed-loop learning effectiveness metrics over recent tenant episodes."
+      errors: ["AuthzError", "StoreUnavailable"]
+    - name: "authorize"
+      type: "function"
+      signature: "def authorize(ctx: ActorContext, action: str, target_scope: Scope) -> AuthzDecision"
+      description: "Per-call scope authorization; default deny."
+      errors: []
+
+data_models:
+  models:
+    - name: "ActorContext"
+      type: "dataclass"
+      fields:
+        - { name: "agent_id", type: "str", required: true, description: "Calling agent identity" }
+        - { name: "project_id", type: "str", required: true, description: "Project scope" }
+        - { name: "tenant_id", type: "str", required: true, description: "Tenant scope" }
+        - { name: "scopes", type: "set[str]", required: true, description: "Granted scopes (agent|project|domain|space) per @adr: ADR-07" }
+    - name: "AuthzDecision"
+      type: "dataclass"
+      fields:
+        - { name: "allowed", type: "bool", required: true, description: "Allow/deny" }
+        - { name: "reason", type: "str", required: true, description: "Decision reason (for audit)" }
+    - name: "AuditRecord"
+      type: "dataclass"
+      fields:
+        - { name: "actor", type: "ActorContext", required: true, description: "Caller" }
+        - { name: "action", type: "str", required: true, description: "Operation" }
+        - { name: "decision", type: "AuthzDecision", required: true, description: "Allow/deny + reason" }
+        - { name: "ts", type: "datetime", required: true, description: "Timestamp" }
+
+behavior:
+  validation_rules:
+    - { rule: "Every read/write is authorized and scoped by agent/project/tenant before execution", source: "@ears: EARS.01.03.e020" }
+    - { rule: "SDD-artifact writes require a valid approved-evidence reference", source: "@ears: EARS.01.03.a700" }
+  state_transitions:
+    - { from: "Received", to: "Denied", trigger: "scope check fails OR missing evidence", source: "@bdd: BDD.01.03.e500" }
+    - { from: "Received", to: "Executed", trigger: "authorized", source: "@bdd: BDD.01.03.a100" }
+  error_handling:
+    - { condition: "Out-of-scope request", response: "Deny, return no data, write AuditRecord within 200 ms", source: "@bdd: BDD.01.03.e500" }
+    - { condition: "Governed write without evidence", response: "Reject + audit within 200 ms", source: "@bdd: BDD.01.03.f600" }
+    - { condition: "Canonical store unavailable", response: "Fail closed; retryable error within 500 ms", source: "@bdd: BDD.01.03.b800" }
+
+implementation_notes:
+  constraints: ["Stateless request handlers", "Default-deny authorization", "Fail closed on any uncertainty"]
+  patterns: ["Policy enforcement point at the surface", "Structured audit for every authz decision"]
+  performance_considerations: ["Authz must not dominate retrieval p95 budget"]
+
+tdd_contracts:
+  tdd_document: "@tdd: TDD-01"
+  test_files:
+    - { path: "tests/unit/test_authz.py", covers: "authorize() default-deny + scope checks" }
+    - { path: "tests/integration/test_access_surface.py", covers: "tool calls + audit emission" }
+    - { path: "tests/e2e/test_scope_isolation.py", covers: "BDD.01.03.e500 cross-tenant deny" }
+    - { path: "tests/e2e/test_retrieval.py", covers: "BDD.01.03.a100 scoped retrieval e2e" }
+    - { path: "tests/security/test_failclosed.py", covers: "TDD.01.04.d400 fail-closed on store loss" }
+
+traceability:
+  tags: ["@spec: SPEC-01"]
+  upstream:
+    adr_references: ["@adr: ADR.02.03.a100", "@adr: ADR.06.03.a100"]
+    bdd_references: ["@bdd: BDD.01.03.e500", "@bdd: BDD.01.03.f600", "@bdd: BDD.01.03.a100"]
+    ears_references: ["@ears: EARS.01.03.e020", "@ears: EARS.01.03.f600", "@ears: EARS.01.03.a700", "@ears: EARS.01.03.b050"]
+  downstream:
+    - { type: TDD, layer: 7, description: "Test cases for authz + governed-write + fail-closed" }
+    - { type: IPLAN, layer: 8, description: "Implementation plan for the access surface" }
+  health_score: { tdd_ready: "[Pending]%", target_score: ">=90/100" }

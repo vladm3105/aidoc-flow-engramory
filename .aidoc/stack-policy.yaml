@@ -1,0 +1,113 @@
+# =============================================================================
+#  templates/governance/stack-policy.template.yaml
+# =============================================================================
+#  Enterprise Platform & Technology Stack Policy Contract Template
+#  Authority: vladm3105/platform-technology-stack (Standard v2.0)
+#  Schema: aidoc.v1.StackPolicyContract (vladm3105/platform-data-contracts)
+#  Canon reference: framework/templates/STACK-POLICY-TEMPLATE.yaml (framework 0.96.23)
+#
+#  Onboarding extensions vs the canon template (deliberate, keep in sync
+#  with scripts/drift-check.sh): schema_version envelope, enterprise package
+#  set, and Taskfile-based oracle commands.
+#  The angle-bracket tenant placeholder is substituted at scaffold time
+#  by bin/onboard greenfield and scripts/install-canons.sh.
+# =============================================================================
+
+schema_version: "1.0.0"
+tenant_id: "platform-engramory"
+policy_version: "2.0.0"
+
+runtime:
+  language: "python"
+  version_or_edition: "3.12+"
+  target_triple: "x86_64-unknown-linux-gnu"
+  compiler_flags: []
+
+boundaries:
+  allow_unsafe: false
+  strict_allowlist: true
+  banned_patterns:
+    - "eval("
+    - "exec("
+    - "os.system("
+    - "__import__("
+    - "subprocess.Popen(shell=True)"
+
+dependencies:
+  prohibited_licenses:
+    - "GPL-3.0"
+    - "AGPL-3.0"
+    - "SSPL"
+    - "Commons-Clause"
+  # Seed allowlist. Extend per project, but never below the floors enforced by
+  # the stack's own auditor (platform-technology-stack scripts/audit-spoke.py):
+  # python>=3.12, pydantic>=2.8.0 (v1 banned), langgraph>=0.2.0,
+  # temporalio>=1.6.0, asyncpg>=0.29.0, nats-py>=2.8.0, ruff>=0.5.0,
+  # Node.js>=20. A package absent from the approved stack needs explicit
+  # operator approval before it is added here.
+  allowed_packages:
+    - name: "fastapi"
+      version_constraint: ">=0.110.0"
+      approved_features: []
+    - name: "pydantic"
+      version_constraint: ">=2.8.0"
+      approved_features: []
+    - name: "protobuf"
+      version_constraint: ">=4.25.0"
+      approved_features: []
+    - name: "platform-data-contracts"
+      version_constraint: ">=1.0.0"
+      approved_features: []
+    - name: "aidoc-context-tools"
+      version_constraint: ">=1.0.0"
+      approved_features: []
+    - name: "pyjwt"
+      version_constraint: ">=2.8.0"
+      approved_features: ["crypto"]
+    - name: "cryptography"
+      version_constraint: ">=42.0.0"
+      approved_features: []
+    - name: "httpx"
+      version_constraint: ">=0.27.0"
+      approved_features: []
+    - name: "pyyaml"
+      version_constraint: ">=6.0"
+      approved_features: []
+    - name: "jsonschema"
+      version_constraint: ">=4.20.0"
+      approved_features: []
+    - name: "packaging"
+      version_constraint: ">=24.0"
+      approved_features: []
+    - name: "starlette"
+      version_constraint: ">=0.37.0"
+      approved_features: []
+    - name: "uvicorn"
+      version_constraint: ">=0.30.0"
+      approved_features: []
+    - name: "neo4j"
+      version_constraint: ">=5.26.0"
+      approved_features: []
+    - name: "nats-py"
+      version_constraint: ">=2.8.0"
+      approved_features: []
+    - name: "psycopg"
+      version_constraint: ">=3.2"
+      approved_features: ["binary"]
+
+identity:
+  provider: "authentik"
+  authority_repo: "vladm3105/platform-identity"
+  default_algorithm: "RS256"
+  enforce_fail_closed: true
+  planes:
+    workforce: "tenant_w"
+    customer: "tenant_c"
+    machine: "oauth2_client_credentials"
+    agent: "rfc_8693_token_exchange"
+
+verification_oracles:
+  linter_cmd: "task lint"
+  test_cmd: "task test"
+  line_coverage_threshold: 85
+  branch_coverage_threshold: 75

@@ -1,3 +1,19 @@
+---
+id: DOC-ENGRAMORY-ARCHITECTURE
+title: "Engramory Target Architecture & Portability Matrix"
+kind: architecture
+domain: knowledge-core
+namespace: aidoc
+status: active
+autonomy_tier: green
+watched_paths:
+  - "src/engramory/ports/storage.py"
+  - "src/engramory/ports/graph.py"
+  - "src/engramory/ports/vector.py"
+  - "db/migrations/0001_init_memory.sql"
+last_verified: "2026-11-12"
+---
+
 # Engramory — Target Architecture
 
 ## Shared Agent Knowledge & Memory Operating System
@@ -71,15 +87,15 @@ Engramory is designed **agent-first**:
                         │ adapters          │ adapters          │ adapters
                 ┌───────▼──────┐    ┌───────▼───────┐   ┌───────▼──────────┐
                 │  SELF-HOSTED │    │     GCP       │   │     AZURE        │
-                │  Postgres 16 │    │ Cloud SQL /   │   │ Azure DB Flex    │
+                │  Postgres 18 │    │ Cloud SQL /   │   │ Azure DB Flex    │
                 │  + pgvector  │    │ AlloyDB       │   │ (pgvector)       │
-                │  MinIO/Redis │    │ GCS / Vertex  │   │ Blob / OpenAI    │
+                │  PG-CAS/OCI  │    │ GCS / Vertex  │   │ Blob / OpenAI    │
                 └──────────────┘    └───────────────┘   └──────────────────┘
 ```
 
 The unified access surface means **all agents (Project Executors, Operations Assistant, CI runners)** interact through consistent tool contracts. The ports layer means **backends swap per environment** with zero code changes.
 
-The **Knowledge core** and **Memory core** are two *bounded cores of one platform*, not two projects — they share the spine (Postgres, scope/tenant model, gateway, ports) and are separated by schema, write-governance, lifecycle, and tool namespace. See [CORES.md](CORES.md) and [ADR-08](../sdd/05_ADR/ADR-08_two_bounded_cores.yaml).
+The **Knowledge core** and **Memory core** are two *bounded cores of one platform*, not two projects — they share the spine (Postgres, scope/tenant model, gateway, ports) and are separated by schema, write-governance, lifecycle, and tool namespace. See [CORES.md](CORES.md) and [ADR-08](sdd/05_ADR/ADR-08_two_bounded_cores.yaml).
 
 ---
 
@@ -89,9 +105,9 @@ Each capability is accessed through a port; here are the adapters per environmen
 
 | Capability (Port) | Self-hosted dev (free/OSS) | GCP | Azure |
 |---|---|---|---|
-| **Relational + Vector** (`VectorPort`) | PostgreSQL 16 + **pgvector** (Docker) | Cloud SQL / **AlloyDB** for PostgreSQL (pgvector) | Azure Database for PostgreSQL Flexible Server (pgvector) |
-| **Graph** (`GraphPort`) | **pure Postgres** (edge tables + recursive CTE) for simple needs; **Neo4j Community** (Docker) when real graph is needed | **Neo4j Aura** (managed, on GCP) or pure-Postgres | **Neo4j Aura** (managed, on Azure) or managed Apache AGE |
-| **Object storage** (`StoragePort`) | **MinIO** (S3-compatible) | Cloud Storage (GCS) | Azure Blob Storage |
+| **Relational + Vector** (`VectorPort`) | **PostgreSQL 18** + **pgvector** (Docker) | Cloud SQL / **AlloyDB** for PostgreSQL (pgvector) | Azure Database for PostgreSQL Flexible Server (pgvector) |
+| **Graph** (`GraphPort`, `Decision D17`) | **PostgreSQL 18** (canonical entities/edges + `1–2` hop CTEs) + **Neo4j 5.26 Community** (`Adopt`, `stage-neo4j` / Docker) as needed for multi-hop Cypher, lineage & GraphRAG | **Neo4j Aura** (managed, on GCP) or pure-Postgres | **Neo4j Aura** (managed, on Azure) or managed Apache AGE |
+| **Object & Multimodal Blob storage** (`StoragePort`, `Rule D14a`/`D14b`) | **PostgreSQL 18 Chunked Blob CAS (`PgBlobStorageAdapter` in `TABLESPACE ts_blob_cold` up to `20 GB+`)** or **OCI Object Storage** (`LocalFsBackend` for offline tests; see [MULTIMODAL_AND_POSTGRES_BLOB_STORAGE.md](MULTIMODAL_AND_POSTGRES_BLOB_STORAGE.md)) | Cloud Storage (GCS) or AlloyDB / Cloud SQL Chunked Blob CAS | Azure Blob Storage or Flexible Server Chunked Blob CAS |
 | **Cache / session L1** (`CachePort`) | Redis (Docker) | Memorystore for Redis | Azure Cache for Redis |
 | **LLM + embeddings** (`LLMPort`) | **LiteLLM → Ollama** (local models) | LiteLLM → **Vertex AI Model Garden** | LiteLLM → **Azure OpenAI / AI Foundry** |
 | **Secrets** (`SecretsPort`) | Docker env / SOPS / Infisical | Secret Manager | Azure Key Vault |
@@ -117,6 +133,8 @@ Verified June 2026: **Apache AGE is a managed extension on Azure Database for Po
 **Portability safeguard — treat the graph as a *rebuildable projection*, not a second source of truth.** The canonical entities/relations are derived from documents + extraction results stored in **Postgres**. Neo4j (or AGE) holds an *index* you can always **re-project by re-running entity extraction** — exactly like embeddings. So even though Neo4j is a separate store, migrating or losing it is a rebuild, not data loss, and the "own your store in Postgres" principle holds. (Aura also has native dump/export and multi-cloud migration if you prefer a direct transfer.)
 
 This resolves the RAC↔Nexus divergence cleanly in favor of your existing investment: **Postgres spine for canonical data + vectors; Neo4j as the graph engine when needed, behind `GraphPort`, portable to either cloud via Aura.**
+
+For complete details on the migration, post-migration graph architecture, and sequential data flows, see [Neo4j Migration Architecture](NEO4J_MIGRATION_ARCHITECTURE.md), [Data Flow & Lifecycle](DATA_FLOW_AND_LIFECYCLE.md), and [PLAN-006](../plans/PLAN-006_neo4j-graph-engine-integration.md).
 
 ---
 
@@ -285,11 +303,17 @@ kb_sections(
   citation TEXT NOT NULL,       -- Section anchor or heading path
   text TEXT NOT NULL,           -- Authoritative section content
   version INTEGER NOT NULL,     -- Immutable versioning (new versions append)
-  embedding VECTOR,             -- Regenerable dense embedding (pgvector)
-  embedding_model TEXT,
-  embedding_dims INTEGER
+  embedding VECTOR(1536),       -- Regenerable dense embedding (pgvector HNSW)
+  embedding_model TEXT,         -- Default: 'text-embedding-3-small'
+  embedding_dims INTEGER        -- Default: 1536
 )
 ```
+
+### Standard Vector Dimensions & Default Embedding Model (Migration 0006)
+
+- **Standard Dimensionality (`vector(1536)`):** Engramory standardizes its `pgvector` HNSW indexes on **1,536 dimensions**. This provides near-lossless semantic fidelity while fitting within PostgreSQL HNSW limits (< 2,000 dimensions) and keeping RAM consumption predictable (~6.1 GB for 1M vectors).
+- **Default Embedding Model:** `text-embedding-3-small` (`dimensions: 1536`), with optional `openrouter/qwen/qwen3-embedding-8b` (Matryoshka 1536 dims) via LiteLLM proxy configuration.
+- **Portability Guarantee:** Standardizing on 1,536 dimensions matches industry standards (OpenAI `text-embedding-3-small`, `text-embedding-3-large`, Voyage AI), enabling seamless model switching in the LiteLLM gateway without requiring SQL schema migrations.
 
 ### 3. Hybrid Retrieval & Cumulative `@-tag` Lineage
 
@@ -335,7 +359,7 @@ A common point of confusion is whether Engramory requires external RAG framework
 
 | Phase | Goal | Key work | Outcome |
 |---|---|---|---|
-| **0 — Dev foundation** | Cheap self-hosted base | Docker Compose: Postgres(pgvector) · Redis · MinIO · LiteLLM+Ollama · Keycloak · MCP gateway · worker. Define all Ports. | Free local platform, portable by construction |
+| **0 — Dev foundation** | Cheap self-hosted base | Docker Compose: PostgreSQL 18 (`pgvector` + `ts_blob_cold` Chunked Blob CAS) · Valkey/Redis · LiteLLM+Ollama · Neo4j 5.26 (`GraphPort`) · Authentik · MCP gateway · worker. Define all Ports. | Free local platform, portable by construction |
 | **1 — Consolidate** | One platform | Port RAC's MCP tools/parsers onto the unified core; RAC becomes the **per-project domain-config layer** (each project = one config; Trading is just one example); everything behind Ports | RAC + Nexus merged, no stack duplication |
 | **2 — Cognition** | Per-agent cognition | `agent_id` scoping; L1/L2/L3 schema; reflection + consolidation workers; wire LangMem/Cipher via `MemoryPort` | Per-agent distilled, endless memory |
 | **3 — Cloud migration** | GCP or Azure | Swap adapters (managed Postgres, Redis, object store, model endpoint, secrets, identity); IaC; `pg_dump`+object copy; re-embed if model changes | Same app, cloud-native, data intact |
@@ -356,10 +380,10 @@ Phases 0–2 are entirely free/self-hosted. Phase 3 is a **configuration + adapt
 
 ## Recommended dev stack (Phase 0 docker-compose)
 
-Provisioned in the Phase-0 compose **today:** `postgres:16` (pgvector) · `redis` · `minio` · `ghcr.io/berriai/litellm` + `ollama` · `neo4j` · `keycloak`. **Planned (not yet in docker-compose):** the application services `mcp-gateway` · `knowledge-core` · `memory-core` · `worker` (reflection/consolidation), and observability `grafana`+`loki`+`tempo` (OTel).
+Provisioned in `docker-compose.yml` **today:** `postgres` (PostgreSQL 18 + `pgvector` + `ts_blob_cold` Chunked Blob CAS) · `valkey`/`redis` · `ghcr.io/berriai/litellm` + `ollama` · `neo4j` (`neo4j:5.26-community`, `Decision D17`) · `authentik` · `mcp-gateway` · `worker` (reflection/consolidation). Optional observability connects via OTel (`docs/OBSERVABILITY.md`).
 
 All open-source, all free, all with a documented GCP **and** Azure adapter for later. Start here; the cloud is a swap, not a rebuild.
 
 ---
 
-*Companion docs: [MEMORY_DESIGN.md](MEMORY_DESIGN.md), [research/NEXUS_V3_REVIEW.md](research/NEXUS_V3_REVIEW.md), [research/RAC_REVIEW.md](research/RAC_REVIEW.md), [research/MEMORY_LANDSCAPE.md](research/MEMORY_LANDSCAPE.md), [research/MEMORY_CONCEPT_REVIEW.md](research/MEMORY_CONCEPT_REVIEW.md). Cloud-service mappings should be re-verified at migration time as managed offerings change.*
+*Companion docs: [MULTIMODAL_AND_POSTGRES_BLOB_STORAGE.md](MULTIMODAL_AND_POSTGRES_BLOB_STORAGE.md), [MEMORY_DESIGN.md](MEMORY_DESIGN.md), [research/NEXUS_V3_REVIEW.md](research/NEXUS_V3_REVIEW.md), [research/RAC_REVIEW.md](research/RAC_REVIEW.md), [research/MEMORY_LANDSCAPE.md](research/MEMORY_LANDSCAPE.md), [research/MEMORY_CONCEPT_REVIEW.md](research/MEMORY_CONCEPT_REVIEW.md). Cloud-service mappings should be re-verified at migration time as managed offerings change.*

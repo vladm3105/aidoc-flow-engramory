@@ -11,6 +11,7 @@ The compose stack's 5432 is deliberately NOT used: the host port may be owned
 by an unrelated service (observed on the dev host), and tests must never touch
 a shared database.
 """
+
 from __future__ import annotations
 
 import os
@@ -20,6 +21,7 @@ import time
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -63,24 +65,33 @@ def pg_dsn() -> Iterator[str]:
         yield env_dsn
         return
 
-    if os.environ.get("CI"):
+    if os.environ.get("GITHUB_ACTIONS"):
         # CI runs must not depend on a Docker Hub pull per run (rate limits /
         # outages would fail, not skip). Enable in CI by adding a `services:`
         # postgres container to ci.yml and exporting ENGRAMORY_TEST_DSN.
-        pytest.skip("integration: CI without ENGRAMORY_TEST_DSN — see conftest note")
+        pytest.skip("integration: CI without ENGRAMORY_TEST_DSN — reason: see conftest note")
 
     if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
-        pytest.skip("integration: no ENGRAMORY_TEST_DSN and docker unavailable")
+        pytest.skip("integration: docker unavailable — reason: requires running docker daemon")
 
     port = _free_port()  # TOCTOU window until docker binds it — acceptable in tests
     name = f"engramory-it-{uuid.uuid4().hex[:8]}"
     try:
         subprocess.run(
             [
-                "docker", "run", "-d", "--name", name,
-                "-e", "POSTGRES_PASSWORD=it", "-e", "POSTGRES_USER=it",
-                "-e", "POSTGRES_DB=it",
-                "-p", f"127.0.0.1:{port}:5432",
+                "docker",
+                "run",
+                "-d",
+                "--name",
+                name,
+                "-e",
+                "POSTGRES_PASSWORD=it",
+                "-e",
+                "POSTGRES_USER=it",
+                "-e",
+                "POSTGRES_DB=it",
+                "-p",
+                f"127.0.0.1:{port}:5432",
                 "pgvector/pgvector:pg16",
             ],
             check=True,
@@ -118,3 +129,48 @@ def pg_dsn() -> Iterator[str]:
                 f"leaked container {name}: {rm.stderr.decode(errors='replace')}",
                 stacklevel=1,
             )
+
+
+def _neo4j_reachable(host: str = "127.0.0.1", port: int = 7687) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=1.0):
+            return True
+    except OSError:
+        return False
+
+
+@pytest.fixture
+def neo4j_adapter() -> Iterator[Any]:
+    from engramory.adapters.dev.graph_neo4j import Neo4jGraphAdapter
+
+    uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+    auth = (os.getenv("NEO4J_USER", "neo4j"), os.getenv("NEO4J_PASSWORD", "change_me"))
+    host = "127.0.0.1"
+    port = 7687
+    if "://" in uri:
+        netloc = uri.split("://", 1)[1]
+        if ":" in netloc:
+            parts = netloc.split(":")
+            host = parts[0] or "127.0.0.1"
+            port = int(parts[1].split("/")[0])
+    if not _neo4j_reachable(host, port):
+        pytest.skip(  # reason: neo4j unavailable in offline integration test
+            "integration: neo4j unavailable — reason: requires running neo4j container on bolt://localhost:7687"
+        )
+    adapter = Neo4jGraphAdapter(uri=uri, auth=auth)
+    yield adapter
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Automatically tag integration/e2e/conformance tests with `@pytest.mark.integration`."""
+    integration_dirs = ("integration", "e2e", "conformance")
+    for item in items:
+        fspath_str = str(item.path)
+        parts = Path(fspath_str).parts
+        fixturenames = getattr(item, "fixturenames", ())
+        if (
+            any(d in parts for d in integration_dirs)
+            or "pg_dsn" in fixturenames
+            or "neo4j_adapter" in fixturenames
+        ):
+            item.add_marker(pytest.mark.integration)

@@ -1,0 +1,84 @@
+# aidoc-hybrid-ci language module: Go (gofmt · golangci-lint · go vet · go test -race + cover · govulncheck)
+# Include per service:  gateway: { taskfile: .ci/taskfiles/go.yml, dir: services/gateway, vars: {...} }
+#
+# Vars (all optional):
+#   COV_MIN=80  COVERAGE=true  PKGS=./...
+#   RACE=true        race detector (needs CGO + a C compiler; set false otherwise)
+version: '3'
+
+# Module vars are task-scoped (anchor &v) on purpose: Task merges *global* vars of all
+# included Taskfiles into one namespace, which would leak settings between services.
+
+tasks:
+  deps:
+    vars: &v
+      COV_MIN: '{{.COV_MIN | default "80"}}'
+      COVERAGE: '{{.COVERAGE | default "true"}}'
+      PKGS: '{{.PKGS | default "./..."}}'
+      RACE: '{{.RACE | default "true"}}'
+    desc: Download and verify modules
+    cmds: [go mod download, go mod verify]
+
+  fmt:
+    vars: *v
+    desc: Auto-format
+    cmds: [gofmt -s -w .]
+
+  fmt-check:
+    vars: *v
+    desc: Verify formatting (read-only)
+    sources: ['**/*.go']
+    cmds:
+      - |
+        out=$(gofmt -s -l .)
+        if [ -n "$out" ]; then echo "Unformatted files (run: task fmt):"; echo "$out"; exit 1; fi
+
+  lint:
+    vars: *v
+    desc: golangci-lint (enable gosec, staticcheck, errcheck in .golangci.yml)
+    sources: ['**/*.go', 'go.mod', '.golangci.yml', '.golangci.yaml']
+    cmds: ['golangci-lint run {{.PKGS}}']
+
+  typecheck:
+    vars: *v
+    desc: go vet
+    sources: ['**/*.go', 'go.mod']
+    cmds: ['go vet {{.PKGS}}']
+
+  test:
+    vars: *v
+    desc: "go test (+ race, + coverage threshold). Filter: -- -run TestName ./pkg/..."
+    sources: ['**/*.go', 'go.mod', 'go.sum']
+    status: ['test -z "{{.CLI_ARGS}}"'] # a filtered run must never report cached
+    cmds:
+      - |
+        set -e
+        race=""; [ "{{.RACE}}" = true ] && race="-race"
+        if [ -n "{{.CLI_ARGS}}" ]; then
+          go test $race {{.CLI_ARGS}}
+        elif [ "{{.COVERAGE}}" = true ]; then
+          go test $race -coverprofile=coverage.out {{.PKGS}}
+          total=$(go tool cover -func=coverage.out | awk '/^total:/ { sub("%", "", $3); print $3 }')
+          echo "coverage: ${total}% (min {{.COV_MIN}}%)"
+          awk -v t="$total" -v m="{{.COV_MIN}}" 'BEGIN { exit !(t + 0 >= m + 0) }' || { echo "coverage ${total}% < {{.COV_MIN}}%"; exit 1; }
+        else
+          go test $race {{.PKGS}}
+        fi
+
+  security:
+    vars: *v
+    desc: "n/a for Go — gosec runs inside golangci-lint; plus universal Semgrep (sast)"
+    cmds: ['echo "n/a — gosec runs inside golangci-lint; sast (Semgrep) covers the rest"']
+
+  deps-audit:
+    vars: *v
+    desc: govulncheck
+    sources: ['go.mod', 'go.sum', '**/*.go']
+    # Network-bound: one retry on a transport error, then timeout, never a finding (#37).
+    env: {CI_NET_CMD: 'govulncheck {{.PKGS}}'}
+    cmds: ['bash "{{.TASKFILE_DIR}}/../bin/netrun"']
+
+  where:
+    desc: "(framework) print this service's directory — used by change-impact routing"
+    silent: true
+    cmds: [pwd]

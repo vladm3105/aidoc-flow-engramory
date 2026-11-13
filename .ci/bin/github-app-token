@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# aidoc-local-flow-ci github-app-token <owner/repo> <permissions-json> — mint a GitHub App installation
+# token limited to ONE repository and the given permissions (PLAN-007 G4: the mirror identity).
+# Prints the token on stdout for the caller to keep in memory; never writes it anywhere.
+#   APP_ID         the App's numeric id          (or MIRROR_APP_ID)
+#   APP_KEY_FILE   path to its private key (.pem) (or MIRROR_APP_KEY_FILE), Tier 1, root/owner-only
+#   GITHUB_API     default https://api.github.com
+# Exit: 0 token printed · 2 bad input · 1 API refusal (App not installed, key wrong, permission not granted).
+set -euo pipefail
+repo=${1:?usage: github-app-token <owner/repo> <permissions-json>}
+perms=${2:?usage: github-app-token <owner/repo> <permissions-json>}
+app_id=${APP_ID:-${MIRROR_APP_ID:-}}
+key=${APP_KEY_FILE:-${MIRROR_APP_KEY_FILE:-}}
+api=${GITHUB_API:-https://api.github.com}
+[[ $repo =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || { echo "github-app-token: repo must be <owner>/<repo>" >&2; exit 2; }
+[[ $app_id =~ ^[0-9]+$ ]] || { echo "github-app-token: APP_ID missing" >&2; exit 2; }
+[[ -r $key ]] || { echo "github-app-token: APP_KEY_FILE not readable" >&2; exit 2; }
+jq -e 'type == "object"' >/dev/null 2>&1 <<<"$perms" || { echo "github-app-token: permissions must be a JSON object" >&2; exit 2; }
+
+b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
+now=$(date +%s)
+header=$(printf '{"alg":"RS256","typ":"JWT"}' | b64url)
+payload=$(printf '{"iat":%d,"exp":%d,"iss":"%s"}' $((now - 60)) $((now + 540)) "$app_id" | b64url)
+sig=$(printf '%s.%s' "$header" "$payload" | openssl dgst -sha256 -sign "$key" -binary | b64url)
+jwt="$header.$payload.$sig"
+api_call() {  # <method> <path> [json]
+    curl -fsS -X "$1" -H "Authorization: Bearer $jwt" -H "Accept: application/vnd.github+json" \
+        -H "X-GitHub-Api-Version: 2022-11-28" ${3:+-H "Content-Type: application/json" -d "$3"} "$api$2"
+}
+inst=$(api_call GET "/repos/$repo/installation" | jq -er .id) \
+    || { echo "github-app-token: the App is not installed on $repo" >&2; exit 1; }
+body=$(jq -nc --arg r "${repo#*/}" --argjson p "$perms" '{repositories: [$r], permissions: $p}')
+api_call POST "/app/installations/$inst/access_tokens" "$body" | jq -er .token \
+    || { echo "github-app-token: installation token refused for $repo" >&2; exit 1; }

@@ -3,6 +3,7 @@
 Real Postgres via the shared fixture; asserts persistence AND the audit trail
 (EARS.01.03.b050 — every decision audited).
 """
+
 from __future__ import annotations
 
 import pytest
@@ -80,3 +81,57 @@ async def test_memory_search_logs_retrievals(surface: AccessSurface, pg_dsn: str
     assert len(hits) == 1
     assert hits[0].retrieval_id and hits[0].summary == "pin tags"
     assert hits[0].token_count > 0
+
+
+async def test_context_slice_layers_and_topological_sort(
+    surface: AccessSurface, pg_dsn: str
+) -> None:
+    """Validate layer filtering and root-to-leaf topological ordering in context_slice."""
+    from engramory.core.models import GraphEntity, GraphRelation
+
+    repo = Repository(pg_dsn)
+    tenant = "t-slice-layers"
+    ctx = _ctx(tenant)
+
+    # Insert chain: IPLAN-01 -> SPEC-01 -> ADR-01 -> BRD-01
+    await repo.upsert_graph_entity(
+        GraphEntity(id="BRD-01", entity_type="BRD", name="Business Goals", tenant_id=tenant)
+    )
+    await repo.upsert_graph_entity(
+        GraphEntity(id="ADR-01", entity_type="ADR", name="Architecture", tenant_id=tenant)
+    )
+    await repo.upsert_graph_entity(
+        GraphEntity(id="SPEC-01", entity_type="SPEC", name="Specification", tenant_id=tenant)
+    )
+    await repo.upsert_graph_entity(
+        GraphEntity(
+            id="IPLAN-01", entity_type="IPLAN", name="Implementation Plan", tenant_id=tenant
+        )
+    )
+
+    await repo.upsert_graph_relation(
+        GraphRelation(src_id="IPLAN-01", dst_id="SPEC-01", rel_type="IMPLEMENTS", tenant_id=tenant)
+    )
+    await repo.upsert_graph_relation(
+        GraphRelation(
+            src_id="SPEC-01", dst_id="ADR-01", rel_type="CONSTRAINED_BY", tenant_id=tenant
+        )
+    )
+    await repo.upsert_graph_relation(
+        GraphRelation(src_id="ADR-01", dst_id="BRD-01", rel_type="SATISFIES", tenant_id=tenant)
+    )
+
+    # 1. Unfiltered slice: all 3 ancestors
+    all_ancestors = await surface.context_slice(ctx, task_id="IPLAN-01", depth=5)
+    assert len(all_ancestors) == 3
+    # Topologically sorted: BRD-01 (layer 1) -> ADR-01 (layer 5) -> SPEC-01 (layer 6)
+    assert [a["id"] for a in all_ancestors] == ["BRD-01", "ADR-01", "SPEC-01"]
+
+    # 2. Filtered slice by layers=["SPEC", "ADR"]
+    filtered = await surface.context_slice(ctx, task_id="IPLAN-01", depth=5, layers=["SPEC", "ADR"])
+    assert len(filtered) == 2
+    assert [a["id"] for a in filtered] == ["ADR-01", "SPEC-01"]
+
+    # 3. Token budget restriction
+    budgeted = await surface.context_slice(ctx, task_id="IPLAN-01", depth=5, max_tokens=10)
+    assert len(budgeted) < 3

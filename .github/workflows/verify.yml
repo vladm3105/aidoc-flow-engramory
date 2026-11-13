@@ -1,0 +1,146 @@
+# aidoc-hybrid-ci — server-side verification (thin layer).
+# Runs on the integration branch after merge, on promotion branches / promotion PRs, release tags and
+# manual dispatch — never on feature branches. The job name "verify" is the required check for
+# promotion (PROMOTION_REQUIRED_CHECKS) — keep it stable.
+# ANTI-DEADLOCK INVARIANT: never add `paths:` / `paths-ignore:` under `on:` in this workflow — a
+# required check that is not triggered never reports and blocks the branch forever. Route inside
+# jobs instead (the `workflows` check enforces this for every file in REQUIRED_WORKFLOWS).
+# Pre-merge gate = `task ship` (local ci-full + signoff status). This job is the independent
+# audit record and the deploy gate. Verify action versions and pin them to commit SHAs.
+# Opt-in PR smart routing: uncomment the pull_request block under on: to run
+# detect-changes + routed jobs on PRs (pattern + enablement:
+# https://github.com/vladm3105/aidoc-hybrid-ci/blob/main/docs/HYBRID_CI.md,
+# ADOPTING §4). Cost: verify runs full task ci-full + full-history scan on every
+# PR push. Routed job contexts register in RULESET_EXTRA_CHECKS (never
+# REQUIRED_WORKFLOWS, which lists files); the workflows check enforces the invariant.
+name: verify
+on:
+  push:
+    branches: [dev]
+    tags: ['v*']
+  workflow_dispatch:
+  # PROMOTION_PRS (installer: pull_request trigger for promotion PRs, PROMOTION_MODE=pr)
+  # OPT-IN SMART ROUTING (enablement: ADOPTING §4): uncomment to run detect-changes
+  # + routed jobs on PRs. NEVER add paths: or paths-ignore: here — an untriggered
+  # required check blocks the PR forever. pr-mode installs: a live pull_request
+  # trigger was spliced above — extend ITS branches list instead of uncommenting
+  # a second pull_request: key.
+  # pull_request:
+  #   branches: [dev]
+
+permissions:
+  contents: read
+  checks: read                       # verify-reuse: read the verify result of an identical tree
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: false          # complete record for every base-branch commit
+
+jobs:
+  detect-changes:
+    # Opt-in smart routing (see on: above). Skipped on post-merge pushes.
+    if: github.event_name == 'pull_request'
+    runs-on: [self-hosted, ci, ephemeral]
+    outputs:
+      touched: ${{ steps.detect.outputs.touched }}
+      full: ${{ steps.detect.outputs.full }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: 0
+      - id: detect
+        env:
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+        run: |
+          BASE="origin/${GITHUB_BASE_REF}"
+          FULL=true; TOUCHED=false
+          if git fetch origin "${GITHUB_BASE_REF}" \
+              && DIFF=$(git diff --name-only "$BASE...HEAD"); then
+            FULL=false
+            # Consumer-owned impact manifest (edit me): paths forcing full runs.
+            if grep -qE '^(services/|apps/)' <<<"$DIFF" \
+                || grep -qE '(^|/)(go\.mod|go\.sum|pyproject\.toml|Cargo\.toml|package\.json)$' <<<"$DIFF" \
+                || grep -qE '^(Taskfile\.yml|.ci-config|.github/workflows/verify\.yml)$' <<<"$DIFF"; then
+              TOUCHED=true
+            fi
+          fi
+          echo "touched=$TOUCHED" >> "$GITHUB_OUTPUT"
+          echo "full=$FULL" >> "$GITHUB_OUTPUT"
+
+  route-example:
+    # Routing pattern example (non-required until registered per canon:
+    # https://github.com/vladm3105/aidoc-hybrid-ci/blob/main/docs/HYBRID_CI.md).
+    if: github.event_name == 'pull_request'
+    needs: detect-changes
+    runs-on: [self-hosted, ci, ephemeral]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - name: Stack checks (replace with this stack's steps)
+        if: needs.detect-changes.outputs.touched == 'true' || needs.detect-changes.outputs.full == 'true'
+        run: echo "TODO - stack steps, e.g. task ci"
+      - name: Fast-pass (no stack impact)
+        if: needs.detect-changes.outputs.touched != 'true' && needs.detect-changes.outputs.full != 'true'
+        run: |
+          echo "No stack files modified in this PR. Skipping (marking check GREEN)."
+          exit 0
+
+  verify:
+    runs-on: [self-hosted, ci, ephemeral]  # self-hosted only; install.sh --runner sets the labels
+    timeout-minutes: 30
+    env:
+      GITLEAKS_LOG_OPTS: "--all"      # full-history secret scan on the server
+      CI_ROUTING: "off"               # server always runs every check (no change-impact skipping)
+      CI_TAIL: "200"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: 0
+      # Verify each tree once (PLAN-007): a dev->staging merge commit has dev's tree, so the
+      # staging->main PR and the v* tag reuse the result instead of re-running ci-full. Only when
+      # the checked-out tree (the PR merge ref) equals the head tree, i.e. the base did not move.
+      - id: reuse
+        name: Reuse an identical, already verified tree
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          BASE_REF: ${{ github.base_ref || github.event.pull_request.base.ref }}
+        run: |
+          hit=false
+          if [ -n "$BASE_REF" ] && git rev-parse --verify "origin/$BASE_REF" >/dev/null 2>&1; then
+            trusted_helper="$(git show "origin/$BASE_REF:.ci/bin/verify-reuse" 2>/dev/null || true)"
+            if [ -n "$trusted_helper" ] \
+               && [ "$(git rev-parse "HEAD^{tree}")" = "$(git rev-parse "$HEAD_SHA^{tree}")" ] \
+               && parent=$(printf '%s' "$trusted_helper" | bash -s -- "$HEAD_SHA"); then
+              hit=true
+              echo "verify: tree of ${HEAD_SHA:0:12} already verified on ${parent:0:12}; reusing that result"
+            fi
+          fi
+          echo "hit=$hit" >> "$GITHUB_OUTPUT"
+      - if: steps.reuse.outputs.hit != 'true'
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c  # v4.3.0
+      - if: steps.reuse.outputs.hit != 'true'
+        run: task doctor
+      - if: steps.reuse.outputs.hit != 'true'
+        run: task deps
+      - if: steps.reuse.outputs.hit != 'true'
+        run: task ci-full
+      - name: Upload CI results (audit trail)
+        if: always() && steps.reuse.outputs.hit != 'true'
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1  # v4.6.1
+        with:
+          name: ci-results-${{ github.sha }}
+          path: .ci-out/
+          retention-days: 90
+      # - name: SonarCloud               # enable when sonar-project.properties is configured
+      #   uses: SonarSource/sonarqube-scan-action@v5
+      #   env:
+      #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  deploy:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: verify
+    runs-on: [self-hosted, ci, ephemeral]
+    environment: production            # protection rules + deploy secrets live here
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - run: echo "TODO - deploy steps"

@@ -1,0 +1,225 @@
+#!/usr/bin/env bash
+# aidoc-local-flow-ci doctor — verifies the environment before an agent (or human) starts work.
+#   - required tools for the languages used in this repo
+#   - integrity of the vendored .ci/ (unmodified vs MANIFEST.sha256)
+#   - git hooks installed, base branch reachable
+# Usage: doctor [--json]      Exit: 0 ok (warnings allowed) · 1 problems found
+set -uo pipefail
+# shellcheck source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+root=$(ci_root) || { echo "doctor: not in a git repo" >&2; exit 1; }
+cd "$root" || exit 1
+
+json=0; [[ ${1:-} == --json ]] && json=1
+problems=(); warnings=(); ok=()
+
+have() { command -v "$1" >/dev/null 2>&1; }
+need() { if have "$1"; then ok+=("tool $1"); else problems+=("missing tool: $1 ($2)"); fi; }
+want() { if have "$1"; then ok+=("tool $1"); else warnings+=("missing optional tool: $1 ($2)"); fi; }
+
+# --- languages used (modules referenced by the root Taskfile) ---------------------------
+langs=$(grep -oE '(\.ci(-local)?/taskfiles|taskfiles)/[a-z0-9_-]+\.ya?ml' Taskfile.yml 2>/dev/null \
+  | sed -E 's#.*/##; s#\.ya?ml$##' | grep -vE '^(common|root|_template)$' | sort -u)
+
+need git "version control"
+if command -v git >/dev/null 2>&1; then
+  git_ver=$(git --version | awk '{print $3}' | sed 's/[^0-9.]//g')
+  git_major=$(cut -d. -f1 <<<"$git_ver")
+  git_minor=$(cut -d. -f2 <<<"$git_ver")
+  if (( git_major < 2 || (git_major == 2 && git_minor < 38) )); then
+    warnings+=("git $git_ver is older than 2.38 — 'task sync' requires git >= 2.38 for merge-tree")
+  fi
+fi
+need task "Taskfile runner — mise install"
+need jq "JSON processing — mise install"
+want lefthook "git hooks — mise install"
+want timeout "check/reviewer timeouts (CI_CHECK_TIMEOUT) — coreutils (without it, timeouts are unenforced)"
+
+# --- universal checks enabled in .ci-config -----------------------------------------------
+universal=" $(ci_list UNIVERSAL_CHECKS "secrets sast policy audit-trail closure hygiene markdown links yaml workflows shell sca iac paths") "
+has_files() { [[ -n $(ci_files "$@" | head -n1) ]]; }
+has_shell() { has_files '*.sh' '*.bash' && return 0
+  local sh_extra; read -r -a sh_extra <<<"$(ci_list SHELL_FILES "")"
+  [[ ${#sh_extra[@]} -gt 0 ]] && has_files "${sh_extra[@]}"; }
+on() { [[ $universal == *" $1 "* ]]; }
+# Tools for checks in REPORT_ONLY are advisory (run downgrades their failures to
+# warnings), so a missing tool is a warning there, not a blocking problem.
+check_tool() {
+  local chk=$1 tool=$2 hint=$3
+  if ci_report_only "$chk"; then want "$tool" "$hint (report-only)"; else need "$tool" "$hint"; fi
+}
+on secrets   && check_tool secrets gitleaks "secrets — mise install"
+on sast      && check_tool sast semgrep "sast — mise install"
+on markdown  && has_files '*.md' '*.markdown' && check_tool markdown markdownlint-cli2 "markdown — mise install"
+on links     && has_files '*.md' '*.markdown' '*.html' && check_tool links lychee "links — mise install"
+on yaml      && has_files '*.yml' '*.yaml' && check_tool yaml yamllint "yaml — mise install"
+on workflows && has_files '.github/workflows/*' && check_tool workflows actionlint "workflows — mise install"
+on shell     && has_shell && check_tool shell shellcheck "shell — mise install"
+on sca       && check_tool sca osv-scanner "sca — mise install"
+on iac       && check_tool iac trivy "iac — mise install"
+want gh "needed for 'task ship' — mise install, then 'gh auth login'"
+ghish=0
+[[ $(ci_forge) == github ]] && ghish=1
+# Split forge (#48): Gitea integration + GitHub promotion; both remotes must exist.
+if [[ $(ci_config PROMOTION_FORGE "") == github ]]; then
+  ghish=1
+  if ci_split_forge; then
+    prem=$(ci_promotion_remote)
+    if [[ $(git remote get-url "$prem" 2>/dev/null) == *github.com* ]]; then
+      ok+=("split forge: integration on gitea ($(ci_push_remote)), promotion on github ($prem)")
+    else
+      problems+=("split forge: PROMOTION_REMOTE '$prem' is missing or not a GitHub remote — git remote add $prem https://github.com/<owner>/<repo>.git")
+    fi
+    # PLAN-007: one verify per promotion PR (pr mode); no dependency bot on the read-only GitHub dev (D-1).
+    [[ $(ci_config PROMOTION_MODE ff) == pr ]] \
+      || problems+=("split forge: PROMOTION_MODE must be pr (one verify per promotion PR; PLAN-007) — set PROMOTION_MODE=pr in .ci-config")
+    [[ -f .github/dependabot.yml || -f .github/dependabot.yaml ]] \
+      && warnings+=("split forge: .github/dependabot.yml opens PRs into the read-only GitHub dev — remove it; dependency updates go through task ship on Gitea (PLAN-007 D-1)")
+  else
+    problems+=("PROMOTION_FORGE=github needs a Gitea integration remote named 'gitea' — git remote add gitea <gitea-url>")
+  fi
+fi
+[[ $(git remote get-url origin 2>/dev/null) == *github.com* ]] && ghish=1
+if have gh && [[ $ghish == 1 ]]; then
+  if gh auth status >/dev/null 2>&1; then ok+=("gh authenticated")
+  else warnings+=("gh is not authenticated — run 'gh auth login' before ship/promote"); fi
+fi
+want mise "toolchain manager — https://mise.jdx.dev"
+if [[ $(ci_forge) == gitea ]] || git remote get-url gitea >/dev/null 2>&1; then
+  want curl "Gitea API transport"
+  if [[ -z ${GITEA_TOKEN:-} ]]; then
+    warnings+=("Gitea forge detected but GITEA_TOKEN is not set — forge calls will fail")
+  else
+    gver=$("${FORGE_CURL_BIN:-curl}" -sS -m 10 -H "Authorization: token $GITEA_TOKEN" "$(forge_instance)/api/v1/version" 2>/dev/null | jq -r .version 2>/dev/null)
+    if [[ -n $gver && $gver != null ]]; then ok+=("Gitea reachable: $gver"); else warnings+=("Gitea instance unreachable — check network/token"); fi
+  fi
+fi
+
+for l in $langs; do
+  case $l in
+    python) need uv "Python package manager" ;;
+    rust)   need cargo "Rust toolchain"; need cargo-clippy "rustup component add clippy"
+            need rustfmt "rustup component add rustfmt"; want cargo-nextest "test runner"
+            want cargo-llvm-cov "coverage (set COVERAGE=false to skip)"; need cargo-deny "dependency audit" ;;
+    go)     need go "Go toolchain"; need golangci-lint "Go linter"; need govulncheck "Go vuln audit" ;;
+    js)     need node "Node.js"; want pnpm "default JS package manager (override PM/PMX vars)" ;;
+    *)      warnings+=("language module '$l' has no doctor rules — check its tools manually") ;;
+  esac
+done
+
+# --- self-review ------------------------------------------------------------------------------
+if [[ $(ci_config REVIEW off) != off ]]; then
+  rubric=$(ci_config REVIEW_RUBRIC ".ci-review/rubric.md")
+  [[ -f $rubric ]] || problems+=("REVIEW is on but rubric $rubric is missing (copy from the canon templates/review-rubric.md)")
+  rcmd=$(ci_config REVIEW_CMD 'bash "$CI_ROOT/.ci/bin/review-llm"')
+  if [[ $rcmd == *review-llm* ]]; then
+    have curl || problems+=("review: curl needed by review-llm")
+    [[ -n $(ci_config REVIEW_MODEL "") ]] || problems+=("review: REVIEW_MODEL not set in .ci-config")
+    [[ -n ${LLM_URL:-} ]] || warnings+=("review: LLM_URL not set in this environment — task review will fail until it is")
+  fi
+  [[ $(ci_config REVIEW off) == required ]] && ok+=("self-review required (max $(ci_config REVIEW_MAX_ROUNDS 3) rounds, reviewer: ${rcmd%% *})")
+fi
+
+# --- canon files hidden by .gitignore (a clone would miss them; integrity then fails in CI) ---
+if git rev-parse --git-dir >/dev/null 2>&1 && [[ -f .ci/MANIFEST.sha256 ]]; then
+  hidden=$( { awk '{sub(/^\.\//, "", $2); print ".ci/" $2}' .ci/MANIFEST.sha256; echo .ci/MANIFEST.sha256
+              echo scripts/secret_scan.py; echo scripts/pre_push_guard.sh; } \
+            | while read -r f; do [[ -e $f ]] && git check-ignore -q --no-index "$f" && echo "$f"; done | tr '\n' ' ')
+  [[ -z $hidden ]] || problems+=("canon files ignored by .gitignore (never committed; fresh clones fail integrity): $hidden— add '!<path>' lines to .gitignore")
+fi
+
+# --- vendored or shared framework integrity -------------------------------------------
+cdir=$(ci_dir)
+if [[ -f "$cdir/MANIFEST.sha256" ]]; then
+  if have sha256sum; then sumcmd=(sha256sum); else sumcmd=(shasum -a 256); fi
+  # SOURCE is installer-written per-install state (source/ref/version for update),
+  # not canon content, so it is excluded from the extras check by design.
+  extra=$(cd "$cdir" && comm -13 <(awk '{print $2}' MANIFEST.sha256 | sort) \
+            <(find . -type f ! -name MANIFEST.sha256 ! -name SOURCE | sort) | tr '\n' ' ')
+  if [[ -n $extra ]]; then
+    problems+=(".ci/ contains files not in the framework manifest: $extra— put project additions in .ci-local/, not .ci/")
+  fi
+  if bad=$(cd "$cdir" && "${sumcmd[@]}" -c MANIFEST.sha256 --quiet 2>&1); then
+    ok+=(".ci integrity $(cat "$cdir/VERSION" 2>/dev/null)")
+  else
+    problems+=(".ci/ was modified locally — never edit .ci/; adapt via Taskfile.yml vars, .ci-config or .ci-local/. Restore with .ci/bin/update. Details: $(tr '\n' ' ' <<<"$bad")")
+  fi
+  if [[ -f .aidoc/harness.lock.json ]]; then
+    lock_sha=$(jq -r '.ci_manifest_sha256 // empty' .aidoc/harness.lock.json 2>/dev/null)
+    actual_sha=$("${sumcmd[@]}" "$cdir/MANIFEST.sha256" | awk '{print $1}')
+    if [[ -n $lock_sha && $lock_sha != "$actual_sha" ]]; then
+      problems+=(".aidoc/harness.lock.json ci_manifest_sha256 ($lock_sha) does not match $cdir/MANIFEST.sha256 ($actual_sha)")
+    elif [[ -n $lock_sha ]]; then
+      ok+=("harness.lock.json attested")
+    fi
+  fi
+else
+  problems+=(".ci/MANIFEST.sha256 missing — cannot verify framework integrity. Restore with .ci/bin/update (or reinstall) — never run CI on an unverifiable .ci/")
+fi
+
+# --- toolchain pins -----------------------------------------------------------------------
+if [[ -f mise.toml ]]; then
+  unpinned=$(grep -E '=[[:space:]]*"latest"' mise.toml | sed -E 's/[[:space:]]*=.*//; s/"//g' | tr '\n' ' ')
+  [[ -n $unpinned ]] && warnings+=("mise.toml has unpinned tools: $unpinned— pin exact versions (mise ls --current) for reproducible CI")
+else
+  warnings+=("mise.toml missing — toolchain versions are not pinned")
+fi
+
+# --- git setup -------------------------------------------------------------------------
+if [[ -z $(ci_base_ref) ]]; then
+  warnings+=("base branch '$(ci_base_branch)' not found locally or on origin — run 'git fetch origin'")
+else
+  ok+=("base $(ci_base_ref)")
+fi
+hooks_dir=$(git rev-parse --git-path hooks)
+if grep -qs -E 'lefthook|pre-commit' "$hooks_dir/pre-commit" 2>/dev/null || \
+   grep -qs -E 'lefthook|pre-push' "$hooks_dir/pre-push" 2>/dev/null || \
+   [[ -x "$hooks_dir/pre-push" || -x "$hooks_dir/pre-commit" ]]; then
+  ok+=("git hooks installed")
+else
+  warnings+=("git hooks not installed — run 'task setup' (or 'lefthook install')")
+fi
+[[ -f AGENTS.md ]] || warnings+=("AGENTS.md missing — agents will not know the protocol")
+
+# --- host runners sharing this user's mise data dir (#40) -----------------------------------
+# A plain actions/runner install under this user (~/actions-runner*/ with a .runner file) runs
+# jdx/mise-action against the same ~/.local/share/mise as local `task ci`; concurrent installs make
+# local checks fail at random ("Text file busy"). Each runner's .env must point MISE_DATA_DIR (and
+# MISE_CACHE_DIR) at a runner-only dir.
+dev_mise=${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}
+shared=()
+for rd in "${CI_RUNNER_HOME:-$HOME}"/actions-runner*/; do
+  [[ -f $rd.runner ]] || continue
+  rdata=$(sed -n 's/^MISE_DATA_DIR=//p' "$rd.env" 2>/dev/null | tail -1)
+  [[ -n $rdata && ${rdata%/} != "${dev_mise%/}" ]] || shared+=("${rd%/}")
+done
+if (( ${#shared[@]} )); then
+  warnings+=("host runners share your mise data dir (${#shared[@]}): ${shared[*]##*/} — set MISE_DATA_DIR/MISE_CACHE_DIR in each runner .env (SERVER_CI_GUIDE: host runners)")
+fi
+
+# --- per-repo governance (failures surface as warnings, never problems) ------------------
+gov_out=$(bash "$(dirname "${BASH_SOURCE[0]}")/governance-check" --json 2>/dev/null); gov_rc=$?
+gov_status=$(jq -r '.status // empty' <<<"$gov_out" 2>/dev/null)
+if [[ $gov_rc -eq 0 && $gov_status == ok ]]; then
+  ok+=("governance surfaces verified ($(jq -r .file <<<"$gov_out" 2>/dev/null))")
+elif [[ $gov_rc -eq 0 && $gov_status == skip ]]; then
+  ok+=("governance: no Per-repo governance table (optional)")
+elif [[ -n $gov_out ]]; then
+  while IFS= read -r m; do warnings+=("governance: $m"); done < <(jq -r '.problems[]?' <<<"$gov_out" 2>/dev/null)
+else
+  warnings+=("governance: check failed to run")
+fi
+
+if [[ $json == 1 ]]; then
+  jq -n --arg langs "$langs" \
+    --argjson p "$(printf '%s\n' "${problems[@]+"${problems[@]}"}" | jq -Rsc 'split("\n")|map(select(length>0))')" \
+    --argjson w "$(printf '%s\n' "${warnings[@]+"${warnings[@]}"}" | jq -Rsc 'split("\n")|map(select(length>0))')" \
+    '{status: (if ($p|length)>0 then "fail" else "ok" end), languages: ($langs|split("\n")|map(select(length>0))), problems:$p, warnings:$w}'
+else
+  echo "languages: ${langs//$'\n'/ }"
+  for m in "${ok[@]+"${ok[@]}"}"; do echo "OK    $m"; done
+  for m in "${warnings[@]+"${warnings[@]}"}"; do echo "WARN  $m"; done
+  for m in "${problems[@]+"${problems[@]}"}"; do echo "FAIL  $m"; done
+  [[ ${#problems[@]} -eq 0 ]] && echo "doctor: OK" || echo "doctor: ${#problems[@]} problem(s) — fix before running CI"
+fi
+[[ ${#problems[@]} -eq 0 ]]

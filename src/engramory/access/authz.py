@@ -3,6 +3,7 @@
 Pure and deterministic: no I/O, no clock. The surface layer writes the
 AuditRecord for every decision (allow AND deny, EARS.01.03.b050).
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -17,8 +18,30 @@ KNOWN_ACTIONS = frozenset(
         "memory_add",
         "memory_feedback",
         "memory_forget",
+        "memory_ingest_event",
+        "memory_learning_health",
         "agent_profile_get",
         "knowledge_ingest",
+        "knowledge_ingest_media",
+        "knowledge_search",
+        "blob_put",
+        "blob_get",
+        "blob_head",
+        "graph_neighbors",
+        "context_slice",
+        "blast_radius",
+        "docs_ingest_runbook",
+        "docs_slice_runbook",
+        "docs_validate",
+        "docs_check_drift",
+        "docs_export_llms",
+        "docs_smoke_run",
+        "docs_tools_inventory",
+        "docs_build_portal",
+        "sdd_ingest",
+        "sdd_validate_graph",
+        "sdd_check_invariants",
+        "sdd_lint_policy",
     }
 )
 

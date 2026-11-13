@@ -1,0 +1,141 @@
+# markdownlint composite action — v3 packaging of the ci/v2.x `markdown-lint`
+# reusable. The step body is a VERBATIM PORT of that reusable's "Install + run
+# markdownlint-cli2" step (PLAN-025 §1: copy proven bodies, do not rewrite).
+#
+# WHY A COMPOSITE ACTION: a `workflow_call` reusable always gets its own runner,
+# so twelve checks cost twelve provisioning cycles. A composite action runs in
+# the CALLER's job and shares one. Measured motivation: on a consumer repo
+# the audit-trail reusable took ~167s to run a grep, almost all provisioning.
+#
+# CHECKOUT IS THE CALLER'S JOB. Unlike the reusable this does NOT check out —
+# the `quick-gates` job checks out once and every composite action shares it.
+# That is part of the saving; do not add a checkout here.
+#
+# DEFENSES CARRIED FROM THE REUSABLE (PLAN-025 §2 — do not remove):
+#   D5  actions/* are SHA-pinned, not tag-pinned (REPO_STANDARDS §4.3).
+#   D15 every `run:` is `set -euo pipefail` — GitHub already applies an implicit
+#       `bash -e`, so a bare pipeline aborts the step before a guard can forgive
+#       it (REPO_STANDARDS §24.1).
+#   Injection: consumer-controlled inputs are mapped to `env:` and never
+#       interpolated into the shell, so a hostile `globs`/`config` cannot inject
+#       a `${{ }}` expression.
+#   noglob: globs are collected as literal strings — markdownlint-cli2 does its
+#       own globbing and the shell must not pre-expand them.
+#   --ignore-scripts: markdownlint-cli2 is pure JS with no build step, so
+#       skipping lifecycle scripts closes the transitive-dep install-time
+#       code-execution surface at no functional cost.
+#
+# TOOL PARITY IS LOAD-BEARING (PLAN-025 §3.3). This pins markdownlint-cli2 —
+# NOT the pre-commit ecosystem's `markdownlint-cli` (v1), which has different
+# ignore semantics. The local hook must pin cli2 at this same version against
+# the same config, or local passes and CI reds, which trains contributors to
+# bypass hooks.
+name: markdownlint
+description: Lint Markdown with markdownlint-cli2 against the repo config.
+
+inputs:
+  globs:
+    description: 'Newline-separated globs to lint. markdownlint-cli2 does its own globbing.'
+    required: false
+    default: '**/*.md'
+  config:
+    description: 'Path to a markdownlint config file. Empty lets cli2 discover it.'
+    required: false
+    default: ''
+  fix:
+    description: 'Apply fixes in place. Default false.'
+    required: false
+    default: 'false'
+  fail-on-findings:
+    description: 'Fail the step on findings. Default true — this action feeds a required context.'
+    required: false
+    default: 'true'
+  node-version:
+    description: 'Node version. Ephemeral self-hosted runners may not pre-bake one.'
+    required: false
+    default: '22'
+
+runs:
+  using: composite
+  steps:
+    # PLAN-025 §3.2: verify the precondition, fail loudly if unmet. Without this,
+    # a job that checked out nothing (or shallow, or the wrong ref) leaves cli2
+    # matching zero files and exiting 0 — a green required check that inspected
+    # nothing. That is the same shape as D11 and D22, re-created by
+    # consolidation, and it is invisible in the log.
+    - name: Verify precondition — a checked-out tree with Markdown in it
+      shell: bash
+      env:
+        GLOBS: ${{ inputs.globs }}
+      run: |
+        set -euo pipefail
+        if [ ! -e .git ]; then
+          echo "::error::markdownlint action: no checkout detected. The CALLER must check out before invoking this action (PLAN-025 §3.2)."
+          exit 1
+        fi
+        # A repo genuinely containing no Markdown is legitimate; a tree that
+        # failed to materialise is not. The INDEX is not the worktree — cli2
+        # globs the filesystem while `git ls-files` reads the index, and a
+        # sparse or partial checkout diverges them. Comparing the two is what
+        # distinguishes "no Markdown" from "Markdown that is not on disk".
+        indexed=$(git ls-files -- '*.md' | wc -l)
+        # `if`, not `[ -f "$f" ] && printf '.'` — with `&&`, a final iteration
+        # whose file is MISSING leaves the loop's status at 1, `pipefail` hands
+        # that to the assignment and `set -e` kills the step before the
+        # diagnostic below. That is precisely the case this check exists to
+        # report: measured, the step exited 1 and said nothing. §27.1's rule is
+        # about a pipeline's STATUS being a decision; the reader here is `read`,
+        # not `grep`, so BANNED_RE cannot see it.
+        ondisk=$(git ls-files -- '*.md' | while IFS= read -r f; do if [ -f "$f" ]; then printf '.'; fi; done | wc -c)
+        if [ "$indexed" -eq 0 ]; then
+          echo "::notice::markdownlint: repository tracks no .md files — nothing to lint."
+        elif [ "$ondisk" -lt "$indexed" ]; then
+          echo "::error::markdownlint: $indexed .md file(s) are tracked but only $ondisk are on disk — a sparse or partial checkout. cli2 globs the FILESYSTEM, so it would lint only what materialised and report success on the rest."
+          exit 1
+        fi
+
+    # setup-node is allowlisted (actions/*) and guarantees Node on ephemeral
+    # self-hosted runners that may not pre-bake it.
+    - name: Set up Node
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Install + run markdownlint-cli2
+      shell: bash
+      env:
+        GLOBS: ${{ inputs.globs }}
+        CONFIG: ${{ inputs.config }}
+        FIX: ${{ inputs.fix }}
+        FAIL: ${{ inputs.fail-on-findings }}
+      run: |
+        set -euo pipefail
+        npm install -g --ignore-scripts markdownlint-cli2@0.23.0
+        args=()
+        [ -n "${CONFIG}" ] && args+=(--config "${CONFIG}")
+        [ "${FIX}" = "true" ] && args+=(--fix)
+        # Collect newline-separated globs as literal strings (skip blanks).
+        globlist=()
+        set -o noglob
+        while IFS= read -r line; do
+          [ -n "${line}" ] && globlist+=("${line}")
+        done <<< "${GLOBS}"
+        set +o noglob
+        # Report-only mode still prints ::error annotations; it only swallows
+        # the non-zero exit. Kept as an env toggle rather than
+        # `continue-on-error` so the behaviour is identical to the v2 reusable.
+        set +e
+        timeout 600 markdownlint-cli2 "${args[@]}" "${globlist[@]}"
+        rc=$?
+        set -e
+        # 124 is `timeout`'s own code — the run was KILLED. Without this arm the
+        # report-only path swallowed it and MISLABELLED it as findings, and the
+        # blocking path reported a lint failure for an infrastructure one.
+        if [ "$rc" -eq 124 ]; then
+          echo "::error::markdownlint: timed out — infrastructure failure, not lint findings. Re-run."; exit 1
+        fi
+        if [ "$rc" -ne 0 ] && [ "${FAIL}" != "true" ]; then
+          echo "::notice::markdownlint report-only — findings above do not block merge (fail-on-findings=false)"
+          rc=0
+        fi
+        exit "$rc"
