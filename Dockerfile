@@ -1,5 +1,5 @@
 # Multi-stage build for Engramory Worker daemon (PLAN-005 Phase 5)
-FROM python:3.12-slim-bookworm AS builder
+FROM python:3.15-slim-bookworm AS builder
 
 WORKDIR /build
 
@@ -15,7 +15,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir --prefix=/install .
 
 # Final runtime stage
-FROM python:3.12-slim-bookworm
+FROM python:3.15-slim-bookworm
 
 ARG USER_ID=1004
 ARG GROUP_ID=1004
