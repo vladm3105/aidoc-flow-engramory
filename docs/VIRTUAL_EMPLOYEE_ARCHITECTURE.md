@@ -17,7 +17,7 @@ last_verified: "2026-11-13"
 
 # Engramory Virtual Employee Hierarchy, Multi-Model Brain Variants & Portable Brain Passports
 
-**Authority:** Engramory `ADR-05` (*Canonical Store*), `ADR-06` (*Governed Write & Fail-Closed*), `ADR-07` (*4-Level Scope Ladder*), `SPEC-01` (*AccessSurface*), `SPEC-02` (*Memory Store*), `SPEC-03` (*Retrieval & Graph*), `SPEC-07` (*CLI Face*), and `CHG-009` (`PLAN-024`).
+**Authority:** Engramory `ADR-05` (*Canonical Store*), `ADR-06` (*Governed Write & Fail-Closed*), `ADR-07` (*4-Level Scope Ladder*), `SPEC-01` (*AccessSurface*), `SPEC-02` (*Memory Store*), `SPEC-03` (*Retrieval & Graph*), `SPEC-07` (*CLI Face*), and `CHG-009` (`PLAN-024`, `v0.3.0`).
 
 Engramory models every deployed agent instance as a **Virtual Employee** operating on a canonical PostgreSQL 18 spine (`127.0.0.1:5432`) and LiteLLM model gateway (`127.0.0.1:4000`). A tenant fleet (for example, `10` `agent-support` instances, `5` `agent-pm` instances, and `5` `agent-dev` instances) shares project and department knowledge at $O(1)$ memory cost while accumulating specialized, portable per-instance experience.
 
