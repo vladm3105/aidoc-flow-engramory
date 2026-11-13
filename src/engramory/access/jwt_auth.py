@@ -199,10 +199,21 @@ def claims_to_actor_context(claims: TokenClaims) -> ActorContext:
     raw_projects = claims.projects
     project_id = raw_projects[0] if raw_projects else "core"
 
+    raw_domain = claims.raw_claims.get("domain_id") or claims.raw_claims.get("department_focus")
+    domain_id: str | None = None
+    if raw_domain:
+        domain_id = str(raw_domain).strip() or None
+    else:
+        for grp in claims.groups:
+            if grp.startswith("domain:"):
+                domain_id = grp.split(":", 1)[1].strip() or None
+                if domain_id:
+                    break
+
     # Evaluate role-authorized scopes
     max_scopes: set[str] = {"agent", "project"}
     roles = set(claims.groups)
-    if any(r in roles for r in ("domain-admin", "project-admin", "lead")):
+    if any(r in roles for r in ("domain-admin", "project-admin", "lead")) or domain_id is not None:
         max_scopes.add("domain")
     if any(r in roles for r in ("platform-admin", "superuser")) or claims.raw_claims.get(
         "is_superuser"
@@ -224,6 +235,7 @@ def claims_to_actor_context(claims: TokenClaims) -> ActorContext:
         tenant_id=tenant_id,
         project_id=project_id,
         scopes=valid_scopes,
+        domain_id=domain_id,
     )
 
 

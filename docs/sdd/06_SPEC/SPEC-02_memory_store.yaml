@@ -116,8 +116,23 @@ data_models:
     - name: "AgentProfile"
       type: "dataclass"
       fields:
-        - { name: "agent_id", type: "str", required: true, description: "Agent identity" }
-        - { name: "standing_preferences", type: "dict", required: false, description: "Durable preferences" }
+        - { name: "agent_id", type: "str", required: true, description: "Agent instance identity (e.g. agent-support-01)" }
+        - { name: "display_name", type: "str", required: false, description: "Human-readable Virtual Employee display name" }
+        - { name: "tenant_id", type: "str", required: true, description: "Tenant isolation key (composite PK (tenant_id, agent_id))" }
+        - { name: "standing_preferences", type: "dict", required: false, description: "Durable Virtual Employee preferences (agent_type, role, department_focus, specializations, brain_config)" }
+    - name: "BrainPassport"
+      type: "dict"
+      fields:
+        - { name: "schema_version", type: "str", required: true, description: "engramory.brain_passport.v1" }
+        - { name: "agent_id", type: "str", required: true, description: "Source Virtual Employee instance ID" }
+        - { name: "agent_type", type: "str | None", required: false, description: "Agent archetype (e.g. agent-support, agent-pm, agent-dev)" }
+        - { name: "display_name", type: "str", required: true, description: "Sanitized display name" }
+        - { name: "domain_id", type: "str | None", required: false, description: "Department focus (e.g. billing)" }
+        - { name: "specializations", type: "list[str]", required: false, description: "Specialist tags (e.g. ['stripe', 'chargebacks'])" }
+        - { name: "brain_metadata", type: "dict", required: true, description: "Multi-model metadata (brain_variant, distiller_model, extraction_model, embedding_model, rag_params)" }
+        - { name: "standing_preferences", type: "dict", required: true, description: "Recursively sanitized L3 standing preferences" }
+        - { name: "skills", type: "list[dict]", required: true, description: "Sanitized L2 scope='agent' distilled skills with per-skill brain_metadata and specializations" }
+        - { name: "passport_sha256", type: "str", required: true, description: "Canonical SHA-256 integrity digest over portable payload fields" }
 
 behavior:
   validation_rules:

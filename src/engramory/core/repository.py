@@ -165,9 +165,19 @@ class Repository:
                 raise RuntimeError("episode vanished between conflicting INSERT and SELECT")
             return str(existing["id"])
 
-    async def upsert_memory(self, memory: Memory) -> str:
+    async def upsert_memory(
+        self,
+        memory: Memory,
+        *,
+        embedding: Sequence[float] | None = None,
+        copy_embedding_from_id: str | None = None,
+    ) -> str:
         """Insert a distilled memory; soft-supersede the predecessor in the same
         transaction when ``memory.supersedes`` is set (never delete)."""
+        params = _memory_params(memory)
+        params["embedding"] = (
+            vector_literal(embedding) if embedding is not None and len(embedding) == 1536 else None
+        )
         async with self._conn() as conn:
             row = await (
                 await conn.execute(
@@ -175,18 +185,44 @@ class Repository:
                     INSERT INTO memories
                         (agent_id, project_id, domain_id, tenant_id, scope, type,
                          content_raw, summary, embedding_model, embedding_dims,
-                         provenance, confidence, status, source_trust, supersedes)
+                         embedding, provenance, confidence, status, source_trust, supersedes)
                     VALUES (%(agent_id)s, %(project_id)s, %(domain_id)s, %(tenant_id)s,
                             %(scope)s, %(type)s, %(content_raw)s, %(summary)s,
-                            %(embedding_model)s, %(embedding_dims)s, %(provenance)s,
-                            %(confidence)s, %(status)s, %(source_trust)s, %(supersedes)s)
+                            %(embedding_model)s, %(embedding_dims)s,
+                            CASE
+                                WHEN %(embedding)s::text IS NOT NULL THEN %(embedding)s::vector
+                                ELSE NULL
+                            END,
+                            %(provenance)s, %(confidence)s, %(status)s,
+                            %(source_trust)s, %(supersedes)s)
                     RETURNING id
                     """,
-                    _memory_params(memory),
+                    params,
                 )
             ).fetchone()
             if row is None:
                 raise RuntimeError("INSERT INTO memories did not return id")
+            mem_id = str(row["id"])
+            if params["embedding"] is None and copy_embedding_from_id is not None:
+                await conn.execute(
+                    """
+                    UPDATE memories dst
+                    SET embedding = src.embedding,
+                        embedding_model = src.embedding_model,
+                        embedding_dims = src.embedding_dims
+                    FROM memories src
+                    WHERE dst.id = %(dst_id)s
+                      AND dst.tenant_id = %(tenant_id)s
+                      AND src.id = %(src_id)s
+                      AND src.tenant_id = %(tenant_id)s
+                      AND src.embedding IS NOT NULL
+                    """,
+                    {
+                        "dst_id": mem_id,
+                        "src_id": copy_embedding_from_id,
+                        "tenant_id": memory.tenant_id,
+                    },
+                )
             if memory.supersedes is not None:
                 # tenant_id guard: the tenant wall (ADR-07) holds on the write
                 # path too — a supersede can never end-date a foreign-tenant row.
@@ -198,7 +234,7 @@ class Repository:
                     """,
                     {"id": memory.supersedes, "tenant_id": memory.tenant_id},
                 )
-            return str(row["id"])
+            return mem_id
 
     async def get_memory(self, memory_id: str, *, tenant_id: str) -> Memory:
         """Fetch one memory by id regardless of status (audit/supersede chains).
@@ -352,11 +388,183 @@ class Repository:
                 },
             )
 
+    async def list_agent_profiles(
+        self,
+        *,
+        tenant_id: str,
+        domain_id: str | None = None,
+        agent_type: str | None = None,
+        role: str | None = None,
+        specialization: str | None = None,
+        include_stats: bool = True,
+    ) -> list[dict[str, Any]]:
+        """List Virtual Employee profiles in ``tenant_id`` with filters and live skill stats."""
+        async with self._conn() as conn:
+            rows = await (
+                await conn.execute(
+                    """
+                    SELECT
+                        p.tenant_id,
+                        p.agent_id,
+                        p.display_name,
+                        p.standing_preferences,
+                        COALESCE(m.active_skill_count, 0) AS active_skill_count,
+                        COALESCE(m.mean_confidence, 0.0) AS mean_confidence,
+                        COALESCE(m.brain_variants, '[]'::jsonb) AS brain_variants
+                    FROM agent_profiles p
+                    LEFT JOIN (
+                        SELECT
+                            tenant_id,
+                            agent_id,
+                            COUNT(*)::int AS active_skill_count,
+                            AVG(confidence)::float AS mean_confidence,
+                            jsonb_agg(
+                                DISTINCT coalesce(provenance->>'brain_variant', 'default')
+                            ) AS brain_variants
+                        FROM memories
+                        WHERE tenant_id = %(tenant_id)s
+                          AND scope = 'agent'
+                          AND status = 'active'
+                          AND valid_to IS NULL
+                        GROUP BY tenant_id, agent_id
+                    ) m ON m.tenant_id = p.tenant_id AND m.agent_id = p.agent_id
+                    WHERE p.tenant_id = %(tenant_id)s
+                      AND (
+                          %(domain_id)s::text IS NULL
+                          OR p.standing_preferences->>'department_focus' = %(domain_id)s
+                      )
+                      AND (
+                          %(agent_type)s::text IS NULL
+                          OR coalesce(
+                              p.standing_preferences->>'agent_type',
+                              p.standing_preferences->>'role'
+                          ) = %(agent_type)s
+                      )
+                      AND (
+                          %(role)s::text IS NULL
+                          OR coalesce(
+                              p.standing_preferences->>'role',
+                              p.standing_preferences->>'agent_type'
+                          ) = %(role)s
+                      )
+                      AND (
+                          %(specialization)s::text IS NULL
+                          OR coalesce(
+                              p.standing_preferences->'specializations', '[]'::jsonb
+                          ) ? %(specialization)s
+                      )
+                    ORDER BY
+                        CASE
+                            WHEN %(include_stats)s THEN COALESCE(m.mean_confidence, 0.0)
+                            ELSE 0.0
+                        END DESC,
+                        CASE
+                            WHEN %(include_stats)s THEN COALESCE(m.active_skill_count, 0)
+                            ELSE 0
+                        END DESC,
+                        p.agent_id ASC
+                    """,
+                    {
+                        "tenant_id": tenant_id,
+                        "domain_id": domain_id,
+                        "agent_type": agent_type,
+                        "role": role,
+                        "specialization": specialization,
+                        "include_stats": include_stats,
+                    },
+                )
+            ).fetchall()
+            out: list[dict[str, Any]] = []
+            for row in rows:
+                prefs = dict(row["standing_preferences"] or {})
+                raw_specs = prefs.get("specializations")
+                specs = [str(s) for s in raw_specs] if isinstance(raw_specs, list) else []
+                bvars = row["brain_variants"]
+                variants = [str(v) for v in bvars] if isinstance(bvars, list) else []
+                entry: dict[str, Any] = {
+                    "tenant_id": str(row["tenant_id"]),
+                    "agent_id": str(row["agent_id"]),
+                    "display_name": str(row["display_name"] or ""),
+                    "agent_type": prefs.get("agent_type") or prefs.get("role"),
+                    "role": prefs.get("role") or prefs.get("agent_type"),
+                    "domain_id": prefs.get("department_focus"),
+                    "specializations": specs,
+                    "brain_config": dict(prefs.get("brain_config") or {}),
+                    "standing_preferences": prefs,
+                }
+                if include_stats:
+                    entry["active_skill_count"] = int(row["active_skill_count"] or 0)
+                    entry["mean_confidence"] = round(float(row["mean_confidence"] or 0.0), 4)
+                    entry["brain_variants"] = variants
+                out.append(entry)
+            return out
+
+    async def offboard_agent_space(
+        self,
+        *,
+        tenant_id: str,
+        agent_id: str,
+        reason: str,
+        purge_episodes: bool = True,
+        retire_memories: bool = True,
+    ) -> dict[str, int]:
+        """Transactionally retire private scope='agent' memories, purge private agent
+        episodes, and delete the L3 agent_profiles row on ``tenant_id`` while leaving
+        shared project/domain/space artifacts untouched."""
+        _ = reason
+        retired_memories = 0
+        purged_episodes = 0
+        deleted_profiles = 0
+        async with self._conn() as conn:
+            async with conn.transaction():
+                if retire_memories:
+                    cur_mem = await conn.execute(
+                        """
+                        UPDATE memories
+                        SET valid_to = now(), status = 'superseded'
+                        WHERE tenant_id = %(tenant_id)s
+                          AND agent_id = %(agent_id)s
+                          AND scope = 'agent'
+                          AND valid_to IS NULL
+                        """,
+                        {"tenant_id": tenant_id, "agent_id": agent_id},
+                    )
+                    retired_memories = int(cur_mem.rowcount or 0)
+                if purge_episodes:
+                    cur_ep = await conn.execute(
+                        """
+                        DELETE FROM episodes
+                        WHERE tenant_id = %(tenant_id)s
+                          AND agent_id = %(agent_id)s
+                          AND coalesce(metadata->>'scope', 'agent') = 'agent'
+                        """,
+                        {"tenant_id": tenant_id, "agent_id": agent_id},
+                    )
+                    purged_episodes = int(cur_ep.rowcount or 0)
+                cur_prof = await conn.execute(
+                    """
+                    DELETE FROM agent_profiles
+                    WHERE tenant_id = %(tenant_id)s AND agent_id = %(agent_id)s
+                    """,
+                    {"tenant_id": tenant_id, "agent_id": agent_id},
+                )
+                deleted_profiles = int(cur_prof.rowcount or 0)
+        return {
+            "retired_memories": retired_memories,
+            "purged_episodes": purged_episodes,
+            "deleted_profiles": deleted_profiles,
+        }
+
     async def get_unreflected_episodes(
-        self, *, tenant_id: str, agent_id: str, limit: int = 500
+        self,
+        *,
+        tenant_id: str,
+        agent_id: str,
+        limit: int = 500,
+        brain_variant: str = "default",
     ) -> list[Episode]:
-        """Episodes not yet projected into memories (interim reflect pass;
-        PLAN-002 Phase 1.4). Projection linkage: memories.provenance->>'episode_id'."""
+        """Episodes not yet projected into memories for ``brain_variant``.
+        Projection linkage: memories.provenance->>'episode_id' and brain_variant."""
         async with self._conn() as conn:
             rows = await (
                 await conn.execute(
@@ -368,12 +576,21 @@ class Repository:
                       AND NOT EXISTS (
                           SELECT 1 FROM memories m
                           WHERE m.tenant_id = e.tenant_id
+                            AND m.agent_id = e.agent_id
                             AND m.provenance->>'episode_id' = e.id::text
+                            AND coalesce(
+                                m.provenance->>'brain_variant', 'default'
+                            ) = %(brain_variant)s
                       )
                     ORDER BY ts, id
                     LIMIT %(limit)s
                     """,
-                    {"tenant_id": tenant_id, "agent_id": agent_id, "limit": limit},
+                    {
+                        "tenant_id": tenant_id,
+                        "agent_id": agent_id,
+                        "limit": limit,
+                        "brain_variant": brain_variant,
+                    },
                 )
             ).fetchall()
             return [
@@ -391,23 +608,30 @@ class Repository:
             ]
 
     async def get_active_agents_with_unreflected_episodes(
-        self, *, tenant_id: str | None = None
+        self, *, tenant_id: str | None = None, brain_variant: str = "default"
     ) -> list[tuple[str, str]]:
-        """Distinct (tenant_id, agent_id) pairs carrying unreflected episodes."""
+        """Distinct (tenant_id, agent_id) pairs carrying unreflected episodes for variant."""
         async with self._conn() as conn:
             rows = await (
                 await conn.execute(
                     """
-                    SELECT DISTINCT tenant_id, agent_id
+                    SELECT DISTINCT e.tenant_id, e.agent_id
                     FROM episodes e
-                    WHERE (%(tenant_id)s::text IS NULL OR tenant_id = %(tenant_id)s::text)
+                    LEFT JOIN agent_profiles p
+                      ON p.tenant_id = e.tenant_id AND p.agent_id = e.agent_id
+                    WHERE (%(tenant_id)s::text IS NULL OR e.tenant_id = %(tenant_id)s::text)
                       AND NOT EXISTS (
                           SELECT 1 FROM memories m
                           WHERE m.tenant_id = e.tenant_id
+                            AND m.agent_id = e.agent_id
                             AND m.provenance->>'episode_id' = e.id::text
+                            AND coalesce(m.provenance->>'brain_variant', 'default') = coalesce(
+                                p.standing_preferences->'brain_config'->>'active_brain_variant',
+                                %(brain_variant)s
+                            )
                       )
                     """,
-                    {"tenant_id": tenant_id},
+                    {"tenant_id": tenant_id, "brain_variant": brain_variant},
                 )
             ).fetchall()
             return [(str(row["tenant_id"]), str(row["agent_id"])) for row in rows]
@@ -423,6 +647,8 @@ class Repository:
         query: str | None = None,
         query_vec: Sequence[float] | None = None,
         scopes: Sequence[str] | None = None,
+        brain_variant: str | None = None,
+        specialization: str | None = None,
     ) -> list[Memory]:
         """Visible, live, active memories per the ADR-07 ladder.
 
@@ -449,6 +675,8 @@ class Repository:
             "inc_space": "space" in levels,
             "qv": vector_literal(query_vec) if has_qv and query_vec is not None else None,
             "q_like": f"%{query.strip()}%" if has_q and query is not None else None,
+            "brain_variant": brain_variant,
+            "specialization": specialization,
         }
         async with self._conn() as conn:
             rows = await (
@@ -462,6 +690,16 @@ class Repository:
                     WHERE tenant_id = %(tenant_id)s
                       AND valid_to IS NULL
                       AND status = 'active'
+                      AND (
+                          %(brain_variant)s::text IS NULL
+                          OR coalesce(provenance->>'brain_variant', 'default') = %(brain_variant)s
+                      )
+                      AND (
+                          %(specialization)s::text IS NULL
+                          OR coalesce(
+                              provenance->'specializations', '[]'::jsonb
+                          ) ? %(specialization)s
+                      )
                       AND (
                           (%(inc_agent)s AND scope = 'agent' AND agent_id = %(agent_id)s)
                           OR (
@@ -500,6 +738,143 @@ class Repository:
                 )
             ).fetchall()
             return [_hydrate_memory(row) for row in rows]
+
+    async def find_existing_promoted_memory(
+        self,
+        *,
+        tenant_id: str,
+        target_scope: str,
+        source_memory_id: str,
+        summary: str,
+        project_id: str | None = None,
+        domain_id: str | None = None,
+        brain_variant: str = "default",
+    ) -> Memory | None:
+        """Find an existing active promoted memory in ``target_scope`` matching
+        ``source_memory_id`` or ``summary`` without MAX_K truncation."""
+        async with self._conn() as conn:
+            row = await (
+                await conn.execute(
+                    """
+                    SELECT id, agent_id, project_id, domain_id, tenant_id, scope, type,
+                           content_raw, summary, embedding_model, embedding_dims,
+                           provenance, confidence, status, source_trust,
+                           valid_from, valid_to, supersedes
+                    FROM memories
+                    WHERE tenant_id = %(tenant_id)s
+                      AND scope = %(target_scope)s
+                      AND status = 'active'
+                      AND valid_to IS NULL
+                      AND coalesce(provenance->>'brain_variant', 'default') = %(brain_variant)s
+                      AND (
+                          %(target_scope)s != 'project'
+                          OR project_id = %(project_id)s
+                      )
+                      AND (
+                          %(target_scope)s != 'domain'
+                          OR domain_id = %(domain_id)s
+                      )
+                      AND (
+                          provenance->>'promoted_from_memory_id' = %(source_memory_id)s
+                          OR summary = %(summary)s
+                      )
+                    ORDER BY valid_from ASC
+                    LIMIT 1
+                    """,
+                    {
+                        "tenant_id": tenant_id,
+                        "target_scope": target_scope,
+                        "source_memory_id": source_memory_id,
+                        "summary": summary,
+                        "project_id": project_id,
+                        "domain_id": domain_id,
+                        "brain_variant": brain_variant,
+                    },
+                )
+            ).fetchone()
+            if row is None:
+                return None
+            return _hydrate_memory(row)
+
+    async def get_brain_variant_metrics(
+        self,
+        *,
+        tenant_id: str,
+        variant: str,
+        scope: str = "agent",
+        agent_id: str | None = None,
+        project_id: str | None = None,
+        domain_id: str | None = None,
+        specialization: str | None = None,
+    ) -> dict[str, Any]:
+        """Compute skill and retrieval feedback metrics for ``variant``."""
+        mems = await self.get_memories(
+            tenant_id=tenant_id,
+            agent_id=agent_id,
+            project_id=project_id,
+            domain_id=domain_id,
+            k=1000,
+            scopes=(scope,),
+            brain_variant=variant,
+            specialization=specialization,
+        )
+        skill_count = len(mems)
+        mean_confidence = (
+            round(sum(m.confidence for m in mems) / skill_count, 4) if skill_count > 0 else 0.0
+        )
+        mean_token_count = (
+            round(
+                sum(max(1, len((m.summary or m.content_raw).split())) for m in mems) / skill_count,
+                2,
+            )
+            if skill_count > 0
+            else 0.0
+        )
+        distiller_models: set[str] = set()
+        embedding_models: set[str] = set()
+        rag_params_seen: dict[str, Any] = {}
+        total_retrievals = 0
+        useful_count = 0
+        not_useful_count = 0
+        harmful_count = 0
+        for m in mems:
+            embedding_models.add(m.embedding_model)
+            bm = m.provenance.get("brain_metadata")
+            if isinstance(bm, dict):
+                dm = bm.get("distiller_model")
+                if dm:
+                    distiller_models.add(str(dm))
+                rp = bm.get("rag_params")
+                if isinstance(rp, dict) and not rag_params_seen:
+                    rag_params_seen = dict(rp)
+            elif m.provenance.get("distiller"):
+                distiller_models.add(str(m.provenance["distiller"]))
+            if m.id:
+                fbs = await self.get_retrieval_feedback(tenant_id=tenant_id, memory_id=m.id)
+                total_retrievals += len(fbs)
+                for fb in fbs:
+                    if fb == "useful":
+                        useful_count += 1
+                    elif fb == "not_useful":
+                        not_useful_count += 1
+                    elif fb == "harmful":
+                        harmful_count += 1
+        rated = useful_count + not_useful_count + harmful_count
+        useful_rate = round(useful_count / rated, 4) if rated > 0 else 0.0
+        return {
+            "brain_variant": variant,
+            "skill_count": skill_count,
+            "mean_confidence": mean_confidence,
+            "mean_token_count": mean_token_count,
+            "distiller_models": sorted(distiller_models),
+            "embedding_models": sorted(embedding_models),
+            "rag_params": rag_params_seen,
+            "total_retrievals": total_retrievals,
+            "useful_count": useful_count,
+            "not_useful_count": not_useful_count,
+            "harmful_count": harmful_count,
+            "useful_rate": useful_rate,
+        }
 
     async def upsert_kb_section(self, section: KBSection) -> str:
         """Insert/update a knowledge section keyed by (tenant, doc, citation, version)."""

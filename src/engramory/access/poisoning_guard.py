@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Sequence
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -79,9 +81,7 @@ _PORTABLE_REDACT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 ]
 
 
-def sanitize_portable_text(
-    text: str, *, redact_terms: list[str] | tuple[str, ...] = ()
-) -> tuple[str, int]:
+def sanitize_portable_text(text: str, *, redact_terms: Sequence[str] = ()) -> tuple[str, int]:
     """Scrub secrets, emails, URLs, IPs, UUIDs, and tenant/project identifiers from portable skills.
 
     Returns (sanitized_text, redaction_count).
@@ -93,8 +93,12 @@ def sanitize_portable_text(
         cleaned, count = pattern.subn(label, cleaned)
         total_redactions += count
 
-    for term in redact_terms:
-        norm = term.strip()
+    sorted_terms = sorted(
+        {t.strip() for t in redact_terms if t and t.strip()},
+        key=len,
+        reverse=True,
+    )
+    for norm in sorted_terms:
         if len(norm) < 3 or norm.lower() in {"default", "dev", "prod", "stage", "agent", "project"}:
             continue
         term_re = re.compile(re.escape(norm), re.IGNORECASE)
@@ -102,6 +106,29 @@ def sanitize_portable_text(
         total_redactions += count
 
     return cleaned, total_redactions
+
+
+def sanitize_portable_value(value: Any, *, redact_terms: Sequence[str] = ()) -> tuple[Any, int]:
+    """Recursively scrub strings, lists, and dicts for portable Brain Passports."""
+    if isinstance(value, str):
+        return sanitize_portable_text(value, redact_terms=redact_terms)
+    if isinstance(value, list | tuple):
+        out_list: list[Any] = []
+        total = 0
+        for item in value:
+            cleaned_item, count = sanitize_portable_value(item, redact_terms=redact_terms)
+            out_list.append(cleaned_item)
+            total += count
+        return out_list, total
+    if isinstance(value, dict):
+        out_dict: dict[str, Any] = {}
+        total = 0
+        for k, v in value.items():
+            cleaned_val, count = sanitize_portable_value(v, redact_terms=redact_terms)
+            out_dict[str(k)] = cleaned_val
+            total += count
+        return out_dict, total
+    return value, 0
 
 
 class MemoryPoisoningError(PermissionError):

@@ -1,0 +1,205 @@
+# =============================================================================
+#  CHG-009: Virtual Employee Hierarchy, Multi-Model Brain Variants & Portable Brain Passports
+# =============================================================================
+#  Flow: SDD2C · Level: C3 · Entry gate: GATE-CODE
+#  Semver: minor (Virtual Employee roster, multi-model brain variants, memory_promote, offboarding, SHA-256 Brain Passports)
+#  Plan: plans/PLAN-024_virtual-employee-hierarchy-and-portable-brain.md
+# =============================================================================
+
+id: CHG-009
+doc_id: CHG-009
+title: "Implement Virtual Employee Hierarchy, Multi-Agent & Specialization Taxonomy, Multi-Model Brain Variants, and Sanitized Portable Brain Passports"
+
+metadata:
+  document_type: "chg-document"
+  layer: 9
+  purpose: governance
+  last_updated: "2026-11-13"
+  framework_version: "0.96.4"
+  change_level:
+    value: C3
+  change_source:
+    value: direct
+
+document_control:
+  project_name: "aidoc-flow-engramory"
+  document_id: "CHG-009"
+  version: "1.0"
+  status: Completed
+  author: "AI coding agent + owner"
+  created_date: "2026-11-13"
+  last_updated: "2026-11-13"
+  framework_version: "0.96.4"
+  revision_history:
+    - version: "1.0"
+      date: "2026-11-13"
+      author: "AI coding agent"
+      description: "C3 change request implementing PLAN-024 (Virtual Employee Hierarchy, Multi-Model Brain Variants, and Portable Brain Passports)"
+
+change_control:
+  chg_id: "CHG-009"
+  status: Completed
+  change_level: C3
+  change_source: direct
+  entry_gate: GATE-CODE
+  semver_impact: minor
+  version_action: none
+  author: "AI coding agent + owner"
+  date_proposed: "2026-11-13T15:00:00Z"
+  date_approved: "2026-11-13T16:38:00Z"
+  date_implemented: "2026-11-13T17:00:00Z"
+  supersedes: []
+  decision: "DEC-CHG-009"
+  decision_title: "Adopt 4-Level ADR-07 Virtual Employee Hierarchy, Multi-Agent Archetype & Specialization Taxonomy, Multi-Model Brain Variants, and SHA-256 Sanitized Brain Passports"
+  decision_rationale: "Enables zero-copy O(1) RAM/CPU scaling across 20+ Virtual Employee instances (10 support, 5 pm, 5 dev), parallel multi-model distillation & A/B benchmarking, governed skill promotion, and zero-PII cross-tenant Brain Passport mobility."
+
+change_description:
+  summary: "Implement PLAN-024 Phases 1-5: end-to-end domain_id propagation across CLI/JWT/MCP, governed agent_profile_upsert & experience-ranked agent_roster_list, parallel multi-model brain_variant distillation & agent_brain_compare, specialization-scoped tagging & retrieval, governed memory_promote with cross-instance deduplication, recursive PII sanitization + mandatory passport_sha256 + agent_type guard on Brain Passports, and transactional agent_space_offboard."
+  why: "Enable multi-agent, multi-instance Virtual Employee fleets with specialized private brains, shared project/department spaces, multi-model A/B evaluation, and sanitized cross-tenant brain portability."
+  trigger: "User prompt: proceed with implementing platform-engramory/plans/PLAN-024_virtual-employee-hierarchy-and-portable-brain.md (Phases 1 through 5)."
+  emergency_exclusion: "Not emergency: planned SDD2C feature implementation."
+  scope:
+    in:
+      - "src/engramory/access/authz.py"
+      - "src/engramory/access/jwt_auth.py"
+      - "src/engramory/access/poisoning_guard.py"
+      - "src/engramory/core/repository.py"
+      - "src/engramory/workers/distillation.py"
+      - "src/engramory/workers/runner.py"
+      - "src/engramory/access/surface.py"
+      - "src/engramory/mcp/server.py"
+      - "src/engramory/cli.py"
+      - "docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md"
+      - "docs/sdd/"
+      - "tests/test_virtual_employee_lifecycle.py"
+      - "tests/test_multimodal_extraction_and_graphrag.py"
+    out:
+      - "External SaaS HR directory sync (out of scope)"
+
+seed_scope:
+  layer: 9
+  affected_documents:
+    - "docs/sdd/06_SPEC/SPEC-01_access_surface.yaml"
+    - "docs/sdd/06_SPEC/SPEC-02_memory_store.yaml"
+    - "docs/sdd/06_SPEC/SPEC-03_retrieval_graph.yaml"
+    - "docs/sdd/06_SPEC/SPEC-07_cli_face.yaml"
+    - "docs/sdd/07_TDD/TDD-01_access_surface.yaml"
+    - "docs/sdd/07_TDD/TDD-02_memory_store.yaml"
+    - "docs/sdd/08_IPLAN/IPLAN-00_index.yaml"
+    - "docs/sdd/08_IPLAN/IPLAN-09_virtual_employee_brain.yaml"
+    - "docs/sdd/09_CHG/CHG-009_virtual_employee_hierarchy_and_portable_brain.yaml"
+
+decision:
+  decision_id: "DEC-CHG-009"
+  title: "Adopt 4-Level ADR-07 Virtual Employee Hierarchy, Multi-Agent Archetype & Specialization Taxonomy, Multi-Model Brain Variants, and SHA-256 Sanitized Brain Passports"
+  status: "Ratified"
+  context: "A multi-agent fleet (e.g. 10 agent-support, 5 agent-pm, 5 agent-dev instances) requires per-instance private experience, shared department/project knowledge without O(N*M) memory duplication, multi-model distillation comparison, and sanitized cross-tenant brain portability."
+  choice: "1) Use ADR-07 4-level visibility (agent -> project -> domain -> space) with end-to-end domain_id and specialization filtering; 2) Track agent_type, specializations, and brain_config in L3 agent_profiles and L2 memories.provenance; 3) Support parallel brain_variant distillation and agent_brain_compare; 4) Enforce mandatory passport_sha256, recursive PII sanitization, and agent_type compatibility on Brain Passports alongside transactional agent_space_offboard."
+  consequences: "O(1) memory footprint across multi-instance fleets, deterministic specialist discovery/ranking, verifiable multi-model A/B benchmarking, and zero-PII cross-tenant specialist mobility."
+  alternatives_considered:
+    - option: "Physical N-way replication of distilled skills across all support agent instances"
+      rationale_rejected: "Multiplies PostgreSQL storage, HNSW index RAM, and prompt token costs by 10x and pollutes unrelated specialists."
+
+impact_assessment:
+  affected_layers:
+    - layer: "SPEC"
+      artifacts:
+        - "docs/sdd/06_SPEC/SPEC-01_access_surface.yaml"
+        - "docs/sdd/06_SPEC/SPEC-02_memory_store.yaml"
+        - "docs/sdd/06_SPEC/SPEC-03_retrieval_graph.yaml"
+        - "docs/sdd/06_SPEC/SPEC-07_cli_face.yaml"
+      impact: "Extends Layer 06 specifications for Virtual Employee profile management, multi-model brain variants, skill promotion, offboarding, and Brain Passports."
+    - layer: "CODE"
+      artifacts:
+        - "src/engramory/access/surface.py"
+        - "src/engramory/core/repository.py"
+        - "src/engramory/workers/distillation.py"
+        - "src/engramory/mcp/server.py"
+        - "src/engramory/cli.py"
+      impact: "Implements all 5 phases of PLAN-024."
+  cascade_direction: "downward"
+  risk_level: "Medium"
+
+implementation:
+  iplan_ref: "@iplan: IPLAN-09"
+  sdd_lifecycle: []
+  steps:
+    - step: "Update Layer 06 SPEC, Layer 07 TDD, Layer 08 IPLAN-09, and Layer 09 CHG-009"
+      phase: "sdd_update"
+      artifact: "docs/sdd/09_CHG/CHG-009_virtual_employee_hierarchy_and_portable_brain.yaml"
+      status: "Completed"
+    - step: "Implement PLAN-024 Phases 2-5 (Virtual Employee hierarchy, multi-model brain variants, memory_promote, Brain Passports, offboarding, docs, and tests)"
+      phase: "implementation"
+      artifact: "plans/PLAN-024_virtual-employee-hierarchy-and-portable-brain.md"
+      status: "Completed"
+  artifacts_modified: []
+
+verification:
+  checks:
+    - check: "Verified planning deterministic gate (check_plan.py)"
+      result: "Pass"
+      method: "python3 .agents/skills/verified-planning/check_plan.py plans/PLAN-024_virtual-employee-hierarchy-and-portable-brain.md"
+    - check: "Full unit, integration, conformance, security, ruff, and mypy suite"
+      result: "Pass"
+      method: "task check && task ci"
+
+gate_approval:
+  gate: "GATE-CODE"
+  approved: true
+  approver: "vladm3105"
+  role: "Owner"
+  approval_date: "2026-11-13"
+  evidence: "User explicitly requested implementation of PLAN-024 (Phases 1 through 5)"
+  approved_scope_files:
+    - "src/engramory/access/authz.py"
+    - "src/engramory/access/jwt_auth.py"
+    - "src/engramory/access/poisoning_guard.py"
+    - "src/engramory/core/repository.py"
+    - "src/engramory/workers/distillation.py"
+    - "src/engramory/workers/runner.py"
+    - "src/engramory/access/surface.py"
+    - "src/engramory/mcp/server.py"
+    - "src/engramory/cli.py"
+  conditions: []
+
+rollback_plan:
+  strategy: "revert-commit"
+  steps:
+    - "Revert feature/plan-024-virtual-employee-hierarchy-and-portable-brain merge commit on dev"
+  estimated_effort: "5m"
+
+emergency_change:
+  emergency_id: null
+  incident_severity: null
+  fix_deployed: null
+  post_mortem_due: null
+  post_mortem_completed: false
+  post_hoc_gate: null
+
+glossary:
+  terms:
+    - term: "Virtual Employee Brain Passport"
+      definition: "Sanitized, tenant-neutral JSON bundle (engramory.brain_passport.v1) carrying an agent instance's L3 profile, multi-model brain_metadata, specializations, L2 skills, and canonical SHA-256 digest."
+
+creation_checklist:
+  checks:
+    - id: 1
+      check: "Read every file you reference"
+      status: "Pass"
+    - id: 13
+      check: "SDD-first implementation order"
+      status: "Pass"
+    - id: 14
+      check: "CHG scope: governance, not implementation plan"
+      status: "Pass"
+    - id: 15
+      check: "Mandatory formal decision block"
+      status: "Pass"
+
+validation:
+  document_structure:
+    - id_match: "Verified CHG-009 matches filename"
+  decision_block:
+    - decision_present: "Verified DEC-CHG-009 present"
+  scope:
+    - governance_only: "Verified governance record completeness"

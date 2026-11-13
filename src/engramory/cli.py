@@ -85,11 +85,13 @@ def _parse_config_text(raw_text: str, path: Path) -> CliConfig:
         scopes = actor.get("scopes", list(DEFAULT_SCOPES))
         if not isinstance(scopes, list):  # a TOML string is iterable char-wise
             raise ConfigError(f"config {path}: actor.scopes must be a list")
+        raw_domain = actor.get("domain_id")
         ctx = ActorContext(
             agent_id=actor["agent_id"],
             project_id=actor["project_id"],
             tenant_id=actor["tenant_id"],
             scopes=frozenset(scopes),
+            domain_id=str(raw_domain).strip() if raw_domain else None,
         )
         dsn = raw["store"]["dsn"]
     except (KeyError, TypeError) as exc:
@@ -114,6 +116,7 @@ def _load_config(explicit: str | None = None) -> CliConfig:
             agent_id = os.getenv("ENGRAMORY_AGENT_ID", "default-agent")
             project_id = os.getenv("ENGRAMORY_PROJECT_ID", "default-project")
             tenant_id = os.getenv("ENGRAMORY_TENANT_ID", "default")
+            domain_id = os.getenv("ENGRAMORY_DOMAIN_ID") or None
             scopes_raw = os.getenv("ENGRAMORY_SCOPES")
             scopes = scopes_raw.split(",") if scopes_raw else list(DEFAULT_SCOPES)
             ctx = ActorContext(
@@ -121,6 +124,7 @@ def _load_config(explicit: str | None = None) -> CliConfig:
                 project_id=project_id,
                 tenant_id=tenant_id,
                 scopes=frozenset(scopes),
+                domain_id=domain_id,
             )
             return CliConfig(ctx=ctx, dsn=dsn, path=Path(".env"))
         raise
@@ -133,18 +137,37 @@ def _emit(as_json: bool, payload: dict[str, Any], human: str) -> None:
 # ── commands ────────────────────────────────────────────────────────────────
 
 
-def _upsert_profile_best_effort(agent_id: str, dsn: str, tenant_id: str = "default") -> str:
+def _upsert_profile_best_effort(
+    agent_id: str,
+    dsn: str,
+    tenant_id: str = "default",
+    domain_id: str | None = None,
+) -> str:
     """L3 profile row: init still succeeds when the store is down — the row
     lands on a later init run (every init retries, including re-runs on an
-    existing config)."""
+    existing config) without clobbering existing profile metadata."""
     from engramory.core.models import AgentProfile
 
-    try:
-        asyncio.run(
-            Repository(dsn).upsert_agent_profile(
-                AgentProfile(agent_id=agent_id, tenant_id=tenant_id)
+    async def _do_upsert() -> None:
+        repo = Repository(dsn)
+        existing = await repo.get_agent_profile(agent_id, tenant_id=tenant_id)
+        prefs: dict[str, Any] = dict(existing.standing_preferences) if existing is not None else {}
+        if domain_id and not prefs.get("department_focus"):
+            prefs["department_focus"] = domain_id
+        display = (
+            existing.display_name if (existing is not None and existing.display_name) else agent_id
+        )
+        await repo.upsert_agent_profile(
+            AgentProfile(
+                agent_id=agent_id,
+                display_name=display,
+                standing_preferences=prefs,
+                tenant_id=tenant_id,
             )
         )
+
+    try:
+        asyncio.run(_do_upsert())
     except StoreUnavailable as exc:
         print(f"engramory init: store unreachable, profile deferred: {exc}", file=sys.stderr)
         return "deferred"
@@ -153,21 +176,31 @@ def _upsert_profile_best_effort(agent_id: str, dsn: str, tenant_id: str = "defau
 
 def _cmd_init(args: argparse.Namespace) -> int:
     cfg_path = Path(CONFIG_DIRNAME) / CONFIG_FILENAME
+    domain_id = getattr(args, "domain_id", None)
     if cfg_path.exists():
-        profile_state = _upsert_profile_best_effort(args.agent_id, args.dsn, args.tenant_id)
+        profile_state = _upsert_profile_best_effort(
+            args.agent_id, args.dsn, args.tenant_id, domain_id=domain_id
+        )
         _emit(
             args.json,
             {"created": False, "config": str(cfg_path), "profile": profile_state},
             f"exists: {cfg_path}",
         )
         return 0
-    scopes = args.scopes.split(",") if args.scopes else list(DEFAULT_SCOPES)
+    if args.scopes:
+        scopes = args.scopes.split(",")
+    else:
+        scopes = list(DEFAULT_SCOPES)
+        if domain_id and "domain" not in scopes:
+            scopes.append("domain")
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    domain_line = f"domain_id = {json.dumps(domain_id)}\n" if domain_id else ""
     cfg_path.write_text(
         "[actor]\n"
         f"agent_id = {json.dumps(args.agent_id)}\n"
         f"project_id = {json.dumps(args.project_id)}\n"
         f"tenant_id = {json.dumps(args.tenant_id)}\n"
+        f"{domain_line}"
         f"scopes = {json.dumps(scopes)}\n"
         "\n[store]\n"
         f"dsn = {json.dumps(args.dsn)}\n"
@@ -178,7 +211,9 @@ def _cmd_init(args: argparse.Namespace) -> int:
     existing = gitignore.read_text() if gitignore.exists() else ""
     if entry not in existing:
         gitignore.write_text(existing.rstrip("\n") + ("\n" if existing else "") + entry + "\n")
-    profile_state = _upsert_profile_best_effort(args.agent_id, args.dsn, args.tenant_id)
+    profile_state = _upsert_profile_best_effort(
+        args.agent_id, args.dsn, args.tenant_id, domain_id=domain_id
+    )
     _emit(
         args.json,
         {"created": True, "config": str(cfg_path), "profile": profile_state},
@@ -231,6 +266,10 @@ def _cmd_memory_add(args: argparse.Namespace) -> int:
             extra_add_kwargs["scope"] = args.scope
         if getattr(args, "domain_id", None):
             extra_add_kwargs["domain_id"] = args.domain_id
+        if getattr(args, "specialization", None):
+            extra_add_kwargs["specializations"] = list(args.specialization)
+        if getattr(args, "brain_variant", None):
+            extra_add_kwargs["brain_variant"] = args.brain_variant
         episode_id = await surface.memory_add(
             ctx, content=args.content, kind=args.kind, **extra_add_kwargs
         )
@@ -248,6 +287,10 @@ def _cmd_memory_search(args: argparse.Namespace) -> int:
             extra_kwargs["include_knowledge"] = True
         if getattr(args, "domain_id", None):
             extra_kwargs["domain_id"] = args.domain_id
+        if getattr(args, "brain_variant", None):
+            extra_kwargs["brain_variant"] = args.brain_variant
+        if getattr(args, "specialization", None):
+            extra_kwargs["specialization"] = args.specialization
         hits = await surface.memory_search(
             ctx, args.query, scope=args.scope, k=args.k, **extra_kwargs
         )
@@ -297,11 +340,35 @@ def _cmd_memory_forget(args: argparse.Namespace) -> int:
     return _run_with_surface(args, op, lambda p: "retired")
 
 
+def _cmd_memory_promote(args: argparse.Namespace) -> int:
+    async def op(surface: AccessSurface, ctx: ActorContext) -> dict[str, Any]:
+        return await surface.memory_promote(
+            ctx,
+            memory_id=args.memory_id,
+            target_scope=args.target_scope,
+            evidence_ref=args.evidence_ref,
+            target_domain_id=getattr(args, "domain_id", None),
+            target_project_id=getattr(args, "project_id", None),
+            specializations=list(getattr(args, "specialization", None) or []) or None,
+        )
+
+    return _run_with_surface(
+        args,
+        op,
+        lambda p: (
+            f"promoted {p['source_memory_id']} -> {p['promoted_memory_id']} ({p['target_scope']})"
+        ),
+    )
+
+
 def _cmd_memory_distill(args: argparse.Namespace) -> int:
     """Dev-tier ops command (not a SPEC-01 tool): run the interim reflect pass."""
     config = _load_config(getattr(args, "config", None))
     repo = Repository(config.dsn)
     adapters = dev_adapters(config.dsn)
+    rag_params: dict[str, Any] | None = None
+    if getattr(args, "rag_params_json", None):
+        rag_params = json.loads(args.rag_params_json)
 
     async def _run_distill() -> int:
         try:
@@ -311,12 +378,18 @@ def _cmd_memory_distill(args: argparse.Namespace) -> int:
                 agent_id=config.ctx.agent_id,
                 llm=adapters.llm,
                 vector=adapters.vector,
+                brain_variant=getattr(args, "brain_variant", None),
+                distiller_model=getattr(args, "distiller_model", None),
+                rag_params=rag_params,
             )
         finally:
             await _close_adapters(adapters)
 
     created = asyncio.run(_run_distill())
-    _emit(args.json, {"created": created}, f"distilled {created} memorie(s)")
+    out_payload: dict[str, Any] = {"created": created}
+    if getattr(args, "brain_variant", None):
+        out_payload["brain_variant"] = args.brain_variant
+    _emit(args.json, out_payload, f"distilled {created} memorie(s)")
     return 0
 
 
@@ -661,13 +734,90 @@ def _cmd_profile_get(args: argparse.Namespace) -> int:
     return _run_with_surface(args, op, lambda p: f"{p['agent_id']} ({p['display_name']})")
 
 
-def _cmd_profile_export_brain(args: argparse.Namespace) -> int:
+def _cmd_profile_set(args: argparse.Namespace) -> int:
     async def op(surface: AccessSurface, ctx: ActorContext) -> dict[str, Any]:
-        bundle = await surface.agent_brain_export(
+        prefs: dict[str, Any] = {}
+        for item in getattr(args, "pref", None) or []:
+            if "=" in item:
+                k, v = item.split("=", 1)
+                prefs[k.strip()] = v.strip()
+        brain_cfg: dict[str, Any] = {}
+        if getattr(args, "brain_variant", None):
+            brain_cfg["active_brain_variant"] = args.brain_variant
+        if getattr(args, "distiller_model", None):
+            brain_cfg["distiller_model"] = args.distiller_model
+        if getattr(args, "extraction_model", None):
+            brain_cfg["extraction_model"] = args.extraction_model
+        if getattr(args, "embedding_model", None):
+            brain_cfg["embedding_model"] = args.embedding_model
+        if getattr(args, "rag_params_json", None):
+            brain_cfg["rag_params"] = json.loads(args.rag_params_json)
+        specs = list(getattr(args, "specialization", None) or []) or None
+        upserted = await surface.agent_profile_upsert(
+            ctx,
+            display_name=getattr(args, "display_name", None),
+            agent_type=getattr(args, "agent_type", None),
+            role=getattr(args, "role", None),
+            domain_id=getattr(args, "domain_id", None),
+            specializations=specs,
+            brain_config=brain_cfg or None,
+            standing_preferences=prefs or None,
+        )
+        return {
+            "agent_id": upserted.agent_id,
+            "display_name": upserted.display_name,
+            "standing_preferences": dict(upserted.standing_preferences),
+        }
+
+    return _run_with_surface(
+        args, op, lambda p: f"updated profile {p['agent_id']} ({p['display_name']})"
+    )
+
+
+def _cmd_profile_list(args: argparse.Namespace) -> int:
+    async def op(surface: AccessSurface, ctx: ActorContext) -> dict[str, Any]:
+        roster = await surface.agent_roster_list(
             ctx,
             domain_id=getattr(args, "domain_id", None),
-            min_confidence=float(getattr(args, "min_confidence", 0.5)),
-            redact_terms=list(getattr(args, "redact_term", None) or []),
+            agent_type=getattr(args, "agent_type", None),
+            role=getattr(args, "role", None),
+            specialization=getattr(args, "specialization", None),
+            include_stats=not getattr(args, "no_stats", False),
+        )
+        return {"agents": roster, "count": len(roster)}
+
+    def human(payload: dict[str, Any]) -> str:
+        agents = payload["agents"]
+        if not agents:
+            return "no agents"
+        return "\n".join(
+            (
+                f"{a['agent_id']}  type={a.get('agent_type') or '-'}  "
+                f"domain={a.get('domain_id') or '-'}  "
+                f"skills={a.get('active_skill_count', 0)}"
+            )
+            for a in agents
+        )
+
+    return _run_with_surface(args, op, human)
+
+
+def _cmd_profile_export_brain(args: argparse.Namespace) -> int:
+    async def op(surface: AccessSurface, ctx: ActorContext) -> dict[str, Any]:
+        exp_kwargs: dict[str, Any] = {
+            "domain_id": getattr(args, "domain_id", None),
+            "min_confidence": float(getattr(args, "min_confidence", 0.5)),
+            "redact_terms": list(getattr(args, "redact_term", None) or []),
+        }
+        if getattr(args, "brain_variant", None):
+            exp_kwargs["brain_variant"] = args.brain_variant
+        if getattr(args, "specialization", None):
+            exp_kwargs["specialization"] = args.specialization
+        if getattr(args, "limit", None) is not None:
+            exp_kwargs["limit"] = int(args.limit)
+        bundle = await surface.agent_brain_export(
+            ctx,
+            **exp_kwargs,
         )
         out_file = getattr(args, "out", None)
         if out_file:
@@ -688,11 +838,20 @@ def _cmd_profile_import_brain(args: argparse.Namespace) -> int:
     bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
 
     async def op(surface: AccessSurface, ctx: ActorContext) -> dict[str, Any]:
+        imp_kwargs: dict[str, Any] = {
+            "passport": bundle,
+            "evidence_ref": args.evidence_ref,
+            "target_domain_id": getattr(args, "domain_id", None),
+        }
+        if getattr(args, "brain_variant", None):
+            imp_kwargs["brain_variant"] = args.brain_variant
+        if getattr(args, "redact_term", None):
+            imp_kwargs["redact_terms"] = list(args.redact_term)
+        if getattr(args, "allow_type_override", False):
+            imp_kwargs["allow_type_override"] = True
         return await surface.agent_brain_import(
             ctx,
-            passport=bundle,
-            evidence_ref=args.evidence_ref,
-            target_domain_id=getattr(args, "domain_id", None),
+            **imp_kwargs,
         )
 
     return _run_with_surface(
@@ -701,6 +860,49 @@ def _cmd_profile_import_brain(args: argparse.Namespace) -> int:
         lambda p: (
             f"imported {p['skills_imported']} portable skill(s) into "
             f"{p['tenant_id']}/{p['agent_id']}"
+        ),
+    )
+
+
+def _cmd_profile_compare_brains(args: argparse.Namespace) -> int:
+    async def op(surface: AccessSurface, ctx: ActorContext) -> dict[str, Any]:
+        return await surface.agent_brain_compare(
+            ctx,
+            variant_a=args.variant_a,
+            variant_b=args.variant_b,
+            query=getattr(args, "query", None),
+            k=int(getattr(args, "k", 5)),
+            scope=getattr(args, "scope", "agent"),
+            domain_id=getattr(args, "domain_id", None),
+            specialization=getattr(args, "specialization", None),
+        )
+
+    return _run_with_surface(
+        args,
+        op,
+        lambda p: (
+            f"winner={p['winner']} "
+            f"({p['variant_a']['brain_variant']} vs {p['variant_b']['brain_variant']})"
+        ),
+    )
+
+
+def _cmd_profile_offboard(args: argparse.Namespace) -> int:
+    async def op(surface: AccessSurface, ctx: ActorContext) -> dict[str, Any]:
+        return await surface.agent_space_offboard(
+            ctx,
+            evidence_ref=args.evidence_ref,
+            reason=getattr(args, "reason", "cross_tenant_reassignment"),
+            purge_episodes=not getattr(args, "keep_episodes", False),
+            retire_memories=not getattr(args, "keep_memories", False),
+        )
+
+    return _run_with_surface(
+        args,
+        op,
+        lambda p: (
+            f"offboarded {p['tenant_id']}/{p['agent_id']} "
+            f"(retired={p['retired_memories']}, purged_episodes={p['purged_episodes']})"
         ),
     )
 
@@ -1104,6 +1306,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_init.add_argument("--project-id", required=True)
     p_init.add_argument("--tenant-id", required=True)
     p_init.add_argument("--dsn", required=True)
+    p_init.add_argument("--domain-id", default=None, help="optional department/domain focus id")
     p_init.add_argument("--scopes", help="comma-separated (default: agent,project)")
     p_init.set_defaults(func=_cmd_init)
 
@@ -1120,12 +1323,21 @@ def _build_parser() -> argparse.ArgumentParser:
         help="target memory scope (agent, project, domain, space)",
     )
     p_add.add_argument("--domain-id", default=None, help="optional department/domain focus id")
+    p_add.add_argument(
+        "--specialization",
+        action="append",
+        default=[],
+        help="specialist tag for this episode (repeatable)",
+    )
+    p_add.add_argument("--brain-variant", default=None, help="optional brain variant tag")
     p_add.set_defaults(func=_cmd_memory_add)
 
     p_search = mem_sub.add_parser("search", help="scoped retrieval")
     p_search.add_argument("--query", required=True)
     p_search.add_argument("--scope", default="agent")
     p_search.add_argument("--domain-id", default=None, help="optional department/domain focus id")
+    p_search.add_argument("--brain-variant", default=None, help="optional brain variant filter")
+    p_search.add_argument("--specialization", default=None, help="optional specialist tag filter")
     p_search.add_argument("-k", type=int, default=8)
     p_search.add_argument(
         "--include-knowledge",
@@ -1149,9 +1361,23 @@ def _build_parser() -> argparse.ArgumentParser:
     p_forget.add_argument("--reason", required=True)
     p_forget.set_defaults(func=_cmd_memory_forget)
 
+    p_promote = mem_sub.add_parser(
+        "promote", help="governed promotion of an L2 memory up the ADR-07 scope ladder"
+    )
+    p_promote.add_argument("--memory-id", required=True)
+    p_promote.add_argument("--target-scope", required=True, choices=["project", "domain", "space"])
+    p_promote.add_argument("--evidence-ref", required=True)
+    p_promote.add_argument("--domain-id", default=None)
+    p_promote.add_argument("--project-id", default=None)
+    p_promote.add_argument("--specialization", action="append", default=[])
+    p_promote.set_defaults(func=_cmd_memory_promote)
+
     p_distill = mem_sub.add_parser(
         "distill", help="ops: interim reflect pass (episodes -> memories)"
     )
+    p_distill.add_argument("--brain-variant", default=None, help="multi-model brain variant label")
+    p_distill.add_argument("--distiller-model", default=None, help="distillation model identifier")
+    p_distill.add_argument("--rag-params-json", default=None, help="inline JSON RAG parameters")
     p_distill.set_defaults(func=_cmd_memory_distill)
 
     p_ingest_ev = mem_sub.add_parser(
@@ -1181,11 +1407,36 @@ def _build_parser() -> argparse.ArgumentParser:
     p_pget = prof_sub.add_parser("get", help="load the caller's own profile")
     p_pget.set_defaults(func=_cmd_profile_get)
 
+    p_pset = prof_sub.add_parser("set", help="upsert caller's L3 Virtual Employee profile")
+    p_pset.add_argument("--display-name", default=None)
+    p_pset.add_argument("--agent-type", default=None, help="archetype (e.g. agent-support)")
+    p_pset.add_argument("--role", default=None)
+    p_pset.add_argument("--domain-id", default=None)
+    p_pset.add_argument("--specialization", action="append", default=[])
+    p_pset.add_argument("--brain-variant", default=None)
+    p_pset.add_argument("--distiller-model", default=None)
+    p_pset.add_argument("--extraction-model", default=None)
+    p_pset.add_argument("--embedding-model", default=None)
+    p_pset.add_argument("--rag-params-json", default=None)
+    p_pset.add_argument("--pref", action="append", default=[], help="KEY=VALUE preference")
+    p_pset.set_defaults(func=_cmd_profile_set)
+
+    p_plist = prof_sub.add_parser("list", help="list and rank Virtual Employee instances in tenant")
+    p_plist.add_argument("--domain-id", default=None)
+    p_plist.add_argument("--agent-type", default=None)
+    p_plist.add_argument("--role", default=None)
+    p_plist.add_argument("--specialization", default=None)
+    p_plist.add_argument("--no-stats", action="store_true")
+    p_plist.set_defaults(func=_cmd_profile_list)
+
     p_pexport = prof_sub.add_parser(
         "export-brain",
         help="export sanitized portable L3 profile + L2 agent-scoped skills for reassignment",
     )
     p_pexport.add_argument("--domain-id", default=None, help="optional domain/department filter")
+    p_pexport.add_argument("--brain-variant", default=None, help="optional brain variant filter")
+    p_pexport.add_argument("--specialization", default=None, help="optional specialization filter")
+    p_pexport.add_argument("--limit", type=int, default=100, help="maximum skills to export")
     p_pexport.add_argument(
         "--min-confidence", type=float, default=0.5, help="minimum L2 skill confidence"
     )
@@ -1202,14 +1453,51 @@ def _build_parser() -> argparse.ArgumentParser:
         "import-brain",
         help="import a sanitized portable virtual employee brain passport into the target tenant",
     )
-    p_pimport.add_argument("--file", required=True, help="path to exported JSON brain bundle")
+    p_pimport.add_argument(
+        "--file", "--in", dest="file", required=True, help="path to exported JSON brain bundle"
+    )
     p_pimport.add_argument(
         "--evidence-ref", required=True, help="governed CHG/TICKET/STEWARD evidence reference"
     )
     p_pimport.add_argument(
         "--domain-id", default=None, help="optional target domain/department override"
     )
+    p_pimport.add_argument(
+        "--brain-variant", default=None, help="optional target brain variant override"
+    )
+    p_pimport.add_argument(
+        "--redact-term",
+        action="append",
+        default=[],
+        help="additional terms to scrub on import (repeatable)",
+    )
+    p_pimport.add_argument(
+        "--allow-type-override",
+        action="store_true",
+        help="allow cross-archetype brain import",
+    )
     p_pimport.set_defaults(func=_cmd_profile_import_brain)
+
+    p_pcompare = prof_sub.add_parser(
+        "compare-brains", help="compare two multi-model brain variants side-by-side"
+    )
+    p_pcompare.add_argument("--variant-a", required=True)
+    p_pcompare.add_argument("--variant-b", required=True)
+    p_pcompare.add_argument("--query", default=None)
+    p_pcompare.add_argument("--domain-id", default=None)
+    p_pcompare.add_argument("--specialization", default=None)
+    p_pcompare.add_argument("--scope", default="agent")
+    p_pcompare.add_argument("-k", type=int, default=5)
+    p_pcompare.set_defaults(func=_cmd_profile_compare_brains)
+
+    p_poffboard = prof_sub.add_parser(
+        "offboard", help="transactionally offboard caller's private agent space on current tenant"
+    )
+    p_poffboard.add_argument("--evidence-ref", required=True)
+    p_poffboard.add_argument("--reason", default="cross_tenant_reassignment")
+    p_poffboard.add_argument("--keep-episodes", action="store_true")
+    p_poffboard.add_argument("--keep-memories", action="store_true")
+    p_poffboard.set_defaults(func=_cmd_profile_offboard)
 
     p_knowledge = sub.add_parser("knowledge", aliases=["kb"], help="L0 knowledge tools")
     kb_sub = p_knowledge.add_subparsers(dest="knowledge_command", required=True)

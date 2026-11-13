@@ -58,6 +58,14 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "Optional department/domain focus filter",
                 },
+                "brain_variant": {
+                    "type": "string",
+                    "description": "Optional multi-model brain variant filter",
+                },
+                "specialization": {
+                    "type": "string",
+                    "description": "Optional specialist tag filter (e.g. stripe, oidc)",
+                },
                 "token_budget": {
                     "type": "integer",
                     "description": "Maximum tokens returned",
@@ -99,8 +107,53 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "Optional department/domain focus identifier",
                 },
+                "specializations": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional specialist tags for this episode",
+                },
+                "brain_variant": {
+                    "type": "string",
+                    "description": "Optional brain variant tag",
+                },
             },
             "required": ["content"],
+        },
+    },
+    {
+        "name": "memory_promote",
+        "description": (
+            "Governed promotion of a validated L2 memory up the ADR-07 scope ladder "
+            "(agent -> project -> domain -> space)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "memory_id": {"type": "string", "description": "Source memory ID"},
+                "target_scope": {
+                    "type": "string",
+                    "enum": ["project", "domain", "space"],
+                    "description": "Target shared scope level",
+                },
+                "evidence_ref": {
+                    "type": "string",
+                    "description": "Approved governance evidence reference (ADR-06)",
+                },
+                "target_domain_id": {
+                    "type": "string",
+                    "description": "Target department/domain ID (for domain scope)",
+                },
+                "target_project_id": {
+                    "type": "string",
+                    "description": "Target project ID (for project scope)",
+                },
+                "specializations": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional additional specialist tags",
+                },
+            },
+            "required": ["memory_id", "target_scope", "evidence_ref"],
         },
     },
     {
@@ -137,6 +190,55 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
+        "name": "agent_profile_upsert",
+        "description": (
+            "Governed L3 Virtual Employee profile upsert storing agent_type, role, "
+            "department_focus (domain_id), specializations, and brain_config."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "display_name": {"type": "string"},
+                "agent_type": {
+                    "type": "string",
+                    "description": "Agent archetype (e.g. agent-support, agent-pm, agent-dev)",
+                },
+                "role": {"type": "string", "description": "Functional role"},
+                "domain_id": {"type": "string", "description": "Department focus"},
+                "specializations": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Specialist tags (e.g. ['stripe', 'chargebacks'])",
+                },
+                "brain_config": {
+                    "type": "object",
+                    "description": (
+                        "Multi-model brain config (active_brain_variant, distiller_model, "
+                        "extraction_model, embedding_model, rag_params)"
+                    ),
+                },
+                "standing_preferences": {"type": "object"},
+            },
+        },
+    },
+    {
+        "name": "agent_roster_list",
+        "description": (
+            "List and rank Virtual Employee instances in the caller's tenant "
+            "filtered by domain_id, agent_type, role, or specialization."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "domain_id": {"type": "string"},
+                "agent_type": {"type": "string"},
+                "role": {"type": "string"},
+                "specialization": {"type": "string"},
+                "include_stats": {"type": "boolean", "default": True},
+            },
+        },
+    },
+    {
         "name": "agent_brain_export",
         "description": (
             "Export a sanitized portable Virtual Employee Brain Passport "
@@ -148,6 +250,14 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 "domain_id": {
                     "type": "string",
                     "description": "Optional department/domain filter (e.g. billing)",
+                },
+                "brain_variant": {
+                    "type": "string",
+                    "description": "Optional brain variant filter",
+                },
+                "specialization": {
+                    "type": "string",
+                    "description": "Optional specialization tag filter",
                 },
                 "min_confidence": {
                     "type": "number",
@@ -183,8 +293,70 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "Optional target department/domain focus override",
                 },
+                "brain_variant": {
+                    "type": "string",
+                    "description": "Optional target brain variant override",
+                },
+                "redact_terms": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Additional terms to scrub on import",
+                },
+                "verify_integrity": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "Verify mandatory passport_sha256 digest",
+                },
+                "allow_type_override": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Allow cross-archetype brain import",
+                },
             },
             "required": ["passport", "evidence_ref"],
+        },
+    },
+    {
+        "name": "agent_brain_compare",
+        "description": (
+            "Compare two multi-model brain variants (variant_a vs. variant_b) "
+            "across skill stats, retrieval feedback useful_rate, and live query hits."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "variant_a": {"type": "string"},
+                "variant_b": {"type": "string"},
+                "query": {"type": "string"},
+                "k": {"type": "integer", "default": 5},
+                "scope": {"type": "string", "default": "agent"},
+                "domain_id": {"type": "string"},
+                "specialization": {"type": "string"},
+            },
+            "required": ["variant_a", "variant_b"],
+        },
+    },
+    {
+        "name": "agent_space_offboard",
+        "description": (
+            "Governed transactional offboarding of a Virtual Employee's private "
+            "scope='agent' space on the caller's tenant."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "evidence_ref": {
+                    "type": "string",
+                    "description": "Approved governance evidence reference (ADR-06)",
+                },
+                "reason": {
+                    "type": "string",
+                    "default": "cross_tenant_reassignment",
+                },
+                "purge_episodes": {"type": "boolean", "default": True},
+                "retire_memories": {"type": "boolean", "default": True},
+            },
+            "required": ["evidence_ref"],
         },
     },
     {
@@ -618,6 +790,7 @@ class McpServer:
                 tenant_id=tenant_id,
                 project_id=project_id,
                 scopes=base.scopes,
+                domain_id=base.domain_id,
             )
         return base
 
@@ -636,6 +809,10 @@ class McpServer:
                     extra_mem_kwargs["include_knowledge"] = True
                 if arguments.get("domain_id"):
                     extra_mem_kwargs["domain_id"] = str(arguments["domain_id"])
+                if arguments.get("brain_variant"):
+                    extra_mem_kwargs["brain_variant"] = str(arguments["brain_variant"])
+                if arguments.get("specialization"):
+                    extra_mem_kwargs["specialization"] = str(arguments["specialization"])
                 hits = await self._surface.memory_search(
                     call_ctx,
                     query=arguments["query"],
@@ -667,6 +844,12 @@ class McpServer:
                     add_kwargs["scope"] = str(arguments["scope"])
                 if arguments.get("domain_id"):
                     add_kwargs["domain_id"] = str(arguments["domain_id"])
+                if isinstance(arguments.get("specializations"), list):
+                    add_kwargs["specializations"] = [
+                        str(s) for s in arguments["specializations"] if str(s)
+                    ]
+                if arguments.get("brain_variant"):
+                    add_kwargs["brain_variant"] = str(arguments["brain_variant"])
                 ep_id = await self._surface.memory_add(
                     call_ctx,
                     content=arguments["content"],
@@ -674,6 +857,22 @@ class McpServer:
                     **add_kwargs,
                 )
                 return {"content": [{"type": "text", "text": f"Added episode {ep_id}"}]}
+
+            elif name == "memory_promote":
+                raw_specs = arguments.get("specializations")
+                specs_list = (
+                    [str(s) for s in raw_specs if str(s)] if isinstance(raw_specs, list) else None
+                )
+                promoted = await self._surface.memory_promote(
+                    call_ctx,
+                    memory_id=str(arguments["memory_id"]),
+                    target_scope=str(arguments["target_scope"]),
+                    evidence_ref=arguments.get("evidence_ref"),
+                    target_domain_id=arguments.get("target_domain_id"),
+                    target_project_id=arguments.get("target_project_id"),
+                    specializations=specs_list,
+                )
+                return {"content": [{"type": "text", "text": json.dumps(promoted, indent=2)}]}
 
             elif name == "memory_feedback":
                 await self._surface.memory_feedback(
@@ -720,27 +919,111 @@ class McpServer:
                 }
                 return {"content": [{"type": "text", "text": json.dumps(data, indent=2)}]}
 
+            elif name == "agent_profile_upsert":
+                raw_specs = arguments.get("specializations")
+                specs_list = (
+                    [str(s) for s in raw_specs if str(s)] if isinstance(raw_specs, list) else None
+                )
+                raw_bcfg = arguments.get("brain_config")
+                bcfg = dict(raw_bcfg) if isinstance(raw_bcfg, Mapping) else None
+                raw_prefs = arguments.get("standing_preferences")
+                prefs = dict(raw_prefs) if isinstance(raw_prefs, Mapping) else None
+                upserted = await self._surface.agent_profile_upsert(
+                    call_ctx,
+                    display_name=arguments.get("display_name"),
+                    agent_type=arguments.get("agent_type"),
+                    role=arguments.get("role"),
+                    domain_id=arguments.get("domain_id"),
+                    specializations=specs_list,
+                    brain_config=bcfg,
+                    standing_preferences=prefs,
+                )
+                out_data = {
+                    "agent_id": upserted.agent_id,
+                    "display_name": upserted.display_name,
+                    "standing_preferences": dict(upserted.standing_preferences),
+                }
+                return {"content": [{"type": "text", "text": json.dumps(out_data, indent=2)}]}
+
+            elif name == "agent_roster_list":
+                roster = await self._surface.agent_roster_list(
+                    call_ctx,
+                    domain_id=arguments.get("domain_id"),
+                    agent_type=arguments.get("agent_type"),
+                    role=arguments.get("role"),
+                    specialization=arguments.get("specialization"),
+                    include_stats=bool(arguments.get("include_stats", True)),
+                )
+                return {"content": [{"type": "text", "text": json.dumps(roster, indent=2)}]}
+
             elif name == "agent_brain_export":
                 raw_redact = arguments.get("redact_terms", [])
                 redact_terms = (
                     [str(x) for x in raw_redact if str(x)] if isinstance(raw_redact, list) else []
                 )
+                exp_kwargs: dict[str, Any] = {
+                    "domain_id": arguments.get("domain_id"),
+                    "min_confidence": float(arguments.get("min_confidence", 0.5)),
+                    "redact_terms": redact_terms,
+                }
+                if arguments.get("brain_variant"):
+                    exp_kwargs["brain_variant"] = str(arguments["brain_variant"])
+                if arguments.get("specialization"):
+                    exp_kwargs["specialization"] = str(arguments["specialization"])
                 bundle = await self._surface.agent_brain_export(
                     call_ctx,
-                    domain_id=arguments.get("domain_id"),
-                    min_confidence=float(arguments.get("min_confidence", 0.5)),
-                    redact_terms=redact_terms,
+                    **exp_kwargs,
                 )
                 return {"content": [{"type": "text", "text": json.dumps(bundle, indent=2)}]}
 
             elif name == "agent_brain_import":
+                raw_imp_redact = arguments.get("redact_terms", [])
+                imp_redact_terms = (
+                    [str(x) for x in raw_imp_redact if str(x)]
+                    if isinstance(raw_imp_redact, list)
+                    else []
+                )
+                imp_kwargs: dict[str, Any] = {
+                    "passport": dict(arguments["passport"]),
+                    "evidence_ref": str(arguments["evidence_ref"]),
+                    "target_domain_id": arguments.get("target_domain_id"),
+                }
+                if arguments.get("brain_variant"):
+                    imp_kwargs["brain_variant"] = str(arguments["brain_variant"])
+                if imp_redact_terms:
+                    imp_kwargs["redact_terms"] = imp_redact_terms
+                if "verify_integrity" in arguments:
+                    imp_kwargs["verify_integrity"] = bool(arguments["verify_integrity"])
+                if "allow_type_override" in arguments:
+                    imp_kwargs["allow_type_override"] = bool(arguments["allow_type_override"])
                 imported = await self._surface.agent_brain_import(
                     call_ctx,
-                    passport=dict(arguments["passport"]),
-                    evidence_ref=str(arguments["evidence_ref"]),
-                    target_domain_id=arguments.get("target_domain_id"),
+                    **imp_kwargs,
                 )
                 return {"content": [{"type": "text", "text": json.dumps(imported, indent=2)}]}
+
+            elif name == "agent_brain_compare":
+                compared = await self._surface.agent_brain_compare(
+                    call_ctx,
+                    variant_a=str(arguments["variant_a"]),
+                    variant_b=str(arguments["variant_b"]),
+                    query=arguments.get("query"),
+                    k=int(arguments.get("k", 5)),
+                    scope=str(arguments.get("scope", "agent")),
+                    domain_id=arguments.get("domain_id"),
+                    specialization=arguments.get("specialization"),
+                )
+                return {"content": [{"type": "text", "text": json.dumps(compared, indent=2)}]}
+
+            elif name == "agent_space_offboard":
+                offboarded = await self._surface.agent_space_offboard(
+                    call_ctx,
+                    evidence_ref=arguments.get("evidence_ref"),
+                    reason=str(arguments.get("reason", "cross_tenant_reassignment")),
+                    purge_episodes=bool(arguments.get("purge_episodes", True)),
+                    retire_memories=bool(arguments.get("retire_memories", True)),
+                )
+                return {"content": [{"type": "text", "text": json.dumps(offboarded, indent=2)}]}
 
             elif name == "knowledge_ingest":
                 sec_id = await self._surface.knowledge_ingest(
@@ -1241,12 +1524,14 @@ class McpServer:
                         req_ctx = server_instance._ctx
                         tenant_hdr = self.headers.get("X-Tenant-ID")
                         project_hdr = self.headers.get("X-Project-ID")
-                        if tenant_hdr or project_hdr:
+                        domain_hdr = self.headers.get("X-Domain-ID")
+                        if tenant_hdr or project_hdr or domain_hdr:
                             req_ctx = ActorContext(
                                 agent_id=req_ctx.agent_id,
                                 tenant_id=tenant_hdr or req_ctx.tenant_id,
                                 project_id=project_hdr or req_ctx.project_id,
                                 scopes=req_ctx.scopes,
+                                domain_id=domain_hdr or req_ctx.domain_id,
                             )
 
                     fut = asyncio.run_coroutine_threadsafe(
