@@ -51,8 +51,12 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 "k": {"type": "integer", "description": "Maximum number of hits", "default": 8},
                 "scope": {
                     "type": "string",
-                    "description": "Visibility scope (agent, project)",
+                    "description": "Visibility scope (agent, project, domain, space)",
                     "default": "agent",
+                },
+                "domain_id": {
+                    "type": "string",
+                    "description": "Optional department/domain focus filter",
                 },
                 "token_budget": {
                     "type": "integer",
@@ -85,6 +89,15 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "Episode kind (note, prompt, observation)",
                     "default": "note",
+                },
+                "scope": {
+                    "type": "string",
+                    "description": "Target memory scope (agent, project, domain, space)",
+                    "default": "agent",
+                },
+                "domain_id": {
+                    "type": "string",
+                    "description": "Optional department/domain focus identifier",
                 },
             },
             "required": ["content"],
@@ -570,6 +583,8 @@ class McpServer:
                     extra_mem_kwargs["expand_graph"] = True
                 if arguments.get("include_knowledge"):
                     extra_mem_kwargs["include_knowledge"] = True
+                if arguments.get("domain_id"):
+                    extra_mem_kwargs["domain_id"] = str(arguments["domain_id"])
                 hits = await self._surface.memory_search(
                     call_ctx,
                     query=arguments["query"],
@@ -596,10 +611,16 @@ class McpServer:
                 return {"content": [{"type": "text", "text": json.dumps(formatted, indent=2)}]}
 
             elif name == "memory_add":
+                add_kwargs: dict[str, Any] = {}
+                if arguments.get("scope"):
+                    add_kwargs["scope"] = str(arguments["scope"])
+                if arguments.get("domain_id"):
+                    add_kwargs["domain_id"] = str(arguments["domain_id"])
                 ep_id = await self._surface.memory_add(
                     call_ctx,
                     content=arguments["content"],
                     kind=arguments.get("kind", "note"),
+                    **add_kwargs,
                 )
                 return {"content": [{"type": "text", "text": f"Added episode {ep_id}"}]}
 

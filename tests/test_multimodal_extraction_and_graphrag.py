@@ -589,3 +589,75 @@ async def test_memory_search_fuses_extracted_knowledge_and_graphrag(
     assert len(payload) == 2
     assert payload[1]["provenance"]["source"] == "knowledge_base"
     assert payload[1]["provenance"]["modality"] == "image"
+
+
+@pytest.mark.asyncio
+async def test_virtual_employee_spaces_and_department_focus() -> None:
+    from engramory.core.models import Memory
+    from engramory.workers.distillation import reflect
+
+    mock_repo = AsyncMock()
+    mock_repo.add_episode.return_value = "ep-proj-1"
+    mock_repo.log_retrievals.return_value = ["ret-1", "ret-2"]
+    surface = AccessSurface(mock_repo, graph=None, llm=None)
+
+    # Virtual employee #1: Support specialist focused on Billing department on project 'erp-core'
+    billing_support = ActorContext(
+        agent_id="support-billing-01",
+        project_id="erp-core",
+        tenant_id="acme",
+        domain_id="billing",
+        scopes=frozenset({"agent", "project", "domain", "space"}),
+    )
+
+    # 1. Record a shared project-scoped episode and a department-scoped episode
+    ep_id = await surface.memory_add(
+        billing_support,
+        content="ERP Core invoice webhook requires HMAC-SHA256 header.",
+        kind="observation",
+        scope="project",
+    )
+    assert ep_id == "ep-proj-1"
+    added_ep = mock_repo.add_episode.call_args.args[0]
+    assert added_ep.agent_id == "support-billing-01"
+    assert added_ep.project_id == "erp-core"
+    assert added_ep.domain_id == "billing"
+    assert added_ep.metadata["scope"] == "project"
+
+    # 2. Verify reflect() preserves target scope='project' and domain_id='billing'
+    object.__setattr__(added_ep, "id", "ep-proj-1")
+    mock_repo.get_unreflected_episodes.return_value = [added_ep]
+    mock_repo.upsert_memory.return_value = "mem-proj-1"
+    created = await reflect(mock_repo, tenant_id="acme", agent_id="support-billing-01")
+    assert created == 1
+    distilled_mem: Memory = mock_repo.upsert_memory.call_args.args[0]
+    assert distilled_mem.scope == "project"
+    assert distilled_mem.domain_id == "billing"
+    assert distilled_mem.project_id == "erp-core"
+    object.__setattr__(distilled_mem, "id", "mem-proj-1")
+
+    # 3. Verify memory_search passes the virtual employee's department domain_id and ladder levels
+    mock_repo.get_memories.return_value = [
+        distilled_mem,
+        Memory(
+            id="mem-agent-1",
+            content_raw="Billing dept escalation SLA is 15 minutes.",
+            summary="Billing dept escalation SLA is 15 minutes.",
+            type="procedural",
+            embedding_model="text-embedding-3-small",
+            agent_id="support-billing-01",
+            project_id="erp-core",
+            domain_id="billing",
+            tenant_id="acme",
+            scope="agent",
+            provenance={"episode_id": "ep-agent-1"},
+        ),
+    ]
+    hits = await surface.memory_search(billing_support, "invoice SLA", scope="space")
+    assert len(hits) == 2
+    get_mem_kwargs = mock_repo.get_memories.call_args.kwargs
+    assert get_mem_kwargs["tenant_id"] == "acme"
+    assert get_mem_kwargs["agent_id"] == "support-billing-01"
+    assert get_mem_kwargs["project_id"] == "erp-core"
+    assert get_mem_kwargs["domain_id"] == "billing"
+    assert get_mem_kwargs["scopes"] == ("agent", "project", "domain", "space")
