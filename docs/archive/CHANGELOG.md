@@ -4,17 +4,22 @@ All notable changes to Engramory are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
-## [0.2.0] - 2026-11-13
+## [0.3.0] - 2026-11-13
 
-### Added — 2026-11-13 (`PLAN-013`..`PLAN-024` / `CHG-006`..`CHG-009`)
+### Added — 2026-11-13 (`PLAN-024` / `CHG-009` / `IPLAN-09`)
 
 - **Virtual Employee Hierarchy, Multi-Model Brain Variants, Specialist Roster & Portable Brain Passports (`PLAN-024`, `CHG-009`, `IPLAN-09`)**:
   - Formalized the 3-level Virtual Employee specialist taxonomy (`agent_type` archetype $\to$ `agent_id` instance $\to$ `specializations` & `domain_id` department focus) across L3 `agent_profiles`, L2 `memories.provenance`, and `engramory.brain_passport.v1`.
-  - Added end-to-end `domain_id` propagation across `.engramory/config.toml` (`engramory init --domain-id` with non-clobbering profile preservation), OIDC `claims_to_actor_context()`, and `McpServer._resolve_call_ctx()` / `X-Domain-ID`, plus fail-closed cross-department spoofing guards on `memory_search`, `memory_add`, and `knowledge_search`.
+  - Added end-to-end `domain_id` propagation across `.engramory/config.toml` (`engramory init --domain-id --force` with non-clobbering profile preservation), OIDC `claims_to_actor_context()`, and `McpServer._resolve_call_ctx()` / `X-Domain-ID`, plus fail-closed cross-department spoofing guards (`_enforce_domain_boundary`) across memory, knowledge, runbook, experience, and Brain Passport operations.
   - Added `agent_profile_upsert` (`engramory profile set`) and experience-ranked `agent_roster_list` (`engramory profile list`) ordered by `mean_confidence DESC, active_skill_count DESC`.
   - Extended `get_unreflected_episodes`, `get_active_agents_with_unreflected_episodes`, and `reflect()` for parallel multi-model distillation (`brain_variant`, `distiller_model`, `rag_params`) and added `agent_brain_compare` (`engramory profile compare-brains`) for side-by-side variant benchmarking.
   - Added governed `memory_promote` (`engramory memory promote`) with strict `_SCOPE_CLAUSES` ownership verification, ladder monotonicity, and cross-instance deduplication (`find_existing_promoted_memory`).
   - Hardened `agent_brain_export` and `agent_brain_import` with recursive `sanitize_portable_value()`, canonical `passport_sha256` integrity verification, cross-archetype `agent_type_mismatch` guard, sibling clone specialization union-merging, and `1536`-dim vector re-embedding, plus transactional `agent_space_offboard` (`engramory profile offboard`).
+
+## [0.2.0] - 2026-11-13
+
+### Added — 2026-11-13 (`PLAN-013`..`PLAN-023` / `CHG-006`..`CHG-008`)
+
 - **Multimodal RAG, Dual-Engine GraphRAG & PostgreSQL 18 20 GB+ Chunked Blob CAS (`PLAN-022`, `PLAN-023`, `CHG-008`, `IPLAN-08`)**:
   - Added migration `0010_multimodal_blob_cas.sql` provisioning `kb_blobs` (`STAGED`/`READY`), `kb_blob_chunks` (`<= 50 MiB` `LOGGED`), `kb_blob_chunks_large` (`> 50 MiB` `UNLOGGED` with `STORAGE EXTERNAL`), and multimodal columns on `kb_sections` (`modality`, `blob_sha256`, `blob_uri`, `media_metadata`).
   - Implemented `PostgresBlobStorageAdapter` and `LocalFsStorageAdapter` (`StoragePort`) streaming arbitrary files up to `20 GB+` in bounded `4 MiB` chunks (`O(1)` memory) with end-to-end `SHA-256` verification and orphan chunk GC.

@@ -123,8 +123,8 @@ registry:
       complexity: 4
       session_count: 1
       sessions_completed: 1
-      files_declared: 12
-      files_done: 12
+      files_declared: 19
+      files_done: 19
       skipped: []
       depends_on: ["IPLAN-01", "IPLAN-02", "IPLAN-03", "IPLAN-04", "IPLAN-07"]
 
