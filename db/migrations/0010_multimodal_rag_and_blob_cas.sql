@@ -68,7 +68,8 @@ ALTER TABLE kb_blob_chunks_large ALTER COLUMN data SET STORAGE EXTERNAL;
 --    falling back cleanly to pg_default on unprivileged CI or managed cloud Postgres.
 DO $$
 BEGIN
-    IF EXISTS (SELECT 1 FROM pg_tablespace WHERE spcname = 'ts_blob_cold') THEN
+    IF EXISTS (SELECT 1 FROM pg_tablespace WHERE spcname = 'ts_blob_cold')
+       AND has_tablespace_privilege(current_user, 'ts_blob_cold', 'CREATE') THEN
         EXECUTE 'ALTER TABLE kb_blob_chunks SET TABLESPACE ts_blob_cold';
         EXECUTE 'ALTER INDEX kb_blob_chunks_pkey SET TABLESPACE ts_blob_cold';
         EXECUTE 'ALTER TABLE kb_blob_chunks_large SET TABLESPACE ts_blob_cold';

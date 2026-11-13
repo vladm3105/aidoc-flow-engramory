@@ -58,8 +58,8 @@ All dev dependencies are free and open-source.
 
 Any AI agent with a shell or MCP client uses Engramory through two thin faces over `AccessSurface` (ADR-10):
 
-- **`engramory` CLI (dev/CI face):** `engramory memory` (`add`, `distill`, `search [--include-knowledge --expand-graph]`, `feedback`, `forget`, `ingest-event`, `learning-health`), `engramory knowledge` (`ingest`, `ingest-media`, `blob-put`, `blob-stat`, `blob-get`, `sync-git`, `search [--modality --expand-graph]`), `engramory sdd` (`ingest`, `slice`, `blast-radius`, `validate-graph`, `check-invariants`, `lint-policy`), `engramory docs` (`lint`, `ingest`, `slice-runbook`, `check-drift`, `export-llms`, `smoke-run`, `tool-inventory`, `build-portal`), and `engramory mcp` (`--transport stdio|sse`).
-- **MCP Gateway (`engramory mcp`, authenticated production face):** exposes `memory_*` (including `memory_search` with `include_knowledge` & `expand_graph`), `knowledge_ingest`, `knowledge_ingest_media`, `knowledge_search`, `graph_neighbors`, `sdd_context_slice`, `sdd_blast_radius`, `sdd_ingest`, `sdd_validate_graph`, `sdd_check_invariants`, `sdd_lint_policy`, and `docs_*` tools with OIDC/JWKS authentication and fail-closed authorization.
+- **`engramory` CLI (dev/CI face):** `engramory memory` (`add`, `distill`, `promote`, `search [--include-knowledge --expand-graph --brain-variant --specialization]`, `feedback`, `forget`, `ingest-event`, `learning-health`), `engramory profile` (`get`, `set`, `list`, `export-brain`, `import-brain`, `compare-brains`, `offboard`), `engramory knowledge` (`ingest`, `ingest-media`, `blob-stat`, `blob-get`, `sync-git`, `search [--modality --expand-graph]`), `engramory sdd` (`ingest`, `slice`, `blast-radius`, `validate-graph`, `check-invariants`, `lint-policy`), `engramory docs` (`lint`, `ingest`, `slice-runbook`, `check-drift`, `export-llms`, `smoke-run`, `tool-inventory`, `build-portal`), and `engramory mcp` (`--transport stdio|sse`).
+- **MCP Gateway (`engramory mcp`, authenticated production face):** exposes `memory_*` (`memory_search`, `memory_add`, `memory_promote`, `memory_feedback`, `memory_forget`, `memory_ingest_event`, `memory_learning_health`), `agent_*` (`agent_profile_get`, `agent_profile_upsert`, `agent_roster_list`, `agent_brain_export`, `agent_brain_import`, `agent_brain_compare`, `agent_space_offboard`), `knowledge_ingest`, `knowledge_ingest_media`, `knowledge_search`, `graph_neighbors`, `sdd_context_slice`, `sdd_blast_radius`, `sdd_ingest`, `sdd_validate_graph`, `sdd_check_invariants`, `sdd_lint_policy`, and `docs_*` tools with OIDC/JWKS authentication and fail-closed authorization.
 
 - **Install + first round-trip:** [docs/INSTALL.md](docs/INSTALL.md)
 - **Agent workflow (3 tracks: terminal agent, CI, Skill):** [docs/AGENT-QUICKSTART.md](docs/AGENT-QUICKSTART.md)
@@ -68,20 +68,21 @@ Any AI agent with a shell or MCP client uses Engramory through two thin faces ov
 - **CLI contract (exit codes, JSON shapes, config):** [docs/sdd/06_SPEC/SPEC-07_cli_face.yaml](docs/sdd/06_SPEC/SPEC-07_cli_face.yaml)
 
 The CLI is the ADR-10 **dev/CI face** (single-tenant dev tier); the MCP
-gateway is the authenticated production face and arrives in a later cycle.
+gateway (`engramory mcp`) is the authenticated production face.
 
 ## Documentation
 
 | Doc | Purpose |
 |---|---|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Target architecture, portability matrix, build roadmap |
+| [docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md](docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md) | Virtual Employee 4-level space hierarchy (`tenant -> agent -> domain -> project`), multi-model brain variants, and portable Brain Passports |
 | [docs/MULTIMODAL_AND_POSTGRES_BLOB_STORAGE.md](docs/MULTIMODAL_AND_POSTGRES_BLOB_STORAGE.md) | Multimodal ingestion (text, images, audio, `20 GB+` video), PostgreSQL 18 Chunked Blob CAS (`ts_blob_cold`), and Neo4j dual-engine graph architecture (`Rule D14a`/`D14b`, `Decision D17`) |
 | [docs/doc-tools/00_INDEX.md](docs/doc-tools/00_INDEX.md) | AI-first documentation, executable runbooks, drift & `llms.txt` toolchain (`engramory docs`) |
 | [docs/CORES.md](docs/CORES.md) | The two bounded cores (Memory & Knowledge), their boundary, and the shared spine |
 | [docs/STRATEGY.md](docs/STRATEGY.md) | Build strategy & recommendation (build the plane, adopt the engine, lead with evaluation) |
 | [docs/MEMORY_DESIGN.md](docs/MEMORY_DESIGN.md) | Layered memory (L0–L3), distillation loop, schema, portability |
 | [docs/PORTABILITY.md](docs/PORTABILITY.md) | Self-hosted → GCP/Azure principles and migration |
-| [docs/sdd/08_IPLAN/IPLAN-00_index.yaml](docs/sdd/08_IPLAN/IPLAN-00_index.yaml) | Canonical SDD implementation plan index (IPLAN-01..08) and `plans/PLAN-*.md` |
+| [docs/sdd/08_IPLAN/IPLAN-00_index.yaml](docs/sdd/08_IPLAN/IPLAN-00_index.yaml) | Canonical SDD implementation plan index (IPLAN-01..09) and `plans/PLAN-*.md` |
 | [docs/GLOSSARY.md](docs/GLOSSARY.md) | Terms |
 | [docs/HOW_TO_USE_THE_FRAMEWORK.md](docs/HOW_TO_USE_THE_FRAMEWORK.md) | Authoring SDD artifacts the UCX / aidoc-flow way |
 | [docs/UCX_INTEGRATION.md](docs/UCX_INTEGRATION.md) | How Engramory fits UCX and replaces `ucx_kb` |

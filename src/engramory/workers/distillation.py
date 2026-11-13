@@ -127,10 +127,16 @@ async def reflect(
             target_scope = (
                 raw_scope if raw_scope in {"agent", "project", "domain", "space"} else "agent"
             )
+            ep_meta_variant = str((episode.metadata or {}).get("brain_variant") or "").strip()
+            ep_variant = (
+                (brain_variant or str(brain_cfg.get("active_brain_variant") or "")).strip()
+                or ep_meta_variant
+                or "default"
+            )
             prov = _build_episode_provenance(
                 episode,
                 distiller=eff_distiller,
-                brain_variant=eff_variant,
+                brain_variant=ep_variant,
                 embedding_model=emb_model,
                 rag_params=eff_rag_params,
                 agent_type=profile_agent_type,

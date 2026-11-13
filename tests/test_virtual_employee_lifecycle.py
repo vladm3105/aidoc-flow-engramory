@@ -214,12 +214,18 @@ class InMemoryVirtualEmployeeRepo:
         scopes: tuple[str, ...] | None = None,
         brain_variant: str | None = None,
         specialization: str | None = None,
+        include_quarantined: bool = False,
     ) -> list[Memory]:
         _ = (query_vec,)
         levels = scopes or ("agent", "project", "domain", "space")
         out: list[Memory] = []
+        allowed_statuses = {"active", "quarantined"} if include_quarantined else {"active"}
         for m in self.memories.values():
-            if m.tenant_id != tenant_id or m.status != "active" or m.valid_to is not None:
+            if (
+                m.tenant_id != tenant_id
+                or m.status not in allowed_statuses
+                or m.valid_to is not None
+            ):
                 continue
             if brain_variant is not None:
                 m_var = str(m.provenance.get("brain_variant") or "default")
@@ -807,3 +813,86 @@ async def test_virtual_employee_brain_passport_promotion_archetype_guard_and_off
         evidence_ref="CHG-009-GLOBEX-ONBOARD",
     )
     assert imp2["memory_ids"] == imp1["memory_ids"]
+
+    # Cross-department target_domain_id spoofing on agent_brain_import is rejected
+    with pytest.raises(AuthzError, match="cross-department domain_id override"):
+        await surface.agent_brain_import(
+            ctx_globex,
+            passport=passport,
+            evidence_ref="CHG-009-SPOOF",
+            target_domain_id="hr-payroll",
+        )
+
+
+@pytest.mark.asyncio
+async def test_preprod_security_and_quarantined_metrics_guards() -> None:
+    from engramory.access.poisoning_guard import sanitize_portable_value
+
+    repo = InMemoryVirtualEmployeeRepo()
+    surface = AccessSurface(cast(Repository, repo))
+    ctx = ActorContext(
+        agent_id="agent-support-01",
+        project_id="acme-payments",
+        tenant_id="tenant-acme",
+        domain_id="billing",
+        scopes=frozenset({"agent", "project", "domain"}),
+    )
+
+    # 1. Cross-project memory_ingest_event & memory_learning_health rejected without 'space' scope
+    with pytest.raises(AuthzError, match="out_of_scope"):
+        await surface.memory_ingest_event(
+            ctx,
+            {
+                "kind": "execution.completed",
+                "occurred_at": "2026-11-13T12:00:00Z",
+                "payload_type": "ExecutionCompleted.v1",
+                "payload": {"status": "ok"},
+                "project": "other-project",
+                "producer": "agent-support-01",
+                "tenant_id": "tenant-acme",
+                "summary": "Attempted cross-project event write.",
+            },
+            scope="project",
+        )
+    with pytest.raises(AuthzError, match="out_of_scope"):
+        await surface.memory_learning_health(
+            ctx,
+            project_id="other-project",
+            scope="project",
+        )
+
+    # 2. Dict keys in sanitize_portable_value are scrubbed alongside values
+    scrubbed_dict, redactions = sanitize_portable_value(
+        {"ops@acme-corp.com": "https://internal.acme-corp.com/runbook"},
+        redact_terms=["acme-corp"],
+    )
+    assert "[REDACTED_EMAIL]" in scrubbed_dict
+    assert redactions >= 2
+
+    # 3. Quarantined memories are still counted in harmful_count / useful_rate metrics
+    q_mem = Memory(
+        content_raw="Quarantined skill",
+        summary="Quarantined skill",
+        type="episodic",
+        embedding_model="interim-1536",
+        provenance={"brain_variant": "gemini-2.5-pro"},
+        confidence=0.3,
+        status="quarantined",
+        agent_id="agent-support-01",
+        project_id="acme-payments",
+        domain_id="billing",
+        tenant_id="tenant-acme",
+        scope="agent",
+    )
+    qid = await repo.upsert_memory(q_mem)
+    repo.feedbacks[qid] = ["harmful"]
+    metrics = await repo.get_brain_variant_metrics(
+        tenant_id="tenant-acme",
+        variant="gemini-2.5-pro",
+        scope="agent",
+        agent_id="agent-support-01",
+    )
+    assert metrics["skill_count"] == 0
+    assert metrics["harmful_count"] == 1
+    assert metrics["total_retrievals"] == 1
+    assert metrics["useful_rate"] == 0.0

@@ -19,7 +19,7 @@ The instruction file carries the **judgment** (what is worth remembering, when
 to search, always close the feedback loop); the CLI and MCP gateway carry the
 **mechanics**.
 
-The MCP gateway (`engramory mcp serve` for stdio or `--transport sse` for
+The MCP gateway (`engramory mcp` for stdio or `engramory mcp --transport sse` for
 authenticated HTTP) is the production face (ADR-10), while the CLI covers every
 shell-capable dev/CI agent.
 

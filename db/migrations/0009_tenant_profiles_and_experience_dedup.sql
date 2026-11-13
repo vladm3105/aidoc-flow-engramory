@@ -12,6 +12,7 @@ BEGIN
         FROM pg_constraint c
         JOIN pg_class t ON c.conrelid = t.oid
         WHERE t.relname = 'agent_profiles'
+          AND t.relnamespace = current_schema()::regnamespace
           AND c.conname = 'agent_profiles_pkey'
           AND array_length(c.conkey, 1) = 1
     ) THEN
@@ -23,6 +24,7 @@ BEGIN
         FROM pg_constraint c
         JOIN pg_class t ON c.conrelid = t.oid
         WHERE t.relname = 'agent_profiles'
+          AND t.relnamespace = current_schema()::regnamespace
           AND c.conname = 'agent_profiles_pkey'
     ) THEN
         ALTER TABLE agent_profiles

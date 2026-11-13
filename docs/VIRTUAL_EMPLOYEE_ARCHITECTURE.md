@@ -86,7 +86,7 @@ Engramory tracks structured `brain_metadata` (`brain_variant`, `distiller_model`
 `AccessSurface.agent_brain_compare` (`engramory profile compare-brains --variant-a ... --variant-b ...`) benchmarks two brain variants across:
 
 - `skill_count`, `mean_confidence`, and `mean_token_count`.
-- Closed-loop retrieval feedback (`total_retrievals`, `useful_count`, `not_useful_count`, `harmful_count`, `useful_rate`).
+- Closed-loop retrieval feedback (`total_retrievals`, `useful_count`, `not_useful_count`, `harmful_count`, `useful_rate`) aggregated across both active and quarantined memories of the variant.
 - Live side-by-side query hit lists, overlap ratio, and recommended winning variant (`winner`).
 
 ---
@@ -97,6 +97,6 @@ Engramory tracks structured `brain_metadata` (`brain_variant`, `distiller_model`
 
 To reassign or clone a specialized Virtual Employee across tenants without leaking customer PII or raw L1 logs:
 
-1. **Sanitized Export (`agent_brain_export`):** Exports only L3 `standing_preferences` and high-confidence L2 `scope='agent'` skills. `sanitize_portable_value` recursively scrubs secrets, emails, URLs, IPs, UUIDs, and length-sorted `redact_terms`, sealing the bundle (`engramory.brain_passport.v1`) with a canonical `passport_sha256` digest.
+1. **Sanitized Export (`agent_brain_export`):** Exports only L3 `standing_preferences` and high-confidence L2 `scope='agent'` skills. `sanitize_portable_value` recursively scrubs secrets, emails, URLs, IPs, UUIDs, and length-sorted `redact_terms` across both dictionary keys and values, sealing the bundle (`engramory.brain_passport.v1`) with a canonical `passport_sha256` digest.
 2. **Transactional Offboarding (`agent_space_offboard`):** Retires live `scope='agent'` memories, deletes private `scope='agent'` episodes, and removes the L3 profile on the source tenant while preserving shared `project`/`domain`/`space` artifacts.
-3. **Governed Import (`agent_brain_import`):** Verifies `evidence_ref`, mandatory `passport_sha256`, and `agent_type` compatibility (`allow_type_override=False` by default), screens all fields via `inspect_memory_write()`, preserves existing `display_name` and union-merges `specializations` on sibling clones, and re-embeds imported skills into `1536`-dim `pgvector`.
+3. **Governed Import (`agent_brain_import`):** Enforces `_enforce_domain_boundary`, verifies `evidence_ref`, mandatory `passport_sha256`, and `agent_type` compatibility (`allow_type_override=False` by default), screens all fields via `inspect_memory_write()`, preserves existing `display_name` and union-merges `specializations` on sibling clones, and re-embeds imported skills into `1536`-dim `pgvector`.

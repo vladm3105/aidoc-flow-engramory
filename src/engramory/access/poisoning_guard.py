@@ -31,7 +31,7 @@ _INJECTION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ),
     (
         "PI_CHATML_DELIMITER",
-        re.compile(r"<\|im_start\|>|<\|im_end\|>|\[INST\]|\[/INST\]|<system>|<assistant>"),
+        re.compile(r"(?i)<\|im_start\|>|<\|im_end\|>|\[INST\]|\[/INST\]|<system>|<assistant>"),
     ),
     (
         "PI_ROLEPLAY_OVERRIDE",
@@ -124,9 +124,10 @@ def sanitize_portable_value(value: Any, *, redact_terms: Sequence[str] = ()) -> 
         out_dict: dict[str, Any] = {}
         total = 0
         for k, v in value.items():
-            cleaned_val, count = sanitize_portable_value(v, redact_terms=redact_terms)
-            out_dict[str(k)] = cleaned_val
-            total += count
+            cleaned_key, k_count = sanitize_portable_text(str(k), redact_terms=redact_terms)
+            cleaned_val, v_count = sanitize_portable_value(v, redact_terms=redact_terms)
+            out_dict[cleaned_key] = cleaned_val
+            total += k_count + v_count
         return out_dict, total
     return value, 0
 

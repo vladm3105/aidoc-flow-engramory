@@ -10,7 +10,7 @@ document_control:
   subtype: code_build
   source_spec: "@spec: SPEC-01"
   authorizing_chg: "@chg: CHG-009"
-  status: In Progress
+  status: Completed
   version: "1.0"
   date_created: "2026-11-13T00:00:00"
   last_updated: "2026-11-13T00:00:00"
@@ -21,18 +21,18 @@ document_control:
 
 file_manifest:
   files:
-    - { path: "src/engramory/access/authz.py", order: 1, status: IN_PROGRESS, session: 1, verified: true }
-    - { path: "src/engramory/access/jwt_auth.py", order: 2, status: IN_PROGRESS, session: 1, verified: true }
-    - { path: "src/engramory/access/poisoning_guard.py", order: 3, status: IN_PROGRESS, session: 1, verified: true }
-    - { path: "src/engramory/core/repository.py", order: 4, status: IN_PROGRESS, session: 1, verified: true }
-    - { path: "src/engramory/workers/distillation.py", order: 5, status: IN_PROGRESS, session: 1, verified: true }
-    - { path: "src/engramory/workers/runner.py", order: 6, status: IN_PROGRESS, session: 1, verified: true }
-    - { path: "src/engramory/access/surface.py", order: 7, status: IN_PROGRESS, session: 1, verified: true }
-    - { path: "src/engramory/mcp/server.py", order: 8, status: IN_PROGRESS, session: 1, verified: true }
-    - { path: "src/engramory/cli.py", order: 9, status: IN_PROGRESS, session: 1, verified: true }
-    - { path: "docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md", order: 10, status: IN_PROGRESS, session: 1, verified: true }
-    - { path: "tests/test_virtual_employee_lifecycle.py", order: 11, status: IN_PROGRESS, session: 1, verified: true }
-    - { path: "tests/test_multimodal_extraction_and_graphrag.py", order: 12, status: IN_PROGRESS, session: 1, verified: true }
+    - { path: "src/engramory/access/authz.py", order: 1, status: DONE, session: 1, verified: true }
+    - { path: "src/engramory/access/jwt_auth.py", order: 2, status: DONE, session: 1, verified: true }
+    - { path: "src/engramory/access/poisoning_guard.py", order: 3, status: DONE, session: 1, verified: true }
+    - { path: "src/engramory/core/repository.py", order: 4, status: DONE, session: 1, verified: true }
+    - { path: "src/engramory/workers/distillation.py", order: 5, status: DONE, session: 1, verified: true }
+    - { path: "src/engramory/workers/runner.py", order: 6, status: DONE, session: 1, verified: true }
+    - { path: "src/engramory/access/surface.py", order: 7, status: DONE, session: 1, verified: true }
+    - { path: "src/engramory/mcp/server.py", order: 8, status: DONE, session: 1, verified: true }
+    - { path: "src/engramory/cli.py", order: 9, status: DONE, session: 1, verified: true }
+    - { path: "docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md", order: 10, status: DONE, session: 1, verified: true }
+    - { path: "tests/test_virtual_employee_lifecycle.py", order: 11, status: DONE, session: 1, verified: true }
+    - { path: "tests/test_multimodal_extraction_and_graphrag.py", order: 12, status: DONE, session: 1, verified: true }
 
 execution_commands:
   setup: ["uv sync"]

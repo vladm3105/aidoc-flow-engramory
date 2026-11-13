@@ -53,14 +53,14 @@ interfaces:
   exports:
     - name: "memory_search"
       type: "async function"
-      signature: "async def memory_search(ctx: ActorContext, query: str, k: int = 8, token_budget: int | None = None) -> list[MemoryHit]"
+      signature: "async def memory_search(ctx: ActorContext, query: str, *, scope: str = 'agent', tenant_id: str | None = None, domain_id: str | None = None, brain_variant: str | None = None, specialization: str | None = None, k: int = 8, token_budget: int | None = 2000, include_knowledge: bool = False, expand_graph: bool = False, graph_depth: int = 1) -> list[MemoryHit]"
       description: "Scoped retrieval of knowledge + distilled memory. Token budget defaults to @threshold:PRD.01.perf.context_token_budget . Deliberately does NOT expose include_advisory: advisory/quarantined memories are unreachable through the agent-facing surface (EARS.01.03.b800); include_advisory exists only on the internal MemoryPort/retrieve layer for ops and evaluation."
       errors: ["AuthzError: caller scope insufficient", "StoreUnavailable: fail closed"]
     - name: "memory_add"
       type: "async function"
-      signature: "async def memory_add(ctx: ActorContext, episode: EpisodeIn) -> EpisodeId"
-      description: "Append an episode in the caller's scope."
-      errors: ["AuthzError"]
+      signature: "async def memory_add(ctx: ActorContext, content: str, *, kind: str = 'note', metadata: Mapping[str, Any] | None = None, scope: str = 'agent', domain_id: str | None = None, brain_variant: str | None = None, specializations: Sequence[str] | None = None) -> str"
+      description: "Append an episode in the caller's scope with optional domain_id, brain_variant, and specializations."
+      errors: ["AuthzError", "GovernedWriteRejected", "StoreUnavailable"]
     - name: "memory_feedback"
       type: "async function"
       signature: "async def memory_feedback(ctx: ActorContext, retrieval_id: RetrievalId, outcome: str) -> None"

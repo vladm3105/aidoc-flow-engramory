@@ -626,7 +626,14 @@ class Repository:
                             AND m.agent_id = e.agent_id
                             AND m.provenance->>'episode_id' = e.id::text
                             AND coalesce(m.provenance->>'brain_variant', 'default') = coalesce(
-                                p.standing_preferences->'brain_config'->>'active_brain_variant',
+                                NULLIF(
+                                    btrim(
+                                        p.standing_preferences->'brain_config'
+                                        ->>'active_brain_variant'
+                                    ),
+                                    ''
+                                ),
+                                NULLIF(btrim(e.metadata->>'brain_variant'), ''),
                                 %(brain_variant)s
                             )
                       )
@@ -649,6 +656,7 @@ class Repository:
         scopes: Sequence[str] | None = None,
         brain_variant: str | None = None,
         specialization: str | None = None,
+        include_quarantined: bool = False,
     ) -> list[Memory]:
         """Visible, live, active memories per the ADR-07 ladder.
 
@@ -677,6 +685,7 @@ class Repository:
             "q_like": f"%{query.strip()}%" if has_q and query is not None else None,
             "brain_variant": brain_variant,
             "specialization": specialization,
+            "include_quarantined": include_quarantined,
         }
         async with self._conn() as conn:
             rows = await (
@@ -689,7 +698,10 @@ class Repository:
                     FROM memories
                     WHERE tenant_id = %(tenant_id)s
                       AND valid_to IS NULL
-                      AND status = 'active'
+                      AND (
+                          status = 'active'
+                          OR (%(include_quarantined)s AND status = 'quarantined')
+                      )
                       AND (
                           %(brain_variant)s::text IS NULL
                           OR coalesce(provenance->>'brain_variant', 'default') = %(brain_variant)s
@@ -817,14 +829,19 @@ class Repository:
             scopes=(scope,),
             brain_variant=variant,
             specialization=specialization,
+            include_quarantined=True,
         )
-        skill_count = len(mems)
+        active_mems = [m for m in mems if m.status == "active"]
+        skill_count = len(active_mems)
         mean_confidence = (
-            round(sum(m.confidence for m in mems) / skill_count, 4) if skill_count > 0 else 0.0
+            round(sum(m.confidence for m in active_mems) / skill_count, 4)
+            if skill_count > 0
+            else 0.0
         )
         mean_token_count = (
             round(
-                sum(max(1, len((m.summary or m.content_raw).split())) for m in mems) / skill_count,
+                sum(max(1, len((m.summary or m.content_raw).split())) for m in active_mems)
+                / skill_count,
                 2,
             )
             if skill_count > 0

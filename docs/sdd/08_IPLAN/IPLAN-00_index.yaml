@@ -14,65 +14,65 @@ registry:
       title: "Access Surface & Authorization"
       source_spec: "@spec: SPEC-01"
       scope: "MCP access surface, per-call authz/scoping, audit, governed-write gate, fail-closed"
-      status: "Draft"
-      status_date: "2026-06-22"
+      status: "Completed"
+      status_date: "2026-11-10"
       complexity: 4
-      session_count: 0
-      sessions_completed: 0
+      session_count: 1
+      sessions_completed: 1
       files_declared: 7
-      files_done: 0
+      files_done: 7
       skipped: []
       depends_on: ["IPLAN-06", "IPLAN-02"]
     - id: "IPLAN-02"
       title: "Knowledge & Memory Store"
       source_spec: "@spec: SPEC-02"
       scope: "Postgres schema (episodes, memories, kb_sections, agent_profiles) + repository"
-      status: "Draft"
-      status_date: "2026-06-22"
+      status: "Completed"
+      status_date: "2026-11-10"
       complexity: 4
-      session_count: 0
-      sessions_completed: 0
+      session_count: 1
+      sessions_completed: 1
       files_declared: 5
-      files_done: 1
+      files_done: 5
       skipped: []
       depends_on: ["IPLAN-06"]
     - id: "IPLAN-03"
       title: "Retrieval & Graph"
       source_spec: "@spec: SPEC-03"
       scope: "Scoped hybrid retrieval + GraphPort traversal + fail-closed"
-      status: "Draft"
-      status_date: "2026-06-22"
+      status: "Completed"
+      status_date: "2026-11-10"
       complexity: 3
-      session_count: 0
-      sessions_completed: 0
+      session_count: 1
+      sessions_completed: 1
       files_declared: 4
-      files_done: 0
+      files_done: 4
       skipped: []
       depends_on: ["IPLAN-02", "IPLAN-06"]
     - id: "IPLAN-04"
       title: "Distillation Engine"
       source_spec: "@spec: SPEC-04"
       scope: "Reflection + consolidation worker; MemoryPort engine over Postgres canonical"
-      status: "Draft"
-      status_date: "2026-06-22"
+      status: "Completed"
+      status_date: "2026-11-10"
       complexity: 5
-      session_count: 0
-      sessions_completed: 0
+      session_count: 1
+      sessions_completed: 1
       files_declared: 4
-      files_done: 0
+      files_done: 4
       skipped: []
       depends_on: ["IPLAN-02", "IPLAN-06"]
     - id: "IPLAN-05"
       title: "Framework KB Compatibility (ucx_kb replacement)"
       source_spec: "@spec: SPEC-05"
       scope: "SDD-artifact entries, coverage rules, traceability graph, governed ingest, Hermes skills"
-      status: "Draft"
-      status_date: "2026-06-22"
+      status: "Completed"
+      status_date: "2026-11-10"
       complexity: 4
-      session_count: 0
-      sessions_completed: 0
+      session_count: 1
+      sessions_completed: 1
       files_declared: 6
-      files_done: 0
+      files_done: 6
       skipped: []
       depends_on: ["IPLAN-02", "IPLAN-01"]
     - id: "IPLAN-06"

@@ -221,25 +221,36 @@ class AccessSurface:
     async def _enforce_domain_boundary(
         self, ctx: ActorContext, action: str, requested_domain_id: str | None
     ) -> str | None:
-        """Prevent a department-bound Virtual Employee from spoofing another domain_id
-        unless granted tenant-wide 'space' scope."""
-        if (
-            ctx.domain_id is not None
-            and requested_domain_id is not None
-            and requested_domain_id != ctx.domain_id
-            and "space" not in ctx.scopes
-        ):
-            await self._repo.record_audit(
-                tenant_id=ctx.tenant_id,
-                agent_id=ctx.agent_id,
-                project_id=ctx.project_id,
-                action=action,
-                allowed=False,
-                reason=f"out_of_scope: cross-department domain_id override ({requested_domain_id})",
-            )
-            raise AuthzError(
-                "out_of_scope: cross-department domain_id override requires space scope"
-            )
+        """Prevent a Virtual Employee from spoofing an unauthorized domain_id
+        unless granted tenant-wide 'space' scope (or 'domain' scope when unbound)."""
+        if requested_domain_id is not None and requested_domain_id != ctx.domain_id:
+            if ctx.domain_id is not None and "space" not in ctx.scopes:
+                await self._repo.record_audit(
+                    tenant_id=ctx.tenant_id,
+                    agent_id=ctx.agent_id,
+                    project_id=ctx.project_id,
+                    action=action,
+                    allowed=False,
+                    reason=(
+                        f"out_of_scope: cross-department domain_id override ({requested_domain_id})"
+                    ),
+                )
+                raise AuthzError(
+                    "out_of_scope: cross-department domain_id override requires space scope"
+                )
+            if ctx.domain_id is None and "domain" not in ctx.scopes and "space" not in ctx.scopes:
+                await self._repo.record_audit(
+                    tenant_id=ctx.tenant_id,
+                    agent_id=ctx.agent_id,
+                    project_id=ctx.project_id,
+                    action=action,
+                    allowed=False,
+                    reason=(
+                        f"out_of_scope: domain_id override without domain/space scope "
+                        f"({requested_domain_id})"
+                    ),
+                )
+                raise AuthzError("out_of_scope: domain_id override requires domain or space scope")
         return requested_domain_id if requested_domain_id is not None else ctx.domain_id
 
     async def memory_search(
@@ -795,7 +806,7 @@ class AccessSurface:
         eff_domain_id = (
             (target_domain_id or ctx.domain_id or source.domain_id)
             if target_scope == "domain"
-            else (target_domain_id or ctx.domain_id or source.domain_id)
+            else target_domain_id
         )
         if target_scope == "project" and not eff_project_id:
             raise ValidationError("memory_promote to scope='project' requires a project_id")
@@ -1148,17 +1159,24 @@ class AccessSurface:
                 f"into {target_agent_type!r} instance without allow_type_override=True"
             )
 
-        eff_domain = (
-            target_domain_id
-            or (str(passport["domain_id"]) if passport.get("domain_id") else None)
-            or ctx.domain_id
-        )
+        await self._enforce_domain_boundary(ctx, "agent_brain_import", target_domain_id)
+        passport_dom = str(passport["domain_id"]).strip() if passport.get("domain_id") else None
+        if target_domain_id is not None:
+            eff_domain: str | None = target_domain_id
+        elif ctx.domain_id is not None and "space" not in ctx.scopes:
+            eff_domain = ctx.domain_id
+        elif passport_dom and ("domain" in ctx.scopes or "space" in ctx.scopes):
+            eff_domain = passport_dom
+        else:
+            eff_domain = ctx.domain_id
         clean_prefs, _ = sanitize_portable_value(pass_prefs_dict, redact_terms=redact_terms)
         prefs: dict[str, Any] = dict(existing_prefs)
         prefs.update(clean_prefs if isinstance(clean_prefs, Mapping) else {})
-        if eff_domain and "department_focus" not in prefs:
+        if eff_domain:
             prefs["department_focus"] = eff_domain
-        if passport_agent_type and "agent_type" not in prefs:
+        if target_agent_type:
+            prefs["agent_type"] = target_agent_type
+        elif passport_agent_type and "agent_type" not in prefs:
             prefs["agent_type"] = passport_agent_type
 
         existing_specs_raw = existing_prefs.get("specializations")
@@ -1591,6 +1609,10 @@ class AccessSurface:
             raw_ev = dict(event_data)
             if not raw_ev.get("tenant_id"):
                 raw_ev["tenant_id"] = ctx.tenant_id
+            if not raw_ev.get("project") and ctx.project_id:
+                raw_ev["project"] = ctx.project_id
+            if not raw_ev.get("producer") and ctx.agent_id:
+                raw_ev["producer"] = ctx.agent_id
             ev = ExperienceEvent.from_dict(raw_ev)
         if ev.tenant_id != ctx.tenant_id:
             await self._repo.record_audit(
@@ -1600,6 +1622,30 @@ class AccessSurface:
                 action="memory_ingest_event",
                 allowed=False,
                 reason=f"cross_tenant_event_rejected: {ev.tenant_id}",
+            )
+            raise AuthzError("out_of_scope")
+        if (
+            ctx.project_id is not None
+            and ev.project != ctx.project_id
+            and "space" not in ctx.scopes
+        ):
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="memory_ingest_event",
+                allowed=False,
+                reason=f"cross_project_event_rejected: {ev.project}",
+            )
+            raise AuthzError("out_of_scope")
+        if scope == "agent" and ev.producer != ctx.agent_id and "space" not in ctx.scopes:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="memory_ingest_event",
+                allowed=False,
+                reason=f"cross_agent_event_rejected: {ev.producer}",
             )
             raise AuthzError("out_of_scope")
         try:
@@ -1636,6 +1682,21 @@ class AccessSurface:
         await self._decide(
             ctx, "memory_learning_health", TargetScope(tenant_id=ctx.tenant_id, scope=scope)
         )
+        if (
+            project_id is not None
+            and ctx.project_id is not None
+            and project_id != ctx.project_id
+            and "space" not in ctx.scopes
+        ):
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="memory_learning_health",
+                allowed=False,
+                reason=f"cross_project_health_rejected: {project_id}",
+            )
+            raise AuthzError("out_of_scope")
         eff_proj = project_id if project_id is not None else ctx.project_id
         summary = await self._repo.get_learning_health_summary(
             tenant_id=ctx.tenant_id,

@@ -33,7 +33,7 @@ component_overview:
     agent-tool face contract (they are not thin bindings over AccessSurface):
     `memory distill` (runs the interim reflect worker in-process) and `status`
     (store reachability + tenant counts). The faces-add-no-logic rule applies
-    to the seven SPEC-01 agent tools, not to these two.
+    to all SPEC-01 agent tools, not to these two.
     TRUST (ADR-10 dev-tier carve-out): the identity in .engramory/config.toml
     is client-supplied and trusted ONLY under ENGRAMORY_PROFILE=dev —
     enforced by the factory guard require_dev_profile(), which the CLI calls
