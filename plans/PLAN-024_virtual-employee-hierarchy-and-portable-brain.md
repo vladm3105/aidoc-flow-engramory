@@ -1,0 +1,281 @@
+# PLAN-024: Implement Virtual Employee Named Space Hierarchy (`Tenant -> Agent -> Department -> Shared Project`) & Portable Brain Passport Lifecycle in `platform-engramory`
+
+> **Status:** Ready for Implementation  
+> **Date:** 2026-11-13  
+> **Owning Repository:** `platform-engramory`  
+> **Target Branch:** `feature/plan-024-virtual-employee-implementation-plan` -> `dev`  
+> **Governance Standard:** `aiops-harness` v0.2.0 (`verified-planning`, `SDD2C` — SDD-First & Documentation-First)  
+> **Upstream Normative Specifications:** `ADR-05` (`ADR-05_canonical_memory.yaml`), `ADR-06` (`ADR-06_governed_write_failclosed.yaml`), `ADR-07` (`ADR-07_scope_model.yaml`), `ADR-10` (`ADR-10_agent_facing_packaging.yaml`), `SPEC-01`, `SPEC-02`, `SPEC-03`, `SPEC-07`
+
+---
+
+## 1. Executive Summary & Architectural Decisions (Scored 1–5)
+
+In a multi-tenant AI operations fleet (e.g., **10 instances of `agent-support`**, **5 instances of `agent-pm`**, and **5 instances of `agent-dev`** per tenant), treating every agent instance as a stateless worker connected to one flat memory pool causes two critical failure modes:
+
+1. **Memory & CPU Bloat:** Broadcasting specialized troubleshooting heuristics (such as Stripe billing webhook clock-skew remediation) to all 10 support agents inflates HNSW vector index size, retrieval latency, token context consumption, and CPU/RAM utilization for the 9 support agents working on unrelated domains (UI, auth, onboarding).
+2. **Loss of Cumulative Specialist Experience on Reassignment:** When a specialized Virtual Employee (`support-billing-01`) finishes a billing project on Tenant A and is reassigned to Tenant B, wiping its brain wastes months of distilled procedural expertise, whereas copying raw tables leaks Tenant A's confidential PII, raw chat episodes, and runbooks.
+
+This plan formalizes each agent instance as a **Virtual Employee** with:
+
+- **4-Level Hierarchical Named Spaces (`ADR-07`):** `tenant_id` (hard RLS boundary) $\to$ `agent_id` (`scope='agent'`, private Virtual Employee brain) $\to$ `domain_id` (`scope='domain'`, department/specialty space such as `billing` or `support`) $\to$ `project_id` (`scope='project'`, shared cross-functional project room where support, PM, and dev agents collaborate) $\to$ `scope='space'` (tenant-wide institutional memory), fused with **L0 Authoritative Knowledge (`kb_sections` + GraphRAG)** via `memory_search(include_knowledge=True, expand_graph=True)`.
+- **Selective Experience Promotion (`memory_promote`):** Private `scope='agent'` skills stay isolated to the specialist Virtual Employee by default and are selectively promoted to `scope='domain'` (department) or `scope='project'` (shared project) only under governed `evidence_ref` authority (`ADR-06`).
+- **Portable Virtual Employee Brain Passport & Offboarding (`agent_brain_export`, `agent_brain_import`, `agent_space_offboard`):** Exports **only** the Virtual Employee's L3 `AgentProfile` and high-confidence L2 `scope='agent'` distilled skills, scrubs all PII/secrets/emails/URLs/IPs/UUIDs/tenant-names (`sanitize_portable_text`), seals the bundle with a canonical `passport_sha256` digest, re-embeds skills into the target tenant's `1536`-dim vector space on import, and cleanly retires/purges Tenant A's raw L1 episodes upon offboarding.
+
+```mermaid
+flowchart TB
+    subgraph TenantA["Tenant Space (tenant_id = 'tenant-acme')"]
+        direction TB
+        subgraph Fleet["Virtual Employee Fleet (20 Instances)"]
+            S1["support-billing-01\n(role=support, domain_id=billing)\nL3 Profile + L2 scope='agent'"]
+            S2["support-tech-02..10\n(role=support, domain_id=tech-ops)\nL3 Profile + L2 scope='agent'"]
+            PM["pm-01..05\n(role=pm, domain_id=product)\nL3 Profile + L2 scope='agent'"]
+            DEV["dev-01..05\n(role=dev, domain_id=engineering)\nL3 Profile + L2 scope='agent'"]
+        end
+
+        DOM["Department Space (scope='domain', domain_id='billing')\nShared only among Billing Support Specialists"]
+        PROJ["Shared Project Space (scope='project', project_id='proj-checkout')\nShared across assigned Support + PM + Dev Virtual Employees\n+ L0 Project Knowledge Base (kb_sections + Neo4j/PG GraphRAG)"]
+
+        S1 -->|Private L2 Skills| S1
+        S1 -->|Selective memory_promote| DOM
+        S1 & S2 & PM & DEV -->|Collaborate & Fused Retrieval| PROJ
+    end
+
+    subgraph Passport["Sanitized Brain Passport (engramory.brain_passport.v1)"]
+        EXP["agent_brain_export()\n1. Extract L3 Profile + L2 scope='agent' skills\n2. Scrub PII, secrets, URLs, IPs, UUIDs, tenant/project IDs\n3. Strip L1 episode_id provenance & sign passport_sha256\n4. Run agent_space_offboard() on Tenant A"]
+    end
+
+    subgraph TenantB["Target Tenant Space (tenant_id = 'tenant-globex')"]
+        IMP["agent_brain_import(evidence_ref='CHG-...')\n1. Verify passport_sha256 & inspect_memory_write()\n2. Re-embed 1536-dim vectors in tenant-globex\n3. Bind to (tenant-globex, support-billing-01, scope='agent')"]
+    end
+
+    S1 --> EXP --> IMP
+```
+
+---
+
+### 1.1 Scored Architectural Decisions (`3 Options + 1–5 Scoring`)
+
+#### Decision Q1: Virtual Employee Space Hierarchy & Department-Focused Project Collaboration
+
+| Option | Approach | Score (1–5) | Rationale & Trade-offs |
+| :--- | :--- | :---: | :--- |
+| **Option A** | Flat per-tenant memory pool shared by all 20 agent instances (`10 support`, `5 pm`, `5 dev`) | `1/5` | Causes severe vector index bloat, higher CPU/memory usage, and cross-role context pollution (support billing heuristics polluting dev code-review prompts). |
+| **Option B** | Isolated per-agent silos with periodic bulk cloning across all support instances | `2/5` | Multiplies PostgreSQL HNSW vector storage by $10\times$ across support instances and still pollutes non-billing support agents with billing-specific memories. |
+| **Option C (Selected)** | **4-Level Named Virtual Employee Hierarchy (`tenant_id -> agent_id [agent] -> domain_id [domain] -> project_id [project] -> [space]`) + Governed Selective Promotion (`memory_promote`) + Fused L2+L0 Retrieval** | **`5/5`** | Keeps specialized experience inside the individual Virtual Employee's `scope='agent'` space (zero memory/CPU bloat on peers), supports department focus via `domain_id` (`scope='domain'`), gives all project-assigned agents shared access to `scope='project'` L2 memories + L0 `kb_sections`, and promotes only proven cross-agent skills via `memory_promote`. |
+
+#### Decision Q2: Cross-Tenant Virtual Employee Mobility & Sanitized Brain Passport
+
+| Option | Approach | Score (1–5) | Rationale & Trade-offs |
+| :--- | :--- | :---: | :--- |
+| **Option A** | In-place SQL `UPDATE memories SET tenant_id = ...` and raw table migration | `2/5` | Violates `ADR-07` strict tenant isolation, breaks Tenant A's immutable audit log, and risks leaking raw L1 `episodes` or unredacted customer identifiers. |
+| **Option B** | Global cross-tenant specialist table (`tenant_id = '__global__'`) queried live by all tenants | `3/5` | Introduces a single-point cross-tenant data leakage surface if any distilled skill retains a customer hostname, email, or project code. |
+| **Option C (Selected)** | **Governed, Integrity-Signed Brain Passport (`agent_brain_export` / `agent_brain_import`) + Deterministic Sanitization (`sanitize_portable_text`) + Tenant Offboarding (`agent_space_offboard`)** | **`5/5`** | Never exports raw L1 `episodes` or L0 tenant docs; scrubs secrets, emails, URLs, IPs, UUIDs, and source `tenant_id`/`project_id` names; signs the bundle with `passport_sha256`; re-verifies via `inspect_memory_write` and re-embeds `1536`-dim vectors on import under `evidence_ref` (`ADR-06`); and cleanly retires/purges the agent's old tenant state via `agent_space_offboard`. |
+
+#### Decision Q3: Virtual Employee Roster Discovery & Lifecycle Governance
+
+| Option | Approach | Score (1–5) | Rationale & Trade-offs |
+| :--- | :--- | :---: | :--- |
+| **Option A** | Keep `AccessSurface` limited to read-only `agent_profile_get` with untyped `standing_preferences` | `3/5` | Prevents Layer-1 Stewards (`aiops-saas-stewards`) and operators from configuring or querying a tenant's Virtual Employee roster by `role` (`support`, `pm`, `dev`) or `domain_id` (`billing`) through MCP/CLI. |
+| **Option B** | Maintain Virtual Employee rosters exclusively in external static YAML files | `2/5` | Drifts from live database state and splits the Virtual Employee's identity from its portable Brain Passport. |
+| **Option C (Selected)** | **Governed L3 Profile Upsert (`agent_profile_upsert`) & Tenant Roster Query (`agent_roster_list`) in `AccessSurface`, MCP, and CLI** | **`5/5`** | Allows Stewards and CLI operators to provision Virtual Employees (`role`, `domain_id`, `specializations`, `display_name`), list active Virtual Employees per tenant/department (`agent_roster_list`), and export/import the complete L3+L2 identity in a single Brain Passport. |
+
+---
+
+## 2. Current Implementation State & Codebase Gap Audit (`GAP-VE-01` through `GAP-VE-05`)
+
+### 2.1 Baseline Already Landed in `v0.2.0` (`b7b1e12` & `cc6aba0`)
+
+1. **Department Focus (`domain_id`) on `ActorContext` (`src/engramory/access/authz.py:59`):** Added `domain_id: str | None = None` to `ActorContext` and wired `domain_id` + `scope` through `AccessSurface.memory_add` (`src/engramory/access/surface.py:372-415`), `AccessSurface.memory_search` (`src/engramory/access/surface.py:199-320`), and `reflect()` (`src/engramory/workers/distillation.py:86-105`).
+2. **Fused L2 + L0 Retrieval (`src/engramory/access/surface.py:283-320`):** `memory_search(include_knowledge=True, expand_graph=True)` fuses the Virtual Employee's L2 memories (`agent -> project -> domain -> space`) with L0 project documentation (`kb_sections`) within a single token budget.
+3. **Portable Sanitizer & Initial Brain Passport (`src/engramory/access/poisoning_guard.py:59-104`, `src/engramory/access/surface.py:524-693`):** Implemented `sanitize_portable_text()` and baseline `agent_brain_export` / `agent_brain_import` across `AccessSurface`, `McpServer`, and `cli.py`.
+
+### 2.2 Remaining Gaps to Close in `PLAN-024` (`GAP-VE-01` through `GAP-VE-05`)
+
+| Gap ID | Severity | Location | Gap Description | Required Fix in `PLAN-024` |
+| :--- | :---: | :--- | :--- | :--- |
+| **`GAP-VE-01`** | **Critical** | `src/engramory/mcp/server.py:603-622`, `1240-1251`, `src/engramory/access/jwt_auth.py:187-227`, `src/engramory/cli.py:78-127`, `136-187` | 1) `McpServer._resolve_call_ctx()` (`server.py:615-621`) only branches on `tenant_id != base.tenant_id or project_id != base.project_id` and omits `domain_id=base.domain_id`. 2) `McpServer.create_http_server()` (`server.py:1242-1250`) constructs `ActorContext` from `X-Tenant-ID`/`X-Project-ID` without `X-Domain-ID` or `req_ctx.domain_id`. 3) `claims_to_actor_context()` (`jwt_auth.py:187-227`) omits `domain_id` from JWT claims (`domain_id` / `department_focus`). 4) `cli._parse_config_text()`, `_load_config()`, and `_cmd_init()` (`cli.py:78-187`) do not parse or persist `domain_id`, and `_upsert_profile_best_effort()` (`cli.py:136-152`) overwrites existing `display_name`/`standing_preferences` on re-init. | Preserve `domain_id` across `_resolve_call_ctx()`, `create_http_server()`, `claims_to_actor_context()`, `.engramory/config.toml`, `ENGRAMORY_DOMAIN_ID`, and `engramory init --domain-id` (without clobbering existing profiles on re-init), and reject cross-department `domain_id` spoofing when `ctx.domain_id` is bound and `"space" not in ctx.scopes`. |
+| **`GAP-VE-02`** | **Critical** | `src/engramory/access/surface.py:524-693`, `src/engramory/core/repository.py:168-201` | 1) `Repository.upsert_memory(self, memory: Memory)` (`repository.py:168-201`) does not accept `embedding` or `copy_embedding_from_id`, and `agent_brain_import()` hardcodes `embedding_model="none/portable-passport"` (`surface.py:669`), leaving imported specialist skills unindexed in `pgvector`. 2) `agent_brain_export()` / `agent_brain_import()` lack a mandatory `passport_sha256` integrity digest, and `agent_brain_import()` calls `upsert_agent_profile` before `inspect_memory_write()` without catching `MemoryPoisoningError` to write a deny audit row. | Extend `Repository.upsert_memory(..., embedding=..., copy_embedding_from_id=...)` using `vector_literal` (`repository.py:87-89`), require `passport_sha256` verification by default (`verify_integrity: bool = True`) on `engramory.brain_passport.v1`, recursively scrub `display_name` + `standing_preferences` (`list`/`dict`/`str`) with length-sorted `redact_terms`, screen all fields via `inspect_memory_write()` inside `try ... except MemoryPoisoningError` before any DB write, and enforce retry idempotency. |
+| **`GAP-VE-03`** | **Major** | `src/engramory/access/authz.py:15-48`, `src/engramory/core/repository.py:311-354`, `src/engramory/access/surface.py:512-523` | `AccessSurface` only exposes `agent_profile_get`. Operators and Layer-1 Stewards cannot update a Virtual Employee's L3 profile (`display_name`, `role`, `domain_id`, `specializations`, `standing_preferences`) via `AccessSurface` or query the tenant's roster of Virtual Employees (`list_agent_profiles`) by `domain_id` or `role`. | Add `agent_profile_upsert` and `agent_roster_list` to `KNOWN_ACTIONS`, `Repository.list_agent_profiles()`, `AccessSurface`, `McpServer`, and `engramory profile set` / `engramory profile list`. |
+| **`GAP-VE-04`** | **Major** | `src/engramory/access/surface.py`, `src/engramory/core/repository.py:203-225` | 1) No governed `memory_promote` tool exists to promote a proven `scope='agent'` skill to `scope='domain'` (department) or `scope='project'` (shared project) with strict `_SCOPE_CLAUSES` source visibility, ladder monotonicity, and `evidence_ref`. 2) No governed `agent_space_offboard` operation exists to retire a Virtual Employee's private `scope='agent'` memories and private episodes without deleting shared `project`/`domain`/`space` episodes. | Implement governed `AccessSurface.memory_promote` (`engramory memory promote`, reusing `Repository.get_memory` at `repository.py:203-225`) and transactional `AccessSurface.agent_space_offboard` (`engramory profile offboard`) with `evidence_ref` enforcement (`ADR-06`) and full audit logging. |
+| **`GAP-VE-05`** | **Medium** | `docs/sdd/06_SPEC/SPEC-01_access_surface.yaml`, `SPEC-07_cli_face.yaml`, `docs/sdd/08_IPLAN/IPLAN-00_index.yaml`, `docs/sdd/09_CHG/` | `SPEC-01` (`L52-128`) and `SPEC-07` (`L57-84`) do not yet declare `ActorContext.domain_id` or the Virtual Employee Brain Passport, roster, promotion, and offboarding interfaces, and `IPLAN-09` + `IPLAN-00_index.yaml` (`total_plans: 9`) + `CHG-009` + `docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md` must be authored to satisfy `SDD2C` and `docs lint --strict`. | Update `SPEC-01`, `SPEC-02`, `SPEC-03`, `SPEC-07`, `TDD-01`, `TDD-02`, `IPLAN-00_index.yaml`, author `IPLAN-09` + `CHG-009`, and create `docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md`. |
+
+---
+
+## 3. Phased Implementation Plan
+
+### Phase 1: SDD-First Contract Updates (`06_SPEC`, `07_TDD`, `08_IPLAN`, `09_CHG`)
+
+Per the `aiops-harness` **SDD-First Mandate (`SDD2C`)**, update the governing SDD layers before or atomically with code changes:
+
+1. **`docs/sdd/06_SPEC/SPEC-01_access_surface.yaml` (`L52-128`):**
+   - Add `agent_profile_upsert`, `agent_roster_list`, `agent_brain_export`, `agent_brain_import`, `agent_space_offboard`, and `memory_promote` to `interfaces.exports`, and add `domain_id` (`type: "str | None", required: false`) to `data_models.models[ActorContext].fields` (`L122-128`).
+2. **`docs/sdd/06_SPEC/SPEC-02_memory_store.yaml` & `SPEC-03_retrieval_graph.yaml`:**
+   - Document `AgentProfile` Virtual Employee conventions (`role`, `department_focus` / `domain_id`, `specializations` inside `standing_preferences`), `BrainPassport` schema (`engramory.brain_passport.v1` with mandatory `passport_sha256`), and fused L2+L0 retrieval (`memory_search(include_knowledge=True)`).
+3. **`docs/sdd/06_SPEC/SPEC-07_cli_face.yaml` (`L57-84`):**
+   - Document `profile set`, `profile list`, `profile export-brain`, `profile import-brain` (including `--redact-term`), `profile offboard`, `memory promote`, and optional `domain_id` in `.engramory/config.toml`.
+4. **`docs/sdd/07_TDD/TDD-01_access_surface.yaml` & `TDD-02_memory_store.yaml`:**
+   - Add verification oracles for `agent_brain_export` / `agent_brain_import` recursive PII scrubbing, `passport_sha256` tamper/missing-digest rejection, `memory_promote` `_SCOPE_CLAUSES` source boundary & scope elevation, and `agent_space_offboard` private-episode-only tenant cleanup.
+5. **`docs/sdd/08_IPLAN/IPLAN-09_virtual_employee_brain.yaml`, `IPLAN-00_index.yaml` (`L8, L120`), & `docs/sdd/09_CHG/CHG-009_virtual_employee_hierarchy_and_portable_brain.yaml`:**
+   - Author `IPLAN-09` and `CHG-009` with complete upstream `@ears:`, `@bdd:`, `@adr:`, `@spec:`, and `@tdd:` trace links, increment `total_plans: 9` and append `IPLAN-09` in `IPLAN-00_index.yaml`, and verify with `uv run engramory sdd validate-graph --invariants`.
+
+---
+
+### Phase 2: Virtual Employee Identity, Department Context (`domain_id`), and Roster Management (`GAP-VE-01`, `GAP-VE-03`)
+
+1. **Preserve `domain_id` Across CLI Config, JWT Auth, & MCP Context Resolution (`GAP-VE-01`, `[C3]`, `[M4]`):**
+   - In `src/engramory/cli.py`:
+     - Update `_parse_config_text()` (`L88-93`) to pass `domain_id=actor.get("domain_id")` into `ActorContext`.
+     - Update `_load_config()` (`L119-124`) to pass `domain_id=os.getenv("ENGRAMORY_DOMAIN_ID") or None` into `ActorContext`.
+     - Update `_upsert_profile_best_effort(agent_id: str, dsn: str, tenant_id: str = "default", domain_id: str | None = None) -> str` (`L136-152`) so it first checks `repo.get_agent_profile(agent_id, tenant_id=tenant_id)`: if a profile already exists with non-empty `display_name` or `standing_preferences`, preserve them (merging `department_focus: domain_id` only if `domain_id` is supplied and not yet set) instead of clobbering existing profile metadata on re-init.
+     - Update `_cmd_init()` (`L154-187`) and the `init` subparser (`L1085-1095`) to accept `--domain-id` and write `domain_id = ...` under `[actor]` in `.engramory/config.toml` when provided.
+   - In `src/engramory/access/jwt_auth.py`:
+     - Update `claims_to_actor_context()` (`L187-227`) to extract `raw_domain = claims.raw_claims.get("domain_id") or claims.raw_claims.get("department_focus")` (or a `domain:<id>` entry in `claims.groups`) and pass `domain_id=str(raw_domain).strip() if raw_domain else None` into `ActorContext`.
+   - In `src/engramory/mcp/server.py`:
+     - Update `_resolve_call_ctx()` (`L603-622`) to resolve `domain_id = base.domain_id if self._auth_enabled else (arguments.get("domain_id") or base.domain_id)` and branch on `if tenant_id != base.tenant_id or project_id != base.project_id or domain_id != base.domain_id:`.
+     - Update `create_http_server()` (`L1242-1250`) to read `domain_hdr = self.headers.get("X-Domain-ID")` and pass `domain_id=domain_hdr or req_ctx.domain_id` when constructing `ActorContext` in dev mode.
+   - In `src/engramory/access/surface.py`:
+     - Enforce department boundary when `ctx.domain_id is not None` and `"space" not in ctx.scopes`: if a caller passes an explicit `domain_id` argument to `memory_search`, `memory_add`, or `knowledge_search` that differs from `ctx.domain_id`, record a deny `AuditRecord` (`reason="out_of_scope"`) and raise `AuthzError("out_of_scope: cross-department domain_id override requires space scope")`.
+2. **Add Governed L3 Profile Upsert & Roster Listing (`GAP-VE-03`, `[M2]`, `[M3]`):**
+   - In `src/engramory/access/authz.py` (`L15-48`):
+     - Add `"agent_profile_upsert"`, `"agent_roster_list"`, `"agent_space_offboard"`, and `"memory_promote"` to `KNOWN_ACTIONS`.
+   - In `src/engramory/core/repository.py` (`L335-355`):
+     - Add `list_agent_profiles(self, *, tenant_id: str, domain_id: str | None = None, role: str | None = None) -> list[AgentProfile]` querying `agent_profiles WHERE tenant_id = %(tenant_id)s` with optional filters on `standing_preferences->>'department_focus' = %(domain_id)s` and `standing_preferences->>'role' = %(role)s`, ordered by `agent_id ASC`.
+   - In `src/engramory/access/surface.py` (`L512-525`):
+     - Add `agent_profile_upsert(self, ctx: ActorContext, *, display_name: str | None = None, role: str | None = None, domain_id: str | None = None, specializations: Sequence[str] | None = None, standing_preferences: Mapping[str, Any] | None = None) -> AgentProfile`:
+       - Authorizes `"agent_profile_upsert"` on `TargetScope(tenant_id=ctx.tenant_id, scope="agent")`.
+       - Loads existing profile via `await self.agent_profile_get(ctx)` and merges `standing_preferences`, `role`, `department_focus` (`domain_id or ctx.domain_id`), and `specializations` (`list(specializations)`).
+       - Screens `display_name` and `json.dumps(merged_prefs, sort_keys=True)` via `inspect_memory_write()` inside a `try ... except MemoryPoisoningError as exc:` block that records `await self._repo.record_audit(..., allowed=False, reason=f"poisoning_rejected: {exc}")` and raises `GovernedWriteRejected(str(exc)) from exc` before persisting via `self._repo.upsert_agent_profile()`.
+     - Add `agent_roster_list(self, ctx: ActorContext, *, domain_id: str | None = None, role: str | None = None) -> list[dict[str, Any]]`:
+       - Authorizes `"agent_roster_list"` on `TargetScope(tenant_id=ctx.tenant_id, scope="project" if "project" in ctx.scopes else "agent")` and returns serialized Virtual Employee roster entries (`agent_id`, `display_name`, `role`, `domain_id`, `specializations`, `standing_preferences`).
+   - In `src/engramory/mcp/server.py` (`TOOLS_SCHEMA` & `handle_call_tool`) and `src/engramory/cli.py` (`prof_sub`):
+     - Register MCP tools `agent_profile_upsert` and `agent_roster_list` and CLI subcommands `engramory profile set` (`--display-name`, `--role`, `--domain-id`, `--specialization`, `--pref KEY=VALUE`) and `engramory profile list` (`--domain-id`, `--role`).
+
+---
+
+### Phase 3: Selective Experience Promotion (`memory_promote`) Across the 4-Level Space Hierarchy (`GAP-VE-04`, `[C1]`, `[C2]`, `[M2]`, `[M3]`, `[M4]`)
+
+1. **Extend `Repository.upsert_memory` for Vector Persistence & SQL Vector Copy (`[C1]`):**
+   - In `src/engramory/core/repository.py` (`L168-201`):
+     - Update `async def upsert_memory(self, memory: Memory, *, embedding: Sequence[float] | None = None, copy_embedding_from_id: str | None = None) -> str`:
+       - When `embedding is not None and len(embedding) == 1536`, write `%(embedding)s::vector` into the `embedding` column of `memories` using `vector_literal(embedding)` (`repository.py:87-89`).
+       - When `embedding is None and copy_embedding_from_id is not None`, copy the `embedding`, `embedding_model`, and `embedding_dims` from `(SELECT embedding FROM memories WHERE id = %(copy_from_id)s AND tenant_id = %(tenant_id)s)` within the same tenant wall (`ADR-07`).
+2. **Governed `AccessSurface.memory_promote` with Strict `_SCOPE_CLAUSES` Boundary & Idempotency (`[C2]`, `[M2]`, `[M3]`, `[M4]`):**
+   - In `src/engramory/access/surface.py`:
+     - Add `memory_promote(self, ctx: ActorContext, *, memory_id: str, target_scope: str, evidence_ref: str | None, target_domain_id: str | None = None, target_project_id: str | None = None) -> dict[str, Any]`:
+       - Validates `target_scope in {"project", "domain", "space"}` (raises `ValidationError` otherwise).
+       - Authorizes `"memory_promote"` against `TargetScope(tenant_id=ctx.tenant_id, scope=target_scope)`.
+       - Enforces governed write authority (`if not evidence_ref: record_audit(allowed=False, reason="missing_evidence_ref"); raise GovernedWriteRejected("memory_promote requires evidence_ref")`).
+       - Loads the source memory via existing `await self._repo.get_memory(memory_id, tenant_id=ctx.tenant_id)` (`repository.py:203-225`).
+       - **Strict Source Visibility Check (`[C2]`):** Verifies `source.status == "active" and source.valid_to is None` and `source.scope in ctx.scopes`, and checks:
+         - `source.scope == "agent"` $\implies$ `source.agent_id == ctx.agent_id`
+         - `source.scope == "project"` $\implies$ `source.project_id is not None and source.project_id == ctx.project_id`
+         - `source.scope == "domain"` $\implies$ `source.domain_id is not None and source.domain_id == ctx.domain_id`
+         - On mismatch, records `record_audit(..., allowed=False, reason="out_of_scope")` and raises `AuthzError("memory_promote: out_of_scope")`.
+       - **Ladder Monotonicity & Target Scope Binding (`[C2]`):** Requires `_LADDER.index(target_scope) >= _LADDER.index(source.scope)`. Resolves `eff_project_id = (target_project_id or ctx.project_id or source.project_id) if target_scope == "project" else None` and `eff_domain_id = (target_domain_id or ctx.domain_id or source.domain_id) if target_scope == "domain" else (ctx.domain_id or source.domain_id)`. Unless `"space" in ctx.scopes`, rejects `target_project_id != ctx.project_id` or (`ctx.domain_id is not None and target_domain_id is not None and target_domain_id != ctx.domain_id`) with `AuthzError("memory_promote: out_of_scope")`. Requires non-empty `eff_project_id` for `target_scope == "project"` and non-empty `eff_domain_id` for `target_scope == "domain"`.
+       - **Retry Idempotency (`[M4]`):** Checks if an active memory in `target_scope` for `ctx.tenant_id` already carries `provenance.get("promoted_from_memory_id") == memory_id` (and matching `eff_project_id` / `eff_domain_id`); if found, returns the existing `promoted_memory_id` with `"idempotent_replay": True`.
+       - Screens `source.summary` and `source.content_raw` via `inspect_memory_write()` inside `try ... except MemoryPoisoningError` (`[M2]`) and persists via `self._repo.upsert_memory(promoted_mem, embedding=vec, copy_embedding_from_id=memory_id)`.
+   - Expose `memory_promote` in `McpServer` (`TOOLS_SCHEMA` & `handle_call_tool`) and `engramory memory promote` (`--memory-id`, `--target-scope`, `--evidence-ref`, `--domain-id`, `--project-id`) in `src/engramory/cli.py`.
+
+---
+
+### Phase 4: Cryptographic Brain Passport Integrity (`passport_sha256`), Vector Re-Embedding on Import, and Tenant Offboarding (`GAP-VE-02`, `GAP-VE-04`, `[C1]`, `[C4]`, `[M1]`, `[M2]`, `[M4]`, `[Med1]`)
+
+1. **Recursive Sanitization, Mandatory `passport_sha256` Integrity Check, & Re-Embedding (`[C1]`, `[C4]`, `[M2]`, `[M4]`, `[Med1]`):**
+   - In `src/engramory/access/poisoning_guard.py` (`L82-104`):
+     - Sort `redact_terms` by descending length (`sorted({t.strip() for t in redact_terms if t and t.strip()}, key=len, reverse=True)`) so compound identifiers (`"acme-payments"`) are scrubbed before shorter prefixes (`"acme"`).
+     - Add `sanitize_portable_value(value: Any, *, redact_terms: Sequence[str] = ()) -> tuple[Any, int]` to recursively scrub `str`, `list`, and `dict` structures.
+   - In `src/engramory/access/surface.py` (`L524-693`):
+     - In `agent_brain_export()`, scrub `profile.display_name` and all nested `standing_preferences` (`str`, `list`, `dict`) via `sanitize_portable_value()`, compute canonical `_compute_passport_sha256(payload)` over `("schema_version", "agent_id", "display_name", "domain_id", "standing_preferences", "skills")`, and include `"passport_sha256": digest` in the returned dictionary.
+     - In `agent_brain_import(self, ctx: ActorContext, *, passport: Mapping[str, Any], evidence_ref: str | None, target_domain_id: str | None = None, redact_terms: Sequence[str] = (), verify_integrity: bool = True) -> dict[str, Any]`:
+       - Require `passport.get("schema_version") == "engramory.brain_passport.v1"`. When `verify_integrity=True` (default), require a non-empty `passport.get("passport_sha256")` matching `_compute_passport_sha256(passport)`; if missing or mismatched, record a deny `AuditRecord` (`reason="passport_integrity_mismatch"`) and raise `GovernedWriteRejected("Brain passport SHA-256 integrity check failed")` (`[C4]`).
+       - Sanitize and screen `display_name`, `standing_preferences`, and all `skills` via `sanitize_portable_value()` + `inspect_memory_write()` inside `try ... except MemoryPoisoningError` **before** writing any profile or memory row (`[M2]`).
+       - Deduplicate against existing active `scope='agent'` memories for `(ctx.tenant_id, ctx.agent_id)` matching `(type, domain_id, summary, content_raw)` so retries are idempotent (`[M4]`).
+       - When `self._llm is not None` and new skills remain to be inserted, batch-embed their summaries via `await self._llm.embed(texts=[...])` and persist via `self._repo.upsert_memory(mem, embedding=vec)` (`[C1]`).
+     - Expose `--redact-term` on `engramory profile import-brain` (`src/engramory/cli.py`) and `redact_terms` on `agent_brain_import` in `TOOLS_SCHEMA` (`src/engramory/mcp/server.py`, `[M3]`).
+2. **Transactional Tenant Offboarding Cleanup (`agent_space_offboard`, `[M1]`):**
+   - In `src/engramory/core/repository.py`:
+     - Add `offboard_agent_space(self, *, tenant_id: str, agent_id: str, reason: str, purge_episodes: bool = True, retire_memories: bool = True) -> dict[str, int]` wrapped in `async with self._conn() as conn: async with conn.transaction():`:
+       - If `retire_memories=True`, executes `UPDATE memories SET valid_to = now(), status = 'superseded' WHERE tenant_id = %(tenant_id)s AND agent_id = %(agent_id)s AND scope = 'agent' AND valid_to IS NULL` (retiring all live private agent memories regardless of prior `active`/`advisory`/`quarantined` status while leaving shared `project`/`domain`/`space` memories untouched).
+       - If `purge_episodes=True`, executes `DELETE FROM episodes WHERE tenant_id = %(tenant_id)s AND agent_id = %(agent_id)s AND coalesce(metadata->>'scope', 'agent') = 'agent'` (purging only private agent episodes so shared `project`/`domain`/`space` episodes and provenance links remain intact).
+       - Deletes the L3 row from `agent_profiles WHERE tenant_id = %(tenant_id)s AND agent_id = %(agent_id)s`.
+   - Expose `AccessSurface.agent_space_offboard(ctx, *, evidence_ref: str | None, reason: str = "cross_tenant_reassignment", purge_episodes: bool = True, retire_memories: bool = True) -> dict[str, Any]`, MCP tool `agent_space_offboard`, and CLI command `engramory profile offboard --evidence-ref ... [--reason ...]`.
+
+---
+
+### Phase 5: Governed Documentation (`docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md`) & End-to-End Verification (`GAP-VE-05`)
+
+1. **Author `docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md`:**
+   - Follow the `aiops-harness` 9-key frontmatter standard (`DOC-FM-000`), `<= 450` words per H2/H3 section, and zero deictics.
+   - Document the 20-instance Virtual Employee fleet pattern (`10 support`, `5 pm`, `5 dev`), the 4-level visibility lattice (`agent -> project -> domain -> space`), selective skill promotion (`memory_promote`), and cross-tenant Brain Passport export/sanitization/import/offboarding (`agent_brain_export`, `agent_brain_import`, `agent_space_offboard`).
+2. **Comprehensive Test Suite (`tests/test_virtual_employee_lifecycle.py`):**
+   - Test multi-instance fleet isolation (`support-billing-01` vs `support-tech-02` vs `pm-01` vs `dev-01`) sharing `project-checkout` while keeping `scope='agent'` billing skills isolated from non-billing agents.
+   - Test `agent_profile_upsert` and `agent_roster_list` filtering by `domain_id="billing"` and `role="support"`, plus `engramory init --domain-id` non-clobbering behavior.
+   - Test `memory_promote` elevating a validated skill from `scope='agent'` to `scope='domain'` (`domain_id="billing"`) and `scope='project'`, verifying that a peer agent cannot promote another agent's private `scope='agent'` memory (`[C2]`) and that retries are idempotent (`[M4]`).
+   - Test `agent_brain_export` $\to$ `passport_sha256` tamper/strip rejection (`[C4]`) $\to$ `agent_space_offboard` preserving shared project episodes on Tenant A (`[M1]`) $\to$ `agent_brain_import` with `1536`-dim vector re-embedding and idempotent replay on Tenant B (`[C1]`, `[M4]`).
+3. **Run All Deterministic Quality & CI Gates:**
+   - `uv run engramory sdd validate-graph --invariants`
+   - `uv run engramory docs lint --strict --json`
+   - `task check && task ci`
+
+---
+
+## Claim ledger
+
+| # | Claim | Symbol | Citation |
+|---|---|---|---|
+| 1 | `KNOWN_ACTIONS` in `access/authz.py` defines the closed set of authorizable actions enforced by `authorize()` | `KNOWN_ACTIONS = frozenset(` | `src/engramory/access/authz.py:15-48` |
+| 2 | `ActorContext` frozen dataclass carries `agent_id`, `project_id`, `tenant_id`, `scopes`, and optional `domain_id` | `class ActorContext:` | `src/engramory/access/authz.py:52-60` |
+| 3 | `sanitize_portable_text` in `access/poisoning_guard.py` scrubs secrets, emails, URLs, IPs, UUIDs, and custom `redact_terms` | `def sanitize_portable_text(` | `src/engramory/access/poisoning_guard.py:82-104` |
+| 4 | `inspect_memory_write` in `access/poisoning_guard.py` screens memory writes for prompt injection, dangerous Unicode, and secrets | `def inspect_memory_write(` | `src/engramory/access/poisoning_guard.py:134-198` |
+| 5 | `SCOPES` in `core/models.py` defines the 4-level visibility ladder `{"agent", "project", "domain", "space"}` per `ADR-07` | `SCOPES = frozenset(` | `src/engramory/core/models.py:32` |
+| 6 | `Episode` frozen dataclass in `core/models.py` carries `agent_id`, `content_raw`, `project_id`, `domain_id`, `tenant_id`, `kind`, and `metadata` | `class Episode:` | `src/engramory/core/models.py:81-96` |
+| 7 | `Memory` frozen dataclass in `core/models.py` carries `content_raw`, `summary`, `type`, `embedding_model`, `provenance`, `agent_id`, `project_id`, `domain_id`, `tenant_id`, and `scope` | `class Memory:` | `src/engramory/core/models.py:116-137` |
+| 8 | `AgentProfile` frozen dataclass in `core/models.py` models L3 identity (`agent_id`, `display_name`, `standing_preferences`, `tenant_id`) | `class AgentProfile:` | `src/engramory/core/models.py:206-218` |
+| 9 | `AccessSurface.memory_search` in `access/surface.py` retrieves scoped L2 memories and fuses L0 `kb_sections` when `include_knowledge=True` | `async def memory_search(` | `src/engramory/access/surface.py:199-320` |
+| 10 | `AccessSurface.agent_profile_get` in `access/surface.py` loads the caller's L3 `AgentProfile` scoped by `(tenant_id, agent_id)` | `async def agent_profile_get(` | `src/engramory/access/surface.py:512-523` |
+| 11 | `AccessSurface.agent_brain_export` in `access/surface.py` exports sanitized L3 profile and L2 `scope='agent'` skills | `async def agent_brain_export(` | `src/engramory/access/surface.py:524-591` |
+| 12 | `AccessSurface.agent_brain_import` in `access/surface.py` validates `evidence_ref` and imports sanitized portable skills into the caller's tenant | `async def agent_brain_import(` | `src/engramory/access/surface.py:593-693` |
+| 13 | `Repository.get_agent_profile` and `Repository.upsert_agent_profile` in `core/repository.py` read and write `agent_profiles` keyed by `(tenant_id, agent_id)` | `async def get_agent_profile(` | `src/engramory/core/repository.py:311-354` |
+| 14 | `Repository.get_memories` in `core/repository.py` enforces the 4-level `ADR-07` scope visibility SQL across `agent`, `project`, `domain`, and `space` | `async def get_memories(` | `src/engramory/core/repository.py:415-480` |
+| 15 | `reflect` in `workers/distillation.py` projects unreflected L1 episodes into L2 `Memory` rows preserving `domain_id` and `metadata['scope']` | `async def reflect(` | `src/engramory/workers/distillation.py:25-116` |
+| 16 | `McpServer._resolve_call_ctx` in `mcp/server.py` constructs a new `ActorContext` on `tenant_id`/`project_id` override without forwarding `base.domain_id` | `def _resolve_call_ctx(` | `src/engramory/mcp/server.py:603-622` |
+| 17 | `_parse_config_text` and `_load_config` in `cli.py` construct `ActorContext` from `.engramory/config.toml` or environment variables | `def _parse_config_text(` | `src/engramory/cli.py:78-126` |
+| 18 | `_cmd_profile_export_brain` and `_cmd_profile_import_brain` in `cli.py` bind `engramory profile export-brain` and `import-brain` to `AccessSurface` | `def _cmd_profile_export_brain(` | `src/engramory/cli.py:664-704` |
+| 19 | `0009_tenant_profiles_and_experience_dedup.sql` establishes composite `PRIMARY KEY (tenant_id, agent_id)` on `agent_profiles` | `ADD CONSTRAINT agent_profiles_pkey PRIMARY KEY (tenant_id, agent_id);` | `db/migrations/0009_tenant_profiles_and_experience_dedup.sql:28-30` |
+| 20 | `ADR-06_governed_write_failclosed.yaml` mandates `evidence_ref` on governed writes and fail-closed authorization | `id: ADR-06` | `docs/sdd/05_ADR/ADR-06_governed_write_failclosed.yaml:3-35` |
+| 21 | `ADR-07_scope_model.yaml` defines the 4-level scope ladder (`agent`, `project`, `domain`, `space`) within a `tenant_id` isolation boundary | `id: ADR-07` | `docs/sdd/05_ADR/ADR-07_scope_model.yaml:3-45` |
+| 22 | `SPEC-01_access_surface.yaml` specifies the Layer 06 `AccessSurface` interface exports and `ActorContext` data model | `id: SPEC-01` | `docs/sdd/06_SPEC/SPEC-01_access_surface.yaml:12-119` |
+| 23 | `SPEC-07_cli_face.yaml` specifies the Layer 06 `engramory` CLI transport commands and `.engramory/config.toml` schema | `id: SPEC-07` | `docs/sdd/06_SPEC/SPEC-07_cli_face.yaml:13-84` |
+| 24 | `CHG-008_multimodal_rag_graphrag_and_blob_cas.yaml` is the latest Layer 09 change record (`CHG-008`), making `CHG-009` the next sequential change ID | `id: CHG-008` | `docs/sdd/09_CHG/CHG-008_multimodal_rag_graphrag_and_blob_cas.yaml:9-28` |
+| 25 | `NEW@pass2` `_SCOPE_CLAUSES` and `vector_literal` in `core/repository.py` define the 4-level `ADR-07` SQL predicates and `pgvector` literal formatting | `_SCOPE_CLAUSES = {` | `src/engramory/core/repository.py:43-89` |
+| 26 | `NEW@pass2` `Repository.upsert_memory` and `Repository.get_memory` in `core/repository.py` insert a `Memory` row (currently omitting `embedding`) and fetch a single `Memory` by `(id, tenant_id)` | `async def upsert_memory(` | `src/engramory/core/repository.py:168-225` |
+| 27 | `NEW@pass2` `claims_to_actor_context` in `access/jwt_auth.py` maps verified OIDC `TokenClaims` to `ActorContext` without extracting `domain_id` | `def claims_to_actor_context(` | `src/engramory/access/jwt_auth.py:187-227` |
+| 28 | `NEW@pass2` `create_http_server` in `mcp/server.py` constructs `ActorContext` from `X-Tenant-ID`/`X-Project-ID` headers in dev mode without `X-Domain-ID` | `tenant_hdr = self.headers.get("X-Tenant-ID")` | `src/engramory/mcp/server.py:1242-1250` |
+| 29 | `NEW@pass2` `IPLAN-00_index.yaml` tracks the Layer 08 implementation plan registry (`total_plans: 8` through `IPLAN-08`) | `total_plans: 8` | `docs/sdd/08_IPLAN/IPLAN-00_index.yaml:8-20` |
+
+---
+
+## Review log
+
+### Pass 1 - 2026-11-13 (Author Self-Review)
+
+- **Scope & Citations Check:** Verified all 24 load-bearing claims in `## Claim ledger` against live source files in `platform-engramory`.
+- **Architecture & Governance Check:** Evaluated 3 options with `1–5` scoring for all 3 architectural questions (`Q1` Virtual Employee Space Hierarchy, `Q2` Sanitized Brain Passport & Offboarding, `Q3` L3 Roster & Governance), identified 5 concrete codebase gaps (`GAP-VE-01` through `GAP-VE-05`), and structured Phases 1–5 beginning with SDD-First Layer 06/07/08/09 updates.
+- **Result:** Ready for `check_plan.py` deterministic gate and fresh-context Multi-Lens Subagent Review 1 (Pass 2).
+
+### Pass 2 - 2026-11-13 - independent (Multi-Lens Subagent Review 1 — Subagent `05c9b2bd-07cc-4787-945f-c2c36970408e`)
+
+- **Lenses Applied:** Google (Design Doc invariants, transaction & vector persistence rigor), Anthropic (MCP/CLI contract precision, `inspect_memory_write` prompt-injection fencing & audit completeness), AWS (Well-Architected retry idempotency & non-clobbering `engramory init`), Microsoft (STRIDE threat modeling: cross-agent EoP in `memory_promote`, `domain_id` spoofing in `jwt_auth.py`/`mcp/server.py`, mandatory `passport_sha256` tamper verification, recursive PII scrubbing).
+- **Findings Identified & Folded:**
+  - **`[C1]` Vector Persistence on `Repository.upsert_memory`:** Specified extending `Repository.upsert_memory(self, memory, *, embedding=None, copy_embedding_from_id=None)` (`src/engramory/core/repository.py:168-201`) using `vector_literal` (`repository.py:87-89`) so both `agent_brain_import` and `memory_promote` persist `1536`-dim `pgvector` embeddings.
+  - **`[C2]` Strict `_SCOPE_CLAUSES` Source Visibility & Target Boundary in `memory_promote`:** Required `source.scope == "agent" -> source.agent_id == ctx.agent_id`, `source.scope == "project" -> source.project_id == ctx.project_id`, `source.scope == "domain" -> source.domain_id == ctx.domain_id`, ladder monotonicity (`_LADDER.index(target_scope) >= _LADDER.index(source.scope)`), and target project/department boundary checks so peer agents can never promote another Virtual Employee's private `scope='agent'` memories.
+  - **`[C3]` End-to-End `domain_id` Propagation & Spoofing Guard:** Added `domain_id` handling in `claims_to_actor_context()` (`src/engramory/access/jwt_auth.py:187-227`), `McpServer.create_http_server()` (`src/engramory/mcp/server.py:1242-1250`), and `_resolve_call_ctx()` (`server.py:603-622`), plus rejecting cross-department `domain_id` overrides when `ctx.domain_id` is bound and `"space" not in ctx.scopes`.
+  - **`[C4]` Mandatory `passport_sha256` Verification (`verify_integrity: bool = True`):** Made `passport_sha256` verification mandatory by default on `engramory.brain_passport.v1` in `agent_brain_import` to prevent signature-stripping attacks.
+  - **`[M1]`–`[M4]` & `[Med1]`–`[Med2]`:** Scoped `offboard_agent_space` episode deletion strictly to private agent episodes (`coalesce(metadata->>'scope', 'agent') = 'agent'`) inside a transaction (`[M1]`); wrapped `inspect_memory_write()` in `try ... except MemoryPoisoningError` with deny audit logging before any DB write (`[M2]`); reused `Repository.get_memory` (`repository.py:203-225`) and detailed all MCP/CLI bindings (`[M3]`); added retry idempotency to `memory_promote` and `agent_brain_import` and preserved existing profiles in `_upsert_profile_best_effort` (`[M4]`); sorted `redact_terms` by descending length and added recursive `sanitize_portable_value` for `display_name` and `standing_preferences` (`[Med1]`); added `ActorContext.domain_id` in `SPEC-01` and `IPLAN-00_index.yaml` (`total_plans: 9`) (`[Med2]`); and added 5 `NEW@pass2` Claim Ledger rows (`25`–`29`).
+- **Result:** All 10 findings folded. Proceeding to `check_plan.py` deterministic gate and fresh-context Multi-Lens Subagent Review 2 (Pass 3).
+
+### Pass 3 - 2026-11-13 - independent (Multi-Lens Subagent Review 2 — Subagent `7b549109-990a-416c-b027-e04219ee02e6`)
+
+- **Verification Check:** Independent fresh-context subagent verified all 10 folded remediations (`[C1]`–`[C4]`, `[M1]`–`[M4]`, `[Med1]`–`[Med2]`), internal wiring across `GAP-VE-01`..`GAP-VE-05` and Phases 1–5, and all 29 `## Claim ledger` citations against live source files in `platform-engramory`.
+- **Result:** ready — no new findings.
