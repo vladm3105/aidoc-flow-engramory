@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+import json
 import logging
 import subprocess  # nosec B404 # reason: read-only git rev-parse, config, ls-files, and diff with validated refs
 import time
@@ -15,12 +17,15 @@ from engramory.core.citations import (
     calculate_line_numbers,
     format_github_citation,
 )
-from engramory.core.extraction.router import SmartExtractionRouter
-from engramory.core.models import KBSection
+from engramory.core.extraction.multimodal import MEDIA_EXTENSIONS, infer_media_mime_type
+from engramory.core.extraction.router import MAX_NATIVE_TEXT_BYTES, SmartExtractionRouter
+from engramory.core.models import KB_SECTION_MODALITIES, KBSection
 
 if TYPE_CHECKING:
     from engramory.core.repository import Repository
+    from engramory.ports.graph import GraphPort
     from engramory.ports.llm import LLMPort
+    from engramory.ports.storage import StoragePort
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +94,20 @@ class GitSyncEngine:
         ".text",
         ".pdf",
         ".docx",
+        ".pptx",
+        ".xlsx",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".webp",
+        ".gif",
+        ".mp4",
+        ".mov",
+        ".webm",
+        ".mkv",
+        ".mp3",
+        ".wav",
+        ".m4a",
         ".template",
     }
 
@@ -235,29 +254,53 @@ class GitSyncEngine:
 
         # Extract file sections using router
         extract_res = self.router.extract_file(full_path, refine_chunks=True)
-        try:
-            full_text = full_path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
+        ext = full_path.suffix.lstrip(".").lower()
+        file_size = full_path.stat().st_size
+        is_binary_or_large = (
+            ext in (MEDIA_EXTENSIONS | {"pdf", "docx", "doc", "xlsx", "xls", "pptx", "ppt"})
+            or file_size > MAX_NATIVE_TEXT_BYTES
+        )
+        if is_binary_or_large:
             full_text = ""
+        else:
+            try:
+                full_text = full_path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                full_text = ""
 
         seen_citations: set[str] = set()
         sections: list[KBSection] = []
         for idx, sec in enumerate(extract_res.sections, 1):
-            # Calculate line numbers
-            l_start, l_end = calculate_line_numbers(full_text, sec.char_start, sec.char_end)
-            if repo_name:
-                cit_url = format_github_citation(
-                    repo=repo_name,
-                    commit_sha=sha,
-                    path=changed_file.rel_path,
-                    line_start=l_start,
-                    line_end=l_end,
-                )
+            raw_mod = str((sec.metadata or {}).get("modality") or "").strip().lower()
+            if raw_mod in KB_SECTION_MODALITIES:
+                sec_modality = raw_mod
+            elif ext == "pdf":
+                sec_modality = "pdf"
+            elif ext in {"docx", "doc", "xlsx", "xls", "pptx", "ppt"}:
+                sec_modality = "document"
             else:
-                cit_url = f"{changed_file.rel_path}#L{l_start}-L{l_end}"
+                sec_modality = "text"
 
-            # Combine citation URL and section slug
-            full_citation = f"{cit_url}{sec.citation or ''}"
+            # Calculate line numbers only for text documents
+            if full_text:
+                l_start, l_end = calculate_line_numbers(full_text, sec.char_start, sec.char_end)
+                if repo_name:
+                    cit_url = format_github_citation(
+                        repo=repo_name,
+                        commit_sha=sha,
+                        path=changed_file.rel_path,
+                        line_start=l_start,
+                        line_end=l_end,
+                    )
+                else:
+                    cit_url = f"{changed_file.rel_path}#L{l_start}-L{l_end}"
+                full_citation = f"{cit_url}{sec.citation or ''}"
+            else:
+                anchor = sec.citation or f"#sec-{idx}"
+                if not anchor.startswith("#"):
+                    anchor = f"#{anchor}"
+                full_citation = f"{changed_file.rel_path}{anchor}"
+
             if full_citation in seen_citations:
                 full_citation = f"{full_citation}#{sec.section_id or idx}"
             seen_citations.add(full_citation)
@@ -265,6 +308,19 @@ class GitSyncEngine:
                 str(sec.metadata["domain"]).strip()
                 if sec.metadata and sec.metadata.get("domain")
                 else None
+            )
+            sec_sha = (
+                str(sec.metadata["sha256"])
+                if sec.metadata
+                and sec.metadata.get("sha256")
+                and sec_modality in {"image", "audio", "video"}
+                else None
+            )
+            sec_uri = f"pgblob://{tenant_id}/{sec_sha}" if sec_sha else None
+            sec_media_meta = (
+                {k: v for k, v in (sec.metadata or {}).items() if k != "domain"}
+                if (sec_modality in {"image", "audio", "video", "pdf", "document"} or sec_sha)
+                else {}
             )
 
             sections.append(
@@ -277,6 +333,10 @@ class GitSyncEngine:
                     text=sec.content,
                     scope=scope,
                     version=version,
+                    modality=sec_modality,
+                    blob_sha256=sec_sha,
+                    blob_uri=sec_uri,
+                    media_metadata=sec_media_meta,
                 )
             )
 
@@ -292,6 +352,8 @@ class GitSyncEngine:
         project_id: str | None = None,
         scope: str = "project",
         llm: LLMPort | None = None,
+        storage: StoragePort | None = None,
+        graph: GraphPort | None = None,
         expected_embedding_dims: int = 1536,
     ) -> SyncResult:
         """Perform commit-differential sync and batch persist changes to Repository."""
@@ -308,6 +370,33 @@ class GitSyncEngine:
         all_sections: list[KBSection] = []
         doc_ids_to_delete: list[str] = []
 
+        async def _maybe_store_blob(cf: ChangedFile, secs: list[KBSection]) -> list[KBSection]:
+            if storage is None or not secs:
+                return secs
+            fp = (repo_path / cf.rel_path).resolve()
+            if not fp.is_file() or not fp.is_relative_to(repo_path.resolve()):
+                return secs
+            ext_cf = fp.suffix.lstrip(".").lower()
+            sz = fp.stat().st_size
+            if sz <= 256 * 1024 and ext_cf not in (
+                MEDIA_EXTENSIONS | {"pdf", "docx", "pptx", "xlsx"}
+            ):
+                return secs
+            _, mime = infer_media_mime_type(fp)
+            try:
+                blob = await storage.put_file(
+                    file_path=fp,
+                    content_type="application/pdf" if ext_cf == "pdf" else mime,
+                    tenant_id=tenant_id,
+                    project_id=project_id,
+                    metadata={"source_file": fp.name, "rel_path": cf.rel_path},
+                )
+                uri = f"pgblob://{tenant_id}/{blob.sha256}"
+                return [dataclasses.replace(s, blob_sha256=blob.sha256, blob_uri=uri) for s in secs]
+            except Exception as exc:
+                logger.warning("Failed to store git sync blob for %s: %s", cf.rel_path, exc)
+                return secs
+
         for cf in changed_files:
             if cf.status == FileChangeStatus.ADDED:
                 files_added.append(cf.rel_path)
@@ -321,6 +410,7 @@ class GitSyncEngine:
                     head_sha=target_head,
                     version=1,
                 )
+                secs = await _maybe_store_blob(cf, secs)
                 all_sections.extend(secs)
             elif cf.status in (FileChangeStatus.MODIFIED, FileChangeStatus.RENAMED):
                 files_modified.append(cf.rel_path)
@@ -336,6 +426,7 @@ class GitSyncEngine:
                     head_sha=target_head,
                     version=2,
                 )
+                secs = await _maybe_store_blob(cf, secs)
                 all_sections.extend(secs)
             elif cf.status == FileChangeStatus.DELETED:
                 files_deleted.append(cf.rel_path)
@@ -356,17 +447,42 @@ class GitSyncEngine:
                     writer_agent_id=f"git_sync:{project_id or 'default'}",
                     target=s.doc_id,
                 )
+                if s.media_metadata:
+                    inspect_memory_write(
+                        json.dumps(dict(s.media_metadata), sort_keys=True),
+                        tenant_id=tenant_id,
+                        writer_agent_id=f"git_sync:{project_id or 'default'}",
+                        target=s.doc_id,
+                    )
 
         await self._sync_changed_doc_metadata(
             repo, repo_path, changed_files, tenant_id, project_id, scope
         )
 
         if hasattr(repo, "delete_kb_sections_for_doc"):
+            import inspect as _inspect
+
             seen_del: set[str] = set()
             for del_doc_id in doc_ids_to_delete:
                 if del_doc_id not in seen_del:
                     seen_del.add(del_doc_id)
-                    await repo.delete_kb_sections_for_doc(tenant_id, del_doc_id)
+                    c_del = repo.delete_kb_sections_for_doc(tenant_id, del_doc_id)
+                    if _inspect.isawaitable(c_del):
+                        await c_del
+                    if hasattr(repo, "delete_graph_entity"):
+                        c_ge = repo.delete_graph_entity(del_doc_id, tenant_id=tenant_id)
+                        if _inspect.isawaitable(c_ge):
+                            await c_ge
+                    if graph is not None and hasattr(graph, "delete_node"):
+                        c_gn = graph.delete_node(id=del_doc_id, tenant_id=tenant_id)
+                        if _inspect.isawaitable(c_gn):
+                            await c_gn
+
+        if doc_ids_to_delete and storage is not None and hasattr(storage, "gc_orphan_chunks"):
+            try:
+                await storage.gc_orphan_chunks(older_than_seconds=7200)
+            except Exception as exc:
+                logger.debug("Optional blob GC during git sync skipped: %s", exc)
 
         if unique_sections:
             section_map = await repo.upsert_kb_sections_batch(unique_sections)

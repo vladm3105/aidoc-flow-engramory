@@ -96,6 +96,23 @@ data_models:
         - { name: "doc_id", type: "str", required: true, description: "Source document/artifact id" }
         - { name: "text", type: "str", required: true, description: "Section content" }
         - { name: "citation", type: "str", required: true, description: "Citation anchor" }
+        - { name: "modality", type: "str", required: false, description: "text|markdown|pdf|document|image|audio|video (default: text; migration 0010)" }
+        - { name: "blob_sha256", type: "str | None", required: false, description: "64-hex SHA-256 content-addressable key in kb_blobs (Rule D14a/D14b)" }
+        - { name: "blob_uri", type: "str | None", required: false, description: "pgblob://<tenant_id>/<sha256> or file:// pointer" }
+        - { name: "media_metadata", type: "Mapping[str, Any]", required: false, description: "Immutable metadata (mime_type, width, height, duration_ms, start_ms, end_ms, graph_context)" }
+    - name: "KBBlob"
+      type: "dataclass"
+      fields:
+        - { name: "tenant_id", type: "str", required: true, description: "Tenant isolation key" }
+        - { name: "sha256", type: "str", required: true, description: "64-char hex SHA-256 content digest" }
+        - { name: "media_type", type: "str", required: true, description: "IANA MIME type" }
+        - { name: "byte_size", type: "int", required: true, description: "Total byte size (0 to 25 GiB)" }
+        - { name: "chunk_size", type: "int", required: true, description: "Chunk size in bytes (default 4 MiB = 4194304)" }
+        - { name: "chunk_count", type: "int", required: true, description: "Total expected 4 MiB chunks" }
+        - { name: "storage_tier", type: "str", required: true, description: "logged (<= 50 MiB) | unlogged (> 50 MiB to 25 GiB)" }
+        - { name: "status", type: "str", required: true, description: "uploading | ready | failed" }
+        - { name: "project_id", type: "str | None", required: false, description: "Optional owning project" }
+        - { name: "metadata", type: "Mapping[str, Any]", required: false, description: "Container/media metadata" }
     - name: "AgentProfile"
       type: "dataclass"
       fields:

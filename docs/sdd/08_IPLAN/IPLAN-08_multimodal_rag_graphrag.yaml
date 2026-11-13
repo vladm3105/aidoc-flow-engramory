@@ -1,0 +1,83 @@
+# IPLAN-08 — Multimodal RAG, GraphRAG (PostgreSQL 18 + Neo4j), and 20 GB+ PostgreSQL Chunked Blob CAS
+metadata: { schema_version: "1.0", document_type: "iplan-document", layer: 8, total_sections: 6, c4_level: { value: none }, tags: [iplan-document, layer-8-artifact, shared-architecture] }
+
+id: IPLAN-08
+doc_id: IPLAN-08
+title: "Multimodal RAG, GraphRAG, and PostgreSQL 18 Chunked Blob CAS Implementation Plan"
+
+document_control:
+  iplan_id: "IPLAN-08"
+  subtype: code_build
+  source_spec: "@spec: SPEC-02"
+  authorizing_chg: "@chg: CHG-008"
+  status: In Progress
+  version: "1.0"
+  date_created: "2026-11-12T00:00:00"
+  last_updated: "2026-11-12T00:00:00"
+  author: "Engramory team"
+  complexity: 4
+  estimated_files: 20
+  session_count: 1
+
+file_manifest:
+  files:
+    - { path: "db/migrations/0010_multimodal_rag_and_blob_cas.sql", order: 1, status: IN_PROGRESS, session: 1, verified: true }
+    - { path: "src/engramory/ports/storage.py", order: 2, status: IN_PROGRESS, session: 1, verified: true }
+    - { path: "src/engramory/ports/llm.py", order: 3, status: IN_PROGRESS, session: 1, verified: true }
+    - { path: "src/engramory/core/models.py", order: 4, status: IN_PROGRESS, session: 1, verified: true }
+    - { path: "src/engramory/adapters/dev/storage_local.py", order: 5, status: IN_PROGRESS, session: 1, verified: true }
+    - { path: "src/engramory/adapters/dev/storage_pg.py", order: 6, status: IN_PROGRESS, session: 1, verified: true }
+    - { path: "src/engramory/adapters/dev/llm_litellm.py", order: 7, status: IN_PROGRESS, session: 1, verified: true }
+    - { path: "src/engramory/adapters/factory.py", order: 8, status: IN_PROGRESS, session: 1, verified: true }
+    - { path: "src/engramory/core/extraction/multimodal.py", order: 9, status: IN_PROGRESS, session: 1, verified: true }
+    - { path: "src/engramory/core/extraction/router.py", order: 10, status: IN_PROGRESS, session: 1, verified: true }
+    - { path: "src/engramory/core/repository.py", order: 11, status: IN_PROGRESS, session: 1, verified: true }
+    - { path: "src/engramory/core/kb_graph.py", order: 12, status: IN_PROGRESS, session: 1, verified: true }
+    - { path: "src/engramory/core/knowledge.py", order: 13, status: IN_PROGRESS, session: 1, verified: true }
+    - { path: "src/engramory/access/surface.py", order: 14, status: IN_PROGRESS, session: 1, verified: true }
+    - { path: "src/engramory/mcp/server.py", order: 15, status: IN_PROGRESS, session: 1, verified: true }
+    - { path: "src/engramory/cli.py", order: 16, status: IN_PROGRESS, session: 1, verified: true }
+    - { path: "tests/test_storage_pg_blob_cas.py", order: 17, status: IN_PROGRESS, session: 1, verified: true }
+    - { path: "tests/test_multimodal_extraction_and_graphrag.py", order: 18, status: IN_PROGRESS, session: 1, verified: true }
+
+execution_commands:
+  setup: ["uv sync"]
+  implementation:
+    - "Implement migration 0010, StoragePort streaming CAS adapters, multimodal extraction, 3-leg RRF, and Dual-Engine GraphRAG"
+  validation:
+    - "uv run pytest tests/test_storage_pg_blob_cas.py tests/test_multimodal_extraction_and_graphrag.py -v"
+    - "task check && task ci"
+
+implementation_contracts:
+  provided:
+    contracts:
+      - { name: "PgBlobStorageAdapter", type: "StoragePort Adapter", note: "4 MiB chunked COPY BINARY CAS up to 20 GB+ (Rule D14a/D14b)" }
+      - { name: "MultimodalGraphRAG", type: "KnowledgeCore + AccessSurface", note: "3-leg RRF (pgvector + ts_lex + Neo4j/PG CTE GraphRAG)" }
+  consumed:
+    dependencies:
+      - { name: "StoragePort / LLMPort / GraphPort", from: "@spec: SPEC-06", note: "Hexagonal ports" }
+      - { name: "Repository", from: "@spec: SPEC-02", note: "Canonical PostgreSQL 18 spine" }
+
+session_handoff:
+  sessions:
+    - date: "2026-11-12"
+      agent: "AI coding agent"
+      files_touched: ["db/migrations/0010_multimodal_rag_and_blob_cas.sql", "src/engramory/adapters/dev/storage_pg.py"]
+      partial_work: "Implementing PLAN-023."
+      blockers: "None."
+      next_session_directive: "Complete verification gates."
+      validation_results: { tests_passing: true, coverage: ">=90%", lint_clean: true }
+
+traceability:
+  tags: ["@iplan: IPLAN-08"]
+  upstream:
+    spec_references: ["@spec: SPEC-01", "@spec: SPEC-02", "@spec: SPEC-03", "@spec: SPEC-06", "@spec: SPEC-07"]
+    tdd_references: ["@tdd: TDD-01", "@tdd: TDD-02", "@tdd: TDD-03", "@tdd: TDD-06"]
+  downstream:
+    code_paths: ["@code: src/engramory/adapters/dev/storage_pg.py", "@code: src/engramory/core/extraction/multimodal.py"]
+    test_paths: ["@tests: tests/test_storage_pg_blob_cas.py", "@tests: tests/test_multimodal_extraction_and_graphrag.py"]
+  code_inventory:
+    files: []
+
+tdd_consistency:
+  summary: "Governed in consolidated SDD corpus."

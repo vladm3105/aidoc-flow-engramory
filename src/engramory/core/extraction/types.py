@@ -18,6 +18,8 @@ class FileCategory(StrEnum):
     PDF = "pdf"
     TEXT = "text"
     IMAGE = "image"
+    AUDIO = "audio"
+    VIDEO = "video"
     UNKNOWN = "unknown"
 
 

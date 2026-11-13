@@ -10,8 +10,11 @@ from pathlib import Path
 from typing import Any
 
 from engramory.core.extraction.types import DoclingExtractionResult, FileCategory
+from engramory.core.models import ValidationError
 
 logger = logging.getLogger(__name__)
+
+MAX_DOCLING_FILE_BYTES: int = 100 * 1024 * 1024  # 100 MiB guard for Docling extraction
 
 # Dynamic import guard for IBM Docling
 try:
@@ -71,8 +74,14 @@ class DoclingExtractor:
         if not file_path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
 
-        file_bytes = file_path.read_bytes()
-        file_hash = hashlib.sha256(file_bytes).hexdigest()
+        file_size = file_path.stat().st_size
+        if file_size > MAX_DOCLING_FILE_BYTES:
+            raise ValidationError(
+                f"Document size {file_size} exceeds "
+                f"MAX_DOCLING_FILE_BYTES ({MAX_DOCLING_FILE_BYTES})"
+            )
+        with file_path.open("rb") as fh:
+            file_hash = hashlib.file_digest(fh, "sha256").hexdigest()
         category = self.get_file_category(file_path.name)
 
         # 1. Check cache
@@ -103,13 +112,35 @@ class DoclingExtractor:
                 table_md = tbl.export_to_markdown() if hasattr(tbl, "export_to_markdown") else ""
                 tables.append({"index": idx, "markdown": table_md})
 
+        # Extract embedded figures / pictures (GAP-04)
+        images: list[dict[str, Any]] = []
+        if hasattr(doc, "pictures") and doc.pictures:
+            for idx, pic in enumerate(doc.pictures):
+                caption = ""
+                if hasattr(pic, "caption_text"):
+                    cap_attr = pic.caption_text
+                    caption = str(cap_attr(doc) if callable(cap_attr) else cap_attr or "")
+                elif hasattr(pic, "text") and pic.text:
+                    caption = str(pic.text)
+                page_no = None
+                if hasattr(pic, "prov") and pic.prov:
+                    first_prov = pic.prov[0]
+                    page_no = getattr(first_prov, "page_no", None)
+                images.append(
+                    {
+                        "index": idx,
+                        "caption": caption,
+                        "page_no": page_no,
+                    }
+                )
+
         duration_ms = int((time.perf_counter() - start_t) * 1000)
 
         result = DoclingExtractionResult(
             text=text_content,
             tables=tables,
-            images=[],
-            metadata={"source_file": file_path.name, "file_size": len(file_bytes)},
+            images=images,
+            metadata={"source_file": file_path.name, "file_size": file_size, "sha256": file_hash},
             file_category=category,
             extraction_time_ms=duration_ms,
             cache_hit=False,

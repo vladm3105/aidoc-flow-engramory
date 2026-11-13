@@ -4,8 +4,9 @@ name: engramory
 
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:pg18
     container_name: engramory-postgres
+    stop_grace_period: 30s
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-engramory}
       POSTGRES_USER: ${POSTGRES_USER:-engramory}
@@ -15,6 +16,7 @@ services:
     ports: ["${POSTGRES_HOST_PORT:-5432}:5432"]
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - pgblob_ts:/var/lib/postgresql/blob_ts
       - ./db/migrations:/migrations:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-engramory}"]
@@ -150,6 +152,7 @@ services:
 
 volumes:
   pgdata:
+  pgblob_ts:
   redisdata:
   ollamadata:
   neo4jdata:

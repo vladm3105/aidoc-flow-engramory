@@ -53,6 +53,11 @@ interfaces:
       description: "Bounded relationship traversal via GraphPort."
       errors: ["StoreUnavailable"]
       note: "Graph traversal is optional for MVP: it rides on @bdd: BDD.01.03.a100 (no dedicated EARS/BDD trace) and earns its own bounded-traversal scenario once GraphPort has a real backend."
+    - name: "knowledge_search"
+      type: "async function"
+      signature: "async def knowledge_search(ctx: ActorContext, query: str, *, domain_id: str | None = None, query_vec: Sequence[float] | None = None, scope: str | None = None, limit: int = 5, modality: str | None = None, expand_graph: bool = False, graph_depth: int = 1) -> list[KBSection]"
+      description: "3-leg hybrid RRF knowledge search (pgvector cosine HNSW + ts_lex GIN BM25 + optional Neo4j/PG CTE GraphRAG neighborhood expansion across DOCUMENT, SECTION, MEDIA_BLOB, CONCEPT, and SDD nodes)."
+      errors: ["AuthzError", "StoreUnavailable"]
 
 data_models:
   models:

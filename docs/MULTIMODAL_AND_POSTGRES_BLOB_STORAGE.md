@@ -91,51 +91,76 @@ Naively storing a `20 GB` video in a single PostgreSQL column fails due to Postg
 -- );
 
 CREATE TABLE IF NOT EXISTS kb_blobs (
-    sha256         text        PRIMARY KEY CHECK (char_length(sha256) = 64),
-    tenant_id      text        NOT NULL,
-    project_id     text        NOT NULL,
-    media_type     text        NOT NULL,
-    byte_size      bigint      NOT NULL CHECK (byte_size >= 0),
-    chunk_size     integer     NOT NULL DEFAULT 4194304 CHECK (chunk_size BETWEEN 65536 AND 16777216),
-    chunk_count    integer     NOT NULL CHECK (chunk_count >= 0),
-    storage_tier   text        NOT NULL DEFAULT 'logged' CHECK (storage_tier IN ('logged', 'unlogged')),
-    status         text        NOT NULL DEFAULT 'uploading' CHECK (status IN ('uploading', 'ready', 'failed')),
-    metadata       jsonb       NOT NULL DEFAULT '{}'::jsonb,
-    created_at     timestamptz NOT NULL DEFAULT now()
+    tenant_id        text        NOT NULL,
+    sha256           text        NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+    project_id       text,
+    media_type       text        NOT NULL,
+    byte_size        bigint      NOT NULL CHECK (byte_size >= 0),
+    chunk_size       integer     NOT NULL DEFAULT 4194304 CHECK (chunk_size BETWEEN 65536 AND 16777216),
+    chunk_count      integer     NOT NULL CHECK (chunk_count >= 0),
+    storage_tier     text        NOT NULL DEFAULT 'logged' CHECK (storage_tier IN ('logged', 'unlogged')),
+    status           text        NOT NULL DEFAULT 'uploading' CHECK (status IN ('uploading', 'ready', 'failed')),
+    metadata         jsonb       NOT NULL DEFAULT '{}'::jsonb,
+    created_at       timestamptz NOT NULL DEFAULT now(),
+    updated_at       timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant_id, sha256)
 ) TABLESPACE pg_default;
 
 CREATE INDEX IF NOT EXISTS kb_blobs_tenant_project_status_idx
     ON kb_blobs (tenant_id, project_id, status, created_at DESC);
 
+CREATE OR REPLACE FUNCTION set_kb_blobs_updated_at()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    NEW.updated_at := now();
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_kb_blobs_updated_at ON kb_blobs;
+CREATE TRIGGER trg_kb_blobs_updated_at
+    BEFORE UPDATE ON kb_blobs
+    FOR EACH ROW EXECUTE FUNCTION set_kb_blobs_updated_at();
+
 CREATE TABLE IF NOT EXISTS kb_blob_chunks (
-    blob_sha256    text        NOT NULL,
+    tenant_id      text        NOT NULL,
+    blob_sha256    text        NOT NULL CHECK (blob_sha256 ~ '^[0-9a-f]{64}$'),
     chunk_index    integer     NOT NULL CHECK (chunk_index >= 0),
     chunk_sha256   bytea       NOT NULL CHECK (octet_length(chunk_sha256) = 32),
     byte_size      integer     NOT NULL CHECK (byte_size > 0 AND byte_size <= 16777216),
     data           bytea       NOT NULL,
-    PRIMARY KEY (blob_sha256, chunk_index)
+    PRIMARY KEY (tenant_id, blob_sha256, chunk_index)
 ) WITH (
     fillfactor = 100,
     toast.autovacuum_enabled = true,
-    autovacuum_vacuum_scale_factor = 0.01
-) TABLESPACE ts_blob_cold;
+    autovacuum_vacuum_scale_factor = 0.01,
+    toast.autovacuum_vacuum_scale_factor = 0.01
+);
 
 ALTER TABLE kb_blob_chunks ALTER COLUMN data SET STORAGE EXTERNAL;
+-- When ts_blob_cold exists:
+-- ALTER TABLE kb_blob_chunks SET TABLESPACE ts_blob_cold;
+-- ALTER INDEX kb_blob_chunks_pkey SET TABLESPACE ts_blob_cold;
 
 CREATE UNLOGGED TABLE IF NOT EXISTS kb_blob_chunks_large (
-    blob_sha256    text        NOT NULL,
+    tenant_id      text        NOT NULL,
+    blob_sha256    text        NOT NULL CHECK (blob_sha256 ~ '^[0-9a-f]{64}$'),
     chunk_index    integer     NOT NULL CHECK (chunk_index >= 0),
     chunk_sha256   bytea       NOT NULL CHECK (octet_length(chunk_sha256) = 32),
     byte_size      integer     NOT NULL CHECK (byte_size > 0 AND byte_size <= 16777216),
     data           bytea       NOT NULL,
-    PRIMARY KEY (blob_sha256, chunk_index)
+    PRIMARY KEY (tenant_id, blob_sha256, chunk_index)
 ) WITH (
     fillfactor = 100,
     toast.autovacuum_enabled = true,
-    autovacuum_vacuum_scale_factor = 0.01
-) TABLESPACE ts_blob_cold;
+    autovacuum_vacuum_scale_factor = 0.01,
+    toast.autovacuum_vacuum_scale_factor = 0.01
+);
 
 ALTER TABLE kb_blob_chunks_large ALTER COLUMN data SET STORAGE EXTERNAL;
+-- When ts_blob_cold exists:
+-- ALTER TABLE kb_blob_chunks_large SET TABLESPACE ts_blob_cold;
+-- ALTER INDEX kb_blob_chunks_large_pkey SET TABLESPACE ts_blob_cold;
 ```
 
 Both chunk tables intentionally omit foreign keys back to `kb_blobs`: PostgreSQL prohibits foreign keys between `LOGGED` and `UNLOGGED` tables (`SQLSTATE 42P16`) and per-chunk FK checks would acquire `5,120` `FOR KEY SHARE` locks during a `20 GB` upload. Referential cleanup is enforced by `PgBlobStorageAdapter.delete()` and scheduled orphan garbage collection.
@@ -149,21 +174,21 @@ Both chunk tables intentionally omit foreign keys back to `kb_blobs`: PostgreSQL
 `PgBlobStorageAdapter` connects via a dedicated, bounded direct PostgreSQL pool (`127.0.0.1:5432` on dev / `10.250.0.1:5432` on stage, `max_size = 4`, `autocommit = True`), bypassing `PgBouncer` transaction-mode pooling (`127.0.0.1:6432`) so multi-minute `COPY BINARY` streams never hold transactional pool slots:
 
 ```python
-# Write path (PgBlobStorageAdapter.put_stream):
+# Write path (PgBlobStorageAdapter._stream_chunks_into_pg):
 # 1. UPSERT kb_blobs with status='uploading', storage_tier=('unlogged' if size > 52428800 else 'logged')
 # 2. Stream 4 MiB chunks via psycopg v3 COPY BINARY (activates 16 MiB BAS_BULKWRITE ring buffer):
-with conn.cursor() as cur:
-    with cur.copy(
-        f"COPY {target_table} (blob_sha256, chunk_index, chunk_sha256, byte_size, data) "
+async with conn.cursor() as cur:
+    async with cur.copy(
+        f"COPY {target_table} (tenant_id, blob_sha256, chunk_index, chunk_sha256, byte_size, data) "
         "FROM STDIN WITH (FORMAT BINARY)"
     ) as copy:
-        copy.set_types(["text", "int4", "bytea", "int4", "bytea"])
+        copy.set_types(["text", "text", "int4", "bytea", "int4", "bytea"])
         for idx, chunk_bytes, chunk_digest in chunk_iterator:
-            copy.write_row((blob_sha256, idx, chunk_digest, len(chunk_bytes), chunk_bytes))
+            await copy.write_row((tenant_id, blob_sha256, idx, chunk_digest, len(chunk_bytes), chunk_bytes))
 # 3. Verify COUNT(*) == chunk_count, flip kb_blobs.status = 'ready', and issue CHECKPOINT if unlogged.
 ```
 
-For streaming reads (`get_stream`), `PgBlobStorageAdapter` first verifies `SELECT COUNT(*) FROM <chunk_table> WHERE blob_sha256 = $1` equals `kb_blobs.chunk_count`, then fetches `4` chunks (`16 MiB`) per round-trip via keyset pagination (`WHERE blob_sha256 = $1 AND chunk_index >= $2 ORDER BY chunk_index ASC LIMIT 4`).
+For streaming reads (`get_stream`), `PgBlobStorageAdapter` first verifies `SELECT COUNT(*) FROM <chunk_table> WHERE tenant_id = $1 AND blob_sha256 = $2` equals `kb_blobs.chunk_count`, then fetches `4` chunks (`16 MiB`) per round-trip via keyset pagination (`WHERE tenant_id = $1 AND blob_sha256 = $2 AND chunk_index >= $3 ORDER BY chunk_index ASC LIMIT 4`).
 
 ### 4.2 `UNLOGGED` Crash-Truncation Recovery & Backup Contract
 

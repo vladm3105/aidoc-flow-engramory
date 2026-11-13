@@ -18,6 +18,9 @@ class DocType(StrEnum):
     PDF = "pdf"
     TEMPLATE = "template"
     TEXT = "text"
+    IMAGE = "image"
+    AUDIO = "audio"
+    VIDEO = "video"
     UNKNOWN = "unknown"
 
 

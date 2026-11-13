@@ -23,10 +23,12 @@ membership.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from engramory.access.authz import ActorContext, AuthzDecision, TargetScope, authorize
@@ -40,7 +42,7 @@ from engramory.core.models import (
     ValidationError,
 )
 from engramory.core.repository import Repository
-from engramory.ports import GraphPort, LLMPort
+from engramory.ports import GraphPort, LLMPort, StoragePort
 
 logger = logging.getLogger(__name__)
 
@@ -126,10 +128,47 @@ class AccessSurface:
         *,
         graph: GraphPort | None = None,
         llm: LLMPort | None = None,
+        storage: StoragePort | None = None,
     ) -> None:
         self._repo = repository
         self._graph = graph
         self._llm = llm
+        self._storage = storage
+
+    async def _expand_neighbors_with_fallback(
+        self,
+        *,
+        id: str,
+        tenant_id: str,
+        rel: str | None = None,
+        depth: int = 1,
+        project_id: str | None = None,
+    ) -> Sequence[Mapping[str, Any]]:
+        """Query Neo4j primary graph adapter and fall back to PostgreSQL recursive CTE."""
+        hits: Sequence[Mapping[str, Any]] = []
+        if self._graph is not None:
+            try:
+                hits = await self._graph.neighbors(
+                    id=id,
+                    rel=rel,
+                    depth=depth,
+                    tenant_id=tenant_id,
+                    project_id=project_id,
+                )
+            except Exception as exc:
+                logger.debug("Graph adapter neighbors query failed for %s: %s", id, exc)
+        if not hits and hasattr(self._repo, "find_neighbors"):
+            try:
+                hits = await self._repo.find_neighbors(
+                    id=id,
+                    tenant_id=tenant_id,
+                    rel=rel,
+                    depth=depth,
+                    project_id=project_id,
+                )
+            except Exception as exc:
+                logger.debug("Repository find_neighbors fallback failed for %s: %s", id, exc)
+        return hits
 
     async def _decide(
         self, ctx: ActorContext, action: str, target: TargetScope, note: str | None = None
@@ -202,18 +241,15 @@ class AccessSurface:
             if memory.id is None:
                 raise RuntimeError("hydrated memory missing id")
             prov = dict(memory.provenance)
-            if expand_graph and self._graph is not None:
-                try:
-                    neighbors = await self._graph.neighbors(
-                        id=memory.id,
-                        depth=1,
-                        tenant_id=target.tenant_id,
-                        project_id=ctx.project_id,
-                    )
-                    if neighbors:
-                        prov["related_entities"] = [n.get("id") for n in neighbors]
-                except Exception as exc:  # noqa: BLE001  # reason: graph traversal failure must not abort primary memory retrieval
-                    logger.debug("Graph traversal failed for memory %s: %s", memory.id, exc)
+            if expand_graph:
+                neighbors = await self._expand_neighbors_with_fallback(
+                    id=memory.id,
+                    tenant_id=target.tenant_id,
+                    depth=1,
+                    project_id=ctx.project_id,
+                )
+                if neighbors:
+                    prov["related_entities"] = [n.get("id") for n in neighbors]
             kept.append((memory.id, memory.summary, memory.confidence, prov, tokens))
         retrieval_ids = await self._repo.log_retrievals(
             memory_ids=[m[0] for m in kept],
@@ -244,22 +280,17 @@ class AccessSurface:
         depth: int = 1,
         scope: str = "project",
     ) -> Sequence[Mapping[str, Any]]:
-        """Retrieve connected graph neighbors for an entity (ADR-03 / GraphPort)."""
+        """Retrieve connected graph neighbors for an entity (ADR-03 / GraphPort + PG fallback)."""
         target = TargetScope(tenant_id=ctx.tenant_id, scope=scope)
         await self._decide(ctx, "graph_neighbors", target)
         eff_project_id = ctx.project_id if scope in ("agent", "project") else None
-        if self._graph is not None:
-            try:
-                return await self._graph.neighbors(
-                    id=id,
-                    rel=rel,
-                    depth=depth,
-                    tenant_id=ctx.tenant_id,
-                    project_id=eff_project_id,
-                )
-            except Exception:
-                logger.debug("Graph adapter neighbors query failed")
-        return []
+        return await self._expand_neighbors_with_fallback(
+            id=id,
+            tenant_id=ctx.tenant_id,
+            rel=rel,
+            depth=depth,
+            project_id=eff_project_id,
+        )
 
     async def context_slice(
         self,
@@ -523,6 +554,10 @@ class AccessSurface:
         evidence_ref: str | None,
         scope: str = "project",
         version: int = 1,
+        modality: str = "text",
+        blob_sha256: str | None = None,
+        blob_uri: str | None = None,
+        media_metadata: Mapping[str, Any] | None = None,
     ) -> str:
         """Governed write: authorize first, then require an approved-evidence
         reference (ADR-06). Both gates audit their decision."""
@@ -546,6 +581,13 @@ class AccessSurface:
                 writer_agent_id=ctx.agent_id,
                 target=doc_id,
             )
+            if media_metadata:
+                inspect_memory_write(
+                    json.dumps(dict(media_metadata), sort_keys=True),
+                    tenant_id=ctx.tenant_id,
+                    writer_agent_id=ctx.agent_id,
+                    target=doc_id,
+                )
         except MemoryPoisoningError as exc:
             await self._repo.record_audit(
                 tenant_id=ctx.tenant_id,
@@ -564,6 +606,10 @@ class AccessSurface:
             tenant_id=ctx.tenant_id,
             scope=scope,
             version=version,
+            modality=modality,
+            blob_sha256=blob_sha256,
+            blob_uri=blob_uri,
+            media_metadata=media_metadata or {},
         )
         try:
             return await self._repo.upsert_kb_section(section)
@@ -613,6 +659,13 @@ class AccessSurface:
                     writer_agent_id=ctx.agent_id,
                     target=s.doc_id,
                 )
+                if s.media_metadata:
+                    inspect_memory_write(
+                        json.dumps(dict(s.media_metadata), sort_keys=True),
+                        tenant_id=ctx.tenant_id,
+                        writer_agent_id=ctx.agent_id,
+                        target=s.doc_id,
+                    )
             except MemoryPoisoningError as exc:
                 await self._repo.record_audit(
                     tenant_id=ctx.tenant_id,
@@ -634,6 +687,10 @@ class AccessSurface:
                     domain_id=s.domain_id,
                     scope=target_scope,
                     version=s.version,
+                    modality=s.modality,
+                    blob_sha256=s.blob_sha256,
+                    blob_uri=s.blob_uri,
+                    media_metadata=s.media_metadata,
                 )
             )
 
@@ -687,11 +744,15 @@ class AccessSurface:
         domain_id: str | None = None,
         query_vec: Sequence[float] | None = None,
         scope: str | None = None,
+        modality: str | None = None,
+        expand_graph: bool = False,
+        graph_depth: int = 1,
         limit: int = 5,
     ) -> list[KBSection]:
-        """Search knowledge sections with tenant/project scoping."""
+        """Search knowledge sections with tenant/project scoping, modality filter, and GraphRAG."""
+        eff_scope = scope or "project"
         await self._decide(
-            ctx, "knowledge_search", TargetScope(tenant_id=ctx.tenant_id, scope=scope or "project")
+            ctx, "knowledge_search", TargetScope(tenant_id=ctx.tenant_id, scope=eff_scope)
         )
         eff_vec = query_vec
         if eff_vec is None and self._llm is not None and query and query.strip():
@@ -701,15 +762,264 @@ class AccessSurface:
                     eff_vec = vecs[0]
             except Exception:  # noqa: BLE001  # reason: fallback to lexical search when embedding endpoint is unreachable
                 eff_vec = None
-        return await self._repo.search_kb_sections(
-            query,
-            tenant_id=ctx.tenant_id,
-            project_id=ctx.project_id,
-            domain_id=domain_id,
-            query_vec=eff_vec,
-            scope=scope,
-            limit=limit,
+
+        search_kwargs: dict[str, Any] = {
+            "tenant_id": ctx.tenant_id,
+            "project_id": ctx.project_id,
+            "domain_id": domain_id,
+            "query_vec": eff_vec,
+            "scope": scope,
+            "limit": limit,
+        }
+        if modality is not None:
+            search_kwargs["modality"] = modality
+        results = await self._repo.search_kb_sections(query, **search_kwargs)
+        if not expand_graph or not results:
+            return results
+
+        eff_project_id = ctx.project_id if eff_scope in ("agent", "project") else None
+        safe_depth = max(1, min(graph_depth, 6))
+        enriched: list[KBSection] = []
+        for sec in results:
+            seed_ids: list[str] = [sec.doc_id]
+            if "#" in sec.citation:
+                anchor = sec.citation.split("#", 1)[1]
+                seed_ids.append(f"{sec.doc_id}#{anchor}")
+            if sec.blob_sha256:
+                seed_ids.append(f"blob:{sec.blob_sha256[:16]}")
+
+            neighbors_by_id: dict[str, Mapping[str, Any]] = {}
+            for seed_id in seed_ids:
+                hits = await self._expand_neighbors_with_fallback(
+                    id=seed_id,
+                    tenant_id=ctx.tenant_id,
+                    depth=safe_depth,
+                    project_id=eff_project_id,
+                )
+                for hit in hits:
+                    nid = str(hit.get("id", ""))
+                    if nid and nid not in neighbors_by_id:
+                        neighbors_by_id[nid] = dict(hit)
+
+            if neighbors_by_id:
+                new_meta = {
+                    **dict(sec.media_metadata),
+                    "graph_context": list(neighbors_by_id.values()),
+                }
+                enriched.append(dataclasses.replace(sec, media_metadata=new_meta))
+            else:
+                enriched.append(sec)
+        return enriched
+
+    async def blob_put(
+        self,
+        ctx: ActorContext,
+        *,
+        file_path: Path | str | None = None,
+        key: str | None = None,
+        data: bytes | None = None,
+        content_type: str = "application/octet-stream",
+        scope: str = "project",
+        metadata: Mapping[str, Any] | None = None,
+        allowed_root: Path | None = None,
+        enforce_project_boundary: bool = False,
+    ) -> dict[str, Any]:
+        """Governed write of a raw binary blob into the CAS storage adapter (PLAN-023)."""
+        from engramory.core.docs_tools import resolve_confined_repo_path
+
+        await self._decide(ctx, "blob_put", TargetScope(tenant_id=ctx.tenant_id, scope=scope))
+        if self._storage is None:
+            raise RuntimeError("StoragePort adapter is not configured on AccessSurface")
+
+        if metadata:
+            try:
+                inspect_memory_write(
+                    json.dumps(dict(metadata), sort_keys=True),
+                    tenant_id=ctx.tenant_id,
+                    writer_agent_id=ctx.agent_id,
+                    target=key or str(file_path or "blob"),
+                )
+            except MemoryPoisoningError as exc:
+                await self._repo.record_audit(
+                    tenant_id=ctx.tenant_id,
+                    agent_id=ctx.agent_id,
+                    project_id=ctx.project_id,
+                    action="blob_put",
+                    allowed=False,
+                    reason=f"poisoning_rejected: {exc}",
+                )
+                raise GovernedWriteRejected(str(exc)) from exc
+
+        if file_path is not None:
+            raw_p = Path(file_path)
+            if raw_p.is_symlink():
+                raise ValidationError(f"Symlink paths are rejected for blob_put: {file_path}")
+            confined_p = resolve_confined_repo_path(
+                raw_p,
+                allowed_root=allowed_root,
+                project_id=ctx.project_id,
+                enforce_project_boundary=enforce_project_boundary,
+            )
+            blob = await self._storage.put_file(
+                file_path=confined_p,
+                content_type=content_type,
+                tenant_id=ctx.tenant_id,
+                project_id=ctx.project_id,
+                metadata=metadata,
+            )
+        elif data is not None:
+            await self._storage.put(
+                key=key or "",
+                data=data,
+                content_type=content_type,
+                tenant_id=ctx.tenant_id,
+                project_id=ctx.project_id,
+                metadata=metadata,
+            )
+            import hashlib as _hashlib
+
+            sha = _hashlib.sha256(data).hexdigest()
+            head_res = await self._storage.head(key=sha, tenant_id=ctx.tenant_id)
+            if head_res is None:
+                raise RuntimeError("Blob put succeeded but head lookup returned None")
+            blob = head_res
+        else:
+            raise ValidationError("blob_put requires either file_path or data")
+
+        return {
+            "sha256": blob.sha256,
+            "tenant_id": blob.tenant_id,
+            "project_id": blob.project_id,
+            "media_type": blob.media_type,
+            "byte_size": blob.byte_size,
+            "chunk_size_bytes": blob.chunk_size_bytes,
+            "chunk_count": blob.chunk_count,
+            "storage_tier": blob.storage_tier,
+            "status": blob.status,
+            "blob_uri": f"pgblob://{blob.tenant_id}/{blob.sha256}",
+        }
+
+    async def blob_head(
+        self,
+        ctx: ActorContext,
+        *,
+        sha256: str,
+        scope: str = "project",
+    ) -> dict[str, Any] | None:
+        """Governed metadata lookup of a CAS blob by SHA-256 within caller's tenant."""
+        await self._decide(ctx, "blob_head", TargetScope(tenant_id=ctx.tenant_id, scope=scope))
+        if self._storage is None:
+            return None
+        blob = await self._storage.head(key=sha256, tenant_id=ctx.tenant_id)
+        if blob is None:
+            return None
+        return {
+            "sha256": blob.sha256,
+            "tenant_id": blob.tenant_id,
+            "project_id": blob.project_id,
+            "media_type": blob.media_type,
+            "byte_size": blob.byte_size,
+            "chunk_size_bytes": blob.chunk_size_bytes,
+            "chunk_count": blob.chunk_count,
+            "storage_tier": blob.storage_tier,
+            "status": blob.status,
+            "blob_uri": f"pgblob://{blob.tenant_id}/{blob.sha256}",
+            "metadata": dict(blob.metadata),
+        }
+
+    async def blob_get(
+        self,
+        ctx: ActorContext,
+        *,
+        sha256: str,
+        scope: str = "project",
+    ) -> bytes:
+        """Governed read of a bounded CAS blob by SHA-256 within caller's tenant."""
+        await self._decide(ctx, "blob_get", TargetScope(tenant_id=ctx.tenant_id, scope=scope))
+        if self._storage is None:
+            raise RuntimeError("StoragePort adapter is not configured on AccessSurface")
+        return await self._storage.get(key=sha256, tenant_id=ctx.tenant_id)
+
+    async def knowledge_ingest_media(
+        self,
+        ctx: ActorContext,
+        *,
+        file_path: Path | str,
+        evidence_ref: str | None,
+        scope: str = "project",
+        embed: bool = True,
+        project_graph: bool = True,
+        allowed_root: Path | None = None,
+        enforce_project_boundary: bool = False,
+    ) -> dict[str, Any]:
+        """Governed multimodal ingestion (CAS blob + derived sections + dual-engine graph)."""
+        from engramory.core.docs_tools import resolve_confined_repo_path
+        from engramory.core.knowledge import KnowledgeCore
+
+        await self._decide(
+            ctx,
+            "knowledge_ingest_media",
+            TargetScope(tenant_id=ctx.tenant_id, scope=scope),
         )
+        if not evidence_ref:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="knowledge_ingest_media",
+                allowed=False,
+                reason="missing_evidence_ref",
+            )
+            raise GovernedWriteRejected("knowledge_ingest_media requires evidence_ref")
+
+        raw_p = Path(file_path)
+        if raw_p.is_symlink():
+            raise ValidationError(
+                f"Symlink paths are rejected for knowledge_ingest_media: {file_path}"
+            )
+        confined_p = resolve_confined_repo_path(
+            raw_p,
+            allowed_root=allowed_root,
+            project_id=ctx.project_id,
+            enforce_project_boundary=enforce_project_boundary,
+        )
+        core = KnowledgeCore(
+            self._repo,
+            llm=self._llm,
+            storage=self._storage,
+            graph=self._graph,
+        )
+        try:
+            return await core.ingest_media_file(
+                confined_p,
+                tenant_id=ctx.tenant_id,
+                project_id=ctx.project_id,
+                scope=scope,
+                evidence_ref=evidence_ref,
+                embed=embed,
+                project_graph=project_graph,
+                repo_root=allowed_root,
+            )
+        except MemoryPoisoningError as exc:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="knowledge_ingest_media",
+                allowed=False,
+                reason=f"poisoning_rejected: {exc}",
+            )
+            raise GovernedWriteRejected(str(exc)) from exc
+        except ValidationError as exc:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="knowledge_ingest_media",
+                allowed=False,
+                reason=f"validation_rejected: {exc}",
+            )
+            raise GovernedWriteRejected(str(exc)) from exc
 
     async def docs_ingest_runbook(
         self,

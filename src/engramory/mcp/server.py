@@ -156,6 +156,24 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     "description": "Visibility scope (project, domain, space)",
                     "default": "project",
                 },
+                "modality": {
+                    "type": "string",
+                    "description": (
+                        "Optional modality filter "
+                        "(text, markdown, pdf, document, image, audio, video)"
+                    ),
+                    "enum": ["text", "markdown", "pdf", "document", "image", "audio", "video"],
+                },
+                "expand_graph": {
+                    "type": "boolean",
+                    "description": "Expand connected GraphRAG entities via Neo4j / PostgreSQL CTE",
+                    "default": False,
+                },
+                "graph_depth": {
+                    "type": "integer",
+                    "description": "GraphRAG neighborhood hop depth (1..6)",
+                    "default": 1,
+                },
                 "k": {
                     "type": "integer",
                     "description": "Maximum number of sections returned",
@@ -163,6 +181,73 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                 },
             },
             "required": ["query"],
+        },
+    },
+    {
+        "name": "knowledge_ingest_media",
+        "description": (
+            "Governed multimodal ingestion (image, audio, 20 GB+ video, PDF) "
+            "into CAS + kb_sections + graph."
+        ),
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Workspace-confined path to media file",
+                },
+                "evidence_ref": {
+                    "type": "string",
+                    "description": "Approved evidence reference (ADR-06)",
+                },
+                "scope": {
+                    "type": "string",
+                    "description": "Visibility scope (project, domain, space)",
+                    "default": "project",
+                },
+                "embed": {
+                    "type": "boolean",
+                    "description": "Compute vector embeddings for derived sections",
+                    "default": True,
+                },
+                "project_graph": {
+                    "type": "boolean",
+                    "description": "Project DOCUMENT, SECTION, and MEDIA_BLOB graph nodes",
+                    "default": True,
+                },
+            },
+            "required": ["file_path", "evidence_ref"],
+        },
+    },
+    {
+        "name": "blob_head",
+        "description": "Inspect PostgreSQL CAS blob manifest metadata and chunk status by SHA-256.",
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "sha256": {
+                    "type": "string",
+                    "description": "64-character hex SHA-256 content address",
+                },
+                "scope": {
+                    "type": "string",
+                    "description": "Visibility scope (project, domain, space)",
+                    "default": "project",
+                },
+            },
+            "required": ["sha256"],
         },
     },
     {
@@ -553,12 +638,22 @@ class McpServer:
                 return {"content": [{"type": "text", "text": f"Ingested section {sec_id}"}]}
 
             elif name == "knowledge_search":
+                search_kwargs: dict[str, Any] = {
+                    "query": arguments["query"],
+                    "domain_id": arguments.get("domain_id"),
+                    "scope": arguments.get("scope", "project"),
+                    "limit": int(arguments.get("k", arguments.get("limit", 5))),
+                }
+                if "modality" in arguments and arguments["modality"] is not None:
+                    search_kwargs["modality"] = str(arguments["modality"])
+                if "expand_graph" in arguments:
+                    search_kwargs["expand_graph"] = bool(arguments["expand_graph"])
+                if "graph_depth" in arguments and arguments["graph_depth"] is not None:
+                    search_kwargs["graph_depth"] = int(arguments["graph_depth"])
+
                 sections = await self._surface.knowledge_search(
                     call_ctx,
-                    query=arguments["query"],
-                    domain_id=arguments.get("domain_id"),
-                    scope=arguments.get("scope", "project"),
-                    limit=int(arguments.get("k", arguments.get("limit", 5))),
+                    **search_kwargs,
                 )
                 formatted_secs = [
                     {
@@ -570,10 +665,35 @@ class McpServer:
                         "domain_id": s.domain_id,
                         "scope": s.scope,
                         "version": s.version,
+                        "modality": getattr(s, "modality", "text"),
+                        "blob_sha256": getattr(s, "blob_sha256", None),
+                        "blob_uri": getattr(s, "blob_uri", None),
+                        "media_metadata": dict(getattr(s, "media_metadata", {}) or {}),
                     }
                     for s in sections
                 ]
                 return {"content": [{"type": "text", "text": json.dumps(formatted_secs, indent=2)}]}
+
+            elif name == "knowledge_ingest_media":
+                enforce_proj = self._auth_enabled and ("space" not in call_ctx.scopes)
+                media_res = await self._surface.knowledge_ingest_media(
+                    call_ctx,
+                    file_path=arguments["file_path"],
+                    evidence_ref=arguments.get("evidence_ref"),
+                    scope=arguments.get("scope", "project"),
+                    embed=bool(arguments.get("embed", True)),
+                    project_graph=bool(arguments.get("project_graph", True)),
+                    enforce_project_boundary=enforce_proj,
+                )
+                return {"content": [{"type": "text", "text": json.dumps(media_res, indent=2)}]}
+
+            elif name == "blob_head":
+                head_res = await self._surface.blob_head(
+                    call_ctx,
+                    sha256=arguments["sha256"],
+                    scope=arguments.get("scope", "project"),
+                )
+                return {"content": [{"type": "text", "text": json.dumps(head_res, indent=2)}]}
 
             elif name == "graph_neighbors":
                 neighbors = await self._surface.graph_neighbors(
