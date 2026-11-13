@@ -346,11 +346,13 @@ def test_worker_start_with_env(
         llm: Any = None,
         vector: Any = None,
         events: Any = None,
+        storage: Any = None,
         interval_sec: Any = None,
         tenant_id: Any = None,
     ) -> int:
         called["repo"] = repo
         called["events"] = events
+        called["storage"] = storage
         called["interval_sec"] = interval_sec
         called["tenant_id"] = tenant_id
         return 0

@@ -11,16 +11,49 @@ import logging
 import re
 import subprocess  # nosec B404 # reason: read-only git remote origin lookup for project_id auto-detection
 import tomllib
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from engramory.core.models import GraphEntity, GraphRelation
+from engramory.core.models import GraphEntity, GraphRelation, KBBlob, KBSection
 from engramory.core.repository import Repository
 from engramory.ports import GraphPort
 
 logger = logging.getLogger(__name__)
+
+_SDD_LAYERS: frozenset[str] = frozenset(
+    {"BRD", "PRD", "EARS", "BDD", "ADR", "SPEC", "TDD", "TASK", "IPLAN", "CHG", "EVAL"}
+)
+_KNOWLEDGE_ENTITY_TYPES: frozenset[str] = frozenset(
+    {
+        "DOCUMENT",
+        "SECTION",
+        "MEDIA_BLOB",
+        "CONCEPT",
+        "RUNBOOK",
+        "RUNBOOK_STEP",
+        "ALERT",
+        "ARCHITECTURE",
+        "REFERENCE",
+        "GUIDE",
+        "SERVICE",
+    }
+)
+_SDD_REF_RE = re.compile(r"\b(?P<id>(?:BRD|PRD|EARS|BDD|ADR|SPEC|TDD|IPLAN|CHG|EVAL)-[0-9]{2,3})\b")
+_WIKI_CONCEPT_RE = re.compile(r"\[\[(?P<concept>[^\[\]\n]{2,80})\]\]")
+
+
+def entity_labels_for(entity: GraphEntity) -> list[str]:
+    """Compute canonical Neo4j labels for a GraphEntity (GAP-06)."""
+    labels = [entity.entity_type]
+    if entity.entity_type in _SDD_LAYERS or entity.properties.get("sdd"):
+        labels.append("SDD")
+    elif entity.entity_type in _KNOWLEDGE_ENTITY_TYPES:
+        labels.append("Knowledge")
+    return labels
+
 
 TAG_RE = re.compile(
     r"@(?P<kind>spec|adr|bdd|ears|prd|brd|tdd|chg|eval|depends):\s*(?P<target>[A-Za-z0-9_.-]+)",
@@ -664,7 +697,7 @@ async def ingest_sdd_knowledge_graph(
                 "domain_id": entity.domain_id,
                 **entity.properties,
             }
-            labels = ["Entity", "SDD", entity.entity_type]
+            labels = entity_labels_for(entity)
             await graph.upsert_node(id=entity.id, labels=labels, props=props)
 
         for relation in relations:
@@ -898,5 +931,186 @@ def extract_docs_graph(
                                 properties={"project_id": eff_project},
                             )
                         )
+
+    return list(entities.values()), relations
+
+
+def extract_knowledge_and_media_graph(
+    sections: Sequence[KBSection],
+    *,
+    blobs: Sequence[KBBlob] = (),
+    doc_title: str | None = None,
+    repo_path: str | None = None,
+    tenant_id: str = "default",
+    project_id: str | None = None,
+    domain_id: str = "default",
+) -> tuple[list[GraphEntity], list[GraphRelation]]:
+    """Extract DOCUMENT, SECTION, MEDIA_BLOB, and CONCEPT graph nodes and relations (PLAN-023)."""
+    eff_project = project_id or "default"
+    entities: dict[str, GraphEntity] = {}
+    relations: list[GraphRelation] = []
+    seen_rels: set[tuple[str, str, str]] = set()
+
+    def _add_rel(
+        src_id: str,
+        dst_id: str,
+        rel_type: str,
+        props: dict[str, Any] | None = None,
+    ) -> None:
+        key = (src_id, dst_id, rel_type)
+        if key in seen_rels:
+            return
+        seen_rels.add(key)
+        relations.append(
+            GraphRelation(
+                src_id=src_id,
+                dst_id=dst_id,
+                rel_type=rel_type,
+                tenant_id=tenant_id,
+                properties={"project_id": eff_project, **(props or {})},
+            )
+        )
+
+    blob_by_sha: dict[str, KBBlob] = {b.sha256: b for b in blobs}
+    for b in blobs:
+        blob_node_id = f"blob:{b.sha256[:16]}"
+        entities[blob_node_id] = GraphEntity(
+            id=blob_node_id,
+            entity_type="MEDIA_BLOB",
+            name=blob_node_id,
+            tenant_id=tenant_id,
+            domain_id=domain_id,
+            properties={
+                "project_id": eff_project,
+                "sha256": b.sha256,
+                "media_type": b.media_type,
+                "byte_size": b.byte_size,
+                "storage_tier": b.storage_tier,
+                "blob_uri": f"pgblob://{tenant_id}/{b.sha256}",
+            },
+        )
+
+    sections_by_doc: dict[str, list[KBSection]] = {}
+    for sec in sections:
+        sections_by_doc.setdefault(sec.doc_id, []).append(sec)
+
+    for doc_id, doc_secs in sections_by_doc.items():
+        first_sec = doc_secs[0]
+        eff_domain = first_sec.domain_id or domain_id
+        doc_modality = first_sec.modality
+        entities[doc_id] = GraphEntity(
+            id=doc_id,
+            entity_type="DOCUMENT",
+            name=doc_title or doc_id,
+            tenant_id=tenant_id,
+            domain_id=eff_domain,
+            properties={
+                "project_id": first_sec.project_id or eff_project,
+                "repo_path": repo_path or doc_id,
+                "modality": doc_modality,
+            },
+        )
+
+        prev_sec_node_id: str | None = None
+        for idx, sec in enumerate(doc_secs, 1):
+            anchor = sec.citation.split("#", 1)[1] if "#" in sec.citation else f"sec-{idx}"
+            sec_node_id = f"{doc_id}#{anchor}"
+            sec_props: dict[str, Any] = {
+                "project_id": sec.project_id or eff_project,
+                "doc_id": doc_id,
+                "citation": sec.citation,
+                "modality": sec.modality,
+            }
+            if sec.blob_sha256:
+                sec_props["blob_sha256"] = sec.blob_sha256
+            if sec.blob_uri:
+                sec_props["blob_uri"] = sec.blob_uri
+            if sec.media_metadata.get("start_ms") is not None:
+                sec_props["start_ms"] = sec.media_metadata.get("start_ms")
+            if sec.media_metadata.get("end_ms") is not None:
+                sec_props["end_ms"] = sec.media_metadata.get("end_ms")
+
+            entities[sec_node_id] = GraphEntity(
+                id=sec_node_id,
+                entity_type="SECTION",
+                name=sec.citation,
+                tenant_id=tenant_id,
+                domain_id=sec.domain_id or eff_domain,
+                properties=sec_props,
+            )
+            _add_rel(doc_id, sec_node_id, "CONTAINS_SECTION", {"order": idx})
+
+            if sec.blob_sha256:
+                blob_node_id = f"blob:{sec.blob_sha256[:16]}"
+                if blob_node_id not in entities:
+                    matched_blob = blob_by_sha.get(sec.blob_sha256)
+                    entities[blob_node_id] = GraphEntity(
+                        id=blob_node_id,
+                        entity_type="MEDIA_BLOB",
+                        name=blob_node_id,
+                        tenant_id=tenant_id,
+                        domain_id=sec.domain_id or eff_domain,
+                        properties={
+                            "project_id": sec.project_id or eff_project,
+                            "sha256": sec.blob_sha256,
+                            "media_type": (
+                                matched_blob.media_type
+                                if matched_blob
+                                else str(
+                                    sec.media_metadata.get("mime_type")
+                                    or "application/octet-stream"
+                                )
+                            ),
+                            "byte_size": (
+                                matched_blob.byte_size
+                                if matched_blob
+                                else int(sec.media_metadata.get("byte_size") or 0)
+                            ),
+                            "storage_tier": (
+                                matched_blob.storage_tier if matched_blob else "logged"
+                            ),
+                            "blob_uri": sec.blob_uri or f"pgblob://{tenant_id}/{sec.blob_sha256}",
+                        },
+                    )
+                edge_props: dict[str, Any] = {}
+                if sec.media_metadata.get("start_ms") is not None:
+                    edge_props["start_ms"] = sec.media_metadata.get("start_ms")
+                if sec.media_metadata.get("end_ms") is not None:
+                    edge_props["end_ms"] = sec.media_metadata.get("end_ms")
+                _add_rel(sec_node_id, blob_node_id, "DERIVED_FROM_BLOB", edge_props)
+
+            if prev_sec_node_id is not None and sec.modality in {"audio", "video"}:
+                _add_rel(prev_sec_node_id, sec_node_id, "NEXT_SEGMENT")
+            prev_sec_node_id = sec_node_id
+
+            # Extract SDD specification mentions (@spec:, SPEC-01, ADR-03, etc.)
+            for match in TAG_RE.finditer(sec.text):
+                target = normalize_sdd_id(match.group("target"))
+                if target:
+                    _add_rel(sec_node_id, target, "MENTIONS_ENTITY")
+            for match in _SDD_REF_RE.finditer(sec.text):
+                target = normalize_sdd_id(match.group("id"))
+                if target:
+                    _add_rel(sec_node_id, target, "MENTIONS_ENTITY")
+
+            # Extract [[Concept]] wiki-style links
+            for match in _WIKI_CONCEPT_RE.finditer(sec.text):
+                raw_concept = match.group("concept").strip()
+                if not raw_concept:
+                    continue
+                slug = re.sub(r"[^a-z0-9_]+", "-", raw_concept.lower()).strip("-")
+                if not slug:
+                    continue
+                concept_id = f"concept:{slug}"
+                if concept_id not in entities:
+                    entities[concept_id] = GraphEntity(
+                        id=concept_id,
+                        entity_type="CONCEPT",
+                        name=raw_concept,
+                        tenant_id=tenant_id,
+                        domain_id=sec.domain_id or eff_domain,
+                        properties={"project_id": sec.project_id or eff_project},
+                    )
+                _add_rel(sec_node_id, concept_id, "MENTIONS_ENTITY")
 
     return list(entities.values()), relations

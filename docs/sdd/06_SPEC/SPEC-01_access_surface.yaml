@@ -81,6 +81,26 @@ interfaces:
       signature: "async def knowledge_ingest(ctx: ActorContext, entry: KBEntryIn, evidence_ref: str | None) -> EntryId"
       description: "Create/update an SDD-artifact KB entry; requires evidence_ref (governed write)."
       errors: ["GovernedWriteRejected: missing/invalid evidence_ref", "AuthzError"]
+    - name: "knowledge_ingest_media"
+      type: "async function"
+      signature: "async def knowledge_ingest_media(ctx: ActorContext, *, file_path: Path, evidence_ref: str | None, scope: str = 'project', embed: bool = True, project_graph: bool = True) -> dict[str, Any]"
+      description: "Governed multimodal ingestion (image, audio, 20 GB+ video, PDF/Office) streaming raw bytes into PostgreSQL 18 Chunked Blob CAS (Rule D14b) and indexing time/region-coded KBSection rows + Neo4j/PG graph projections."
+      errors: ["GovernedWriteRejected", "AuthzError", "BlobTooLargeError", "StoreUnavailable"]
+    - name: "blob_put"
+      type: "async function"
+      signature: "async def blob_put(ctx: ActorContext, *, file_path: Path | None = None, data: bytes | None = None, content_type: str = 'application/octet-stream', scope: str = 'project', metadata: Mapping[str, Any] | None = None) -> dict[str, Any]"
+      description: "Governed content-addressable blob write into kb_blobs / kb_blob_chunks(_large)."
+      errors: ["AuthzError", "BlobTooLargeError", "StoreUnavailable"]
+    - name: "blob_head"
+      type: "async function"
+      signature: "async def blob_head(ctx: ActorContext, *, sha256: str, scope: str = 'project') -> dict[str, Any] | None"
+      description: "Tenant-scoped manifest + chunk completeness inspection for a SHA-256 blob."
+      errors: ["AuthzError", "StoreUnavailable"]
+    - name: "blob_get"
+      type: "async function"
+      signature: "async def blob_get(ctx: ActorContext, *, sha256: str, scope: str = 'project') -> bytes"
+      description: "Tenant-scoped content-addressable blob read (bounded bytes or streamed via StoragePort.get_stream)."
+      errors: ["AuthzError", "BlobNotFoundError", "BlobTruncatedError", "BlobIntegrityError", "StoreUnavailable"]
     - name: "memory_ingest_event"
       type: "async function"
       signature: "async def memory_ingest_event(ctx: ActorContext, event_data: Mapping[str, Any] | ExperienceEvent) -> dict[str, Any]"

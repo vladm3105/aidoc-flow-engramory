@@ -64,6 +64,10 @@ interfaces:
     - { name: "memory ingest-event", maps_to: "AccessSurface.memory_ingest_event", notes: "--event-json or --event-file; validates ExperienceEvent and persists L1 episode" }
     - { name: "memory learning-health", maps_to: "AccessSurface.memory_learning_health", notes: "--project-id, --limit; computes repeat_findings_rate, calibration_delta, and mean_effectiveness_score" }
     - { name: "profile get", maps_to: "AccessSurface.agent_profile_get", notes: "Caller's own L3 profile; default profile on fresh store; JSON result {agent_id, display_name, standing_preferences}" }
+    - { name: "knowledge search", maps_to: "AccessSurface.knowledge_search (alias: kb search)", notes: "query, --limit, --scope, --modality, --expand-graph, --graph-depth; 3-leg hybrid RRF + GraphRAG expansion" }
+    - { name: "knowledge ingest-media", maps_to: "AccessSurface.knowledge_ingest_media (alias: kb ingest-media)", notes: "path, --evidence-ref, --scope, --no-embed, --no-graph; streams media into PostgreSQL 18 Chunked Blob CAS and indexes multimodal sections" }
+    - { name: "knowledge blob-stat", maps_to: "AccessSurface.blob_head (alias: kb blob-stat)", notes: "sha256, --scope; inspects kb_blobs manifest and chunk completeness" }
+    - { name: "knowledge blob-get", maps_to: "AccessSurface.blob_get / StoragePort.get_stream (alias: kb blob-get)", notes: "sha256, --out PATH, --scope; streams 4 MiB chunks with SHA-256 verification" }
     - { name: "status", maps_to: "Repository.count_* (OPS COMMAND)", notes: "JSON result {store, episodes, kb_sections} for the caller's tenant" }
 
 data_models:

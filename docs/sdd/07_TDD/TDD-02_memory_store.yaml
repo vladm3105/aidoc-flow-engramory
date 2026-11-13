@@ -44,6 +44,15 @@ test_cases:
         inputs: [{ name: "episode", type: "EpisodeIn", value: "same content+scope x3" }]
         expected_output: { type: "int", value: "1 stored" }
         edge_cases: [{ condition: "different scope same content", expected: "2 stored" }]
+      - id: "TDD.02.04.a300"
+        name: "KBSection multimodal provenance and KBBlob immutability"
+        spec_ref: "@spec: SPEC-02"
+        target: "KBSection"
+        test_file: "tests/test_storage_pg_blob_cas.py"
+        test_function: "test_kb_section_multimodal_invariants"
+        inputs: [{ name: "section", type: "KBSection", value: "modality='video', blob_sha256=64-hex, media_metadata={...}" }]
+        expected_output: { type: "KBSection", value: "frozen mapping media_metadata and validated modality" }
+        edge_cases: [{ condition: "invalid modality", expected: "ValidationError" }]
   integration_tests:
     cases:
       - id: "TDD.02.04.b100"

@@ -8,15 +8,11 @@ from __future__ import annotations
 
 import logging
 
+from engramory.core.kb_graph import entity_labels_for
 from engramory.core.repository import Repository
 from engramory.ports import GraphPort
 
 logger = logging.getLogger(__name__)
-
-
-_SDD_LAYERS = frozenset(
-    {"BRD", "PRD", "EARS", "BDD", "ADR", "SPEC", "TDD", "TASK", "IPLAN", "CHG", "EVAL"}
-)
 
 
 async def project_entities(
@@ -35,9 +31,7 @@ async def project_entities(
             "tenant_id": entity.tenant_id,
             **entity.properties,
         }
-        labels = [entity.entity_type]
-        if entity.entity_type in _SDD_LAYERS or entity.properties.get("sdd"):
-            labels.append("SDD")
+        labels = entity_labels_for(entity)
         await graph.upsert_node(
             id=entity.id,
             labels=labels,

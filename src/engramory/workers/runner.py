@@ -22,7 +22,7 @@ from engramory.access.poisoning_guard import MemoryPoisoningError
 from engramory.core.experience import ExperienceEvent
 from engramory.core.models import ValidationError
 from engramory.core.repository import Repository
-from engramory.ports import EventsPort, LLMPort, VectorPort
+from engramory.ports import EventsPort, LLMPort, StoragePort, VectorPort
 from engramory.workers.distillation import reflect
 
 logger = logging.getLogger("engramory.worker")
@@ -42,6 +42,7 @@ async def run_worker_loop(
     llm: LLMPort | None = None,
     vector: VectorPort | None = None,
     events: EventsPort | None = None,
+    storage: StoragePort | None = None,
     events_topic: str = DEFAULT_EVENTS_TOPIC,
     interval_sec: float | None = None,
     tenant_id: str | None = None,
@@ -73,6 +74,17 @@ async def run_worker_loop(
         interval,
         tenant_id or "all-active",
     )
+
+    if storage is not None and hasattr(storage, "reconcile_truncated_blobs"):
+        try:
+            reconciled = await storage.reconcile_truncated_blobs(tenant_id=tenant_id)
+            if reconciled:
+                logger.warning(
+                    "Startup CAS reconciliation marked %d truncated UNLOGGED blob(s) as failed",
+                    reconciled,
+                )
+        except Exception as rec_exc:
+            logger.warning("Startup CAS blob reconciliation skipped: %s", rec_exc)
 
     try:
         while not shutdown_event.is_set():
@@ -125,6 +137,13 @@ async def run_worker_loop(
                         time.monotonic() - start_time,
                     )
 
+                # 1b. Periodic CAS orphan chunk garbage collection (GAP-06)
+                if storage is not None and hasattr(storage, "gc_orphan_chunks"):
+                    try:
+                        await storage.gc_orphan_chunks(older_than_seconds=7200)
+                    except Exception as gc_exc:
+                        logger.debug("CAS orphan chunk GC skipped: %s", gc_exc)
+
                 # 2. Touch heartbeat file for Docker HEALTHCHECK
                 try:
                     heartbeat_path.write_text(f"{time.time()}\n", encoding="utf-8")
@@ -140,13 +159,14 @@ async def run_worker_loop(
             except TimeoutError:
                 pass
     finally:
-        if events is not None and hasattr(events, "close"):
-            try:
-                res = events.close()
-                if inspect.isawaitable(res):
-                    await res
-            except Exception as exc:  # noqa: BLE001  # reason: cleanup must not mask worker exit
-                logger.debug("Events adapter close error ignored: %s", exc)
+        for adapter in (events, storage):
+            if adapter is not None and hasattr(adapter, "close"):
+                try:
+                    res = adapter.close()
+                    if inspect.isawaitable(res):
+                        await res
+                except Exception as exc:  # noqa: BLE001  # reason: cleanup must not mask worker exit
+                    logger.debug("Worker adapter close error ignored: %s", exc)
 
     logger.info("Engramory worker shutdown complete.")
 
@@ -157,6 +177,7 @@ def start_daemon(
     llm: LLMPort | None = None,
     vector: VectorPort | None = None,
     events: EventsPort | None = None,
+    storage: StoragePort | None = None,
     interval_sec: float | None = None,
     tenant_id: str | None = None,
 ) -> int:
@@ -173,6 +194,7 @@ def start_daemon(
                 llm=llm,
                 vector=vector,
                 events=events,
+                storage=storage,
                 interval_sec=interval_sec,
                 tenant_id=tenant_id,
             )

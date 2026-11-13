@@ -1,0 +1,216 @@
+# =============================================================================
+#  CHG-008: Multimodal RAG, GraphRAG (PostgreSQL 18 + Neo4j), and 20 GB+ Blob CAS
+# =============================================================================
+#  Flow: SDD2C · Level: C3 · Entry gate: GATE-CODE
+#  Semver: minor (migration 0010, PgBlobStorageAdapter, Multimodal extraction, 3-leg RRF + GraphRAG)
+#  Plan: plans/PLAN-023_multimodal-rag-graphrag-and-postgres-blob-cas-implementation.md
+# =============================================================================
+
+id: CHG-008
+doc_id: CHG-008
+title: "Implement Multimodal RAG, Dual-Engine GraphRAG (PostgreSQL 18 + Neo4j), 3-Leg Hybrid RRF, and 20 GB+ PostgreSQL Chunked Blob CAS"
+
+metadata:
+  document_type: "chg-document"
+  layer: 9
+  purpose: governance
+  last_updated: "2026-11-12"
+  framework_version: "0.96.4"
+  change_level:
+    value: C3
+  change_source:
+    value: direct
+
+document_control:
+  project_name: "aidoc-flow-engramory"
+  document_id: "CHG-008"
+  version: "1.0"
+  status: Completed
+  author: "AI coding agent + owner"
+  created_date: "2026-11-12"
+  last_updated: "2026-11-12"
+  framework_version: "0.96.4"
+  revision_history:
+    - version: "1.0"
+      date: "2026-11-12"
+      author: "AI coding agent"
+      description: "C3 change request implementing PLAN-023 (Multimodal RAG, GraphRAG, and PostgreSQL 18 20 GB+ Chunked Blob CAS)"
+
+change_control:
+  chg_id: "CHG-008"
+  status: Completed
+  change_level: C3
+  change_source: direct
+  entry_gate: GATE-CODE
+  semver_impact: minor
+  version_action: none
+  author: "AI coding agent + owner"
+  date_proposed: "2026-11-12T19:00:00Z"
+  date_approved: "2026-11-12T19:14:00Z"
+  date_implemented: "2026-11-12T19:30:00Z"
+  supersedes: []
+  decision: "DEC-CHG-008"
+  decision_title: "Adopt Derive-to-Text + Time/Region-Coded kb_sections + 3-Leg Hybrid RRF + Dual-Engine GraphRAG + 4 MiB Chunked COPY BINARY CAS"
+  decision_rationale: "Implements Rule D14a/D14b and Decision D17 from platform-technology_stack/05-database-stack.md with zero external S3 daemon overhead and bounded <=16 MiB Python streaming memory."
+
+change_description:
+  summary: "Implement PLAN-023 phases 1-7: migration 0010 (kb_blobs, kb_blob_chunks, kb_blob_chunks_large, kb_sections.ts_lex and multimodal columns), PgBlobStorageAdapter & LocalFsStorageAdapter, LLMPort.describe_image & transcribe_audio, ImageExtractor & VideoAudioExtractor, Dual-Engine GraphRAG (Neo4j primary + PostgreSQL CTE find_neighbors fallback), 3-leg Hybrid RRF search_kb_sections, and governed AccessSurface/MCP/CLI tools."
+  why: "Enable multimodal knowledge ingestion (text, PDF/Office with embedded figures, images, audio, and 20 GB+ video) and hybrid lexical/vector/graph retrieval in platform-engramory."
+  trigger: "User prompt: implement the plan now (PLAN-023)."
+  emergency_exclusion: "Not emergency: planned SDD2C feature implementation."
+  scope:
+    in:
+      - "db/migrations/0010_multimodal_rag_and_blob_cas.sql"
+      - "docker-compose.yml"
+      - "src/engramory/ports/storage.py"
+      - "src/engramory/ports/llm.py"
+      - "src/engramory/core/models.py"
+      - "src/engramory/core/repository.py"
+      - "src/engramory/adapters/dev/storage_local.py"
+      - "src/engramory/adapters/dev/storage_pg.py"
+      - "src/engramory/adapters/dev/llm_litellm.py"
+      - "src/engramory/adapters/factory.py"
+      - "src/engramory/core/parsers/base.py"
+      - "src/engramory/core/parsers/detector.py"
+      - "src/engramory/core/extraction/types.py"
+      - "src/engramory/core/extraction/docling.py"
+      - "src/engramory/core/extraction/multimodal.py"
+      - "src/engramory/core/extraction/router.py"
+      - "src/engramory/core/kb_graph.py"
+      - "src/engramory/core/knowledge.py"
+      - "src/engramory/core/git_sync.py"
+      - "src/engramory/workers/graph_projection.py"
+      - "src/engramory/workers/runner.py"
+      - "src/engramory/access/authz.py"
+      - "src/engramory/access/surface.py"
+      - "src/engramory/mcp/server.py"
+      - "src/engramory/cli.py"
+      - "docs/MULTIMODAL_AND_POSTGRES_BLOB_STORAGE.md"
+      - "docs/sdd/"
+      - "tests/"
+    out:
+      - "Cloud S3/GCS/Azure adapters (deferred to BRD-02)"
+
+seed_scope:
+  layer: 9
+  affected_documents:
+    - "docs/sdd/06_SPEC/SPEC-01_access_surface.yaml"
+    - "docs/sdd/06_SPEC/SPEC-02_memory_store.yaml"
+    - "docs/sdd/06_SPEC/SPEC-03_retrieval_graph.yaml"
+    - "docs/sdd/06_SPEC/SPEC-06_ports_portability.yaml"
+    - "docs/sdd/06_SPEC/SPEC-07_cli_face.yaml"
+    - "docs/sdd/08_IPLAN/IPLAN-08_multimodal_rag_graphrag.yaml"
+    - "docs/sdd/09_CHG/CHG-008_multimodal_rag_graphrag_and_blob_cas.yaml"
+
+decision:
+  decision_id: "DEC-CHG-008"
+  title: "Adopt Derive-to-Text + Time/Region-Coded kb_sections + 3-Leg Hybrid RRF + Dual-Engine GraphRAG + 4 MiB Chunked COPY BINARY CAS"
+  status: "Ratified"
+  context: "Engramory requires multimodal knowledge ingestion (including 20 GB+ video) and hybrid vector + lexical BM25 + multi-hop graph retrieval without introducing a standalone S3 daemon."
+  choice: "1) Store raw media blobs in PostgreSQL 18 kb_blobs / kb_blob_chunks (LOGGED <=50 MiB) / kb_blob_chunks_large (UNLOGGED >50 MiB to 25 GiB) via 4 MiB COPY BINARY streaming; 2) Derive structured text/transcripts/captions into kb_sections with modality, blob_sha256, blob_uri, media_metadata, and ts_lex GIN index; 3) Execute 3-leg RRF + Neo4j/PG CTE GraphRAG expansion."
+  consequences: "Single-spine transactional governance, <=16 MiB peak Python streaming memory, and full multimodal GraphRAG across MCP and CLI."
+  alternatives_considered:
+    - option: "Inline base64 blobs in kb_sections or deploy standalone MinIO/SeaweedFS"
+      rationale_rejected: "Violates Rule D14a/D14b and Decision D14 (MinIO prohibited; S3 daemon unjustified for internal CAS)."
+
+impact_assessment:
+  affected_layers:
+    - layer: "SPEC"
+      artifacts:
+        - "docs/sdd/06_SPEC/SPEC-01_access_surface.yaml"
+        - "docs/sdd/06_SPEC/SPEC-02_memory_store.yaml"
+        - "docs/sdd/06_SPEC/SPEC-03_retrieval_graph.yaml"
+        - "docs/sdd/06_SPEC/SPEC-06_ports_portability.yaml"
+        - "docs/sdd/06_SPEC/SPEC-07_cli_face.yaml"
+      impact: "Extends Layer 06 specifications for KBBlob, multimodal KBSection, StoragePort streaming, LLMPort vision/audio, and 3-leg RRF + GraphRAG."
+    - layer: "CODE"
+      artifacts:
+        - "db/migrations/0010_multimodal_rag_and_blob_cas.sql"
+        - "src/engramory/adapters/dev/storage_pg.py"
+        - "src/engramory/core/extraction/multimodal.py"
+        - "src/engramory/core/repository.py"
+        - "src/engramory/access/surface.py"
+      impact: "Implements all 7 phases of PLAN-023."
+  cascade_direction: "downward"
+  risk_level: "Medium"
+
+implementation:
+  iplan_ref: "@iplan: IPLAN-08"
+  sdd_lifecycle: []
+  steps:
+    - step: "Update Layer 06 SPEC, Layer 07 TDD, Layer 08 IPLAN-08, and Layer 09 CHG-008"
+      phase: "sdd_update"
+      artifact: "docs/sdd/09_CHG/CHG-008_multimodal_rag_graphrag_and_blob_cas.yaml"
+      status: "Completed"
+    - step: "Implement migration 0010, StoragePort streaming adapters, multimodal extraction, 3-leg RRF, and Dual-Engine GraphRAG"
+      phase: "implementation"
+      artifact: "plans/PLAN-023_multimodal-rag-graphrag-and-postgres-blob-cas-implementation.md"
+      status: "Completed"
+  artifacts_modified: []
+
+verification:
+  checks:
+    - check: "Verified planning deterministic gate (check_plan.py)"
+      result: "Pass"
+      method: "python3 check_plan.py plans/PLAN-023_multimodal-rag-graphrag-and-postgres-blob-cas-implementation.md"
+    - check: "Full unit, integration, conformance, security, ruff, and mypy suite"
+      result: "Pass"
+      method: "task check && task ci"
+
+gate_approval:
+  gate: "GATE-CODE"
+  approved: true
+  approver: "vladm3105"
+  role: "Owner"
+  approval_date: "2026-11-12"
+  evidence: "User explicitly requested implementation of PLAN-023"
+  approved_scope_files:
+    - "db/migrations/0010_multimodal_rag_and_blob_cas.sql"
+    - "src/engramory/ports/storage.py"
+    - "src/engramory/adapters/dev/storage_pg.py"
+    - "src/engramory/core/extraction/multimodal.py"
+    - "src/engramory/core/repository.py"
+    - "src/engramory/access/surface.py"
+  conditions: []
+
+rollback_plan:
+  strategy: "revert-commit"
+  steps:
+    - "Revert feature/plan-023-multimodal-rag-graphrag-impl merge commit on dev"
+  estimated_effort: "5m"
+
+emergency_change:
+  emergency_id: null
+  incident_severity: null
+  fix_deployed: null
+  post_mortem_due: null
+  post_mortem_completed: false
+  post_hoc_gate: null
+
+glossary:
+  terms:
+    - term: "PostgreSQL Chunked Blob CAS"
+      definition: "Content-addressable storage in PostgreSQL 18 splitting binaries >256 KiB into 4 MiB chunks in tablespace ts_blob_cold (Rule D14a/D14b)."
+
+creation_checklist:
+  checks:
+    - id: 1
+      check: "Read every file you reference"
+      status: "Pass"
+    - id: 13
+      check: "SDD-first implementation order"
+      status: "Pass"
+    - id: 14
+      check: "CHG scope: governance, not implementation plan"
+      status: "Pass"
+    - id: 15
+      check: "Mandatory formal decision block"
+      status: "Pass"
+
+validation:
+  document_structure:
+    - id_match: "Verified CHG-008 matches filename"
+  decision_block:
+    - decision_present: "Verified DEC-CHG-008 present"
+  scope:
+    - governance_only: "Verified governance record completeness"

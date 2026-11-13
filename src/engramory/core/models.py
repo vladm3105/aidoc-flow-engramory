@@ -24,10 +24,37 @@ from datetime import date, datetime
 from types import MappingProxyType
 from typing import Any
 
+from engramory.ports.storage import KBBlob
+
 MEMORY_TYPES = frozenset({"semantic", "episodic", "procedural"})
 MEMORY_STATUSES = frozenset({"active", "advisory", "quarantined", "superseded"})
 SOURCE_TRUST_LEVELS = frozenset({"human", "tool", "agent"})
 SCOPES = frozenset({"agent", "project", "domain", "space"})  # ladder per ADR-07
+KB_SECTION_MODALITIES = frozenset(
+    {"text", "markdown", "pdf", "document", "image", "audio", "video"}
+)
+
+__all__ = [
+    "AUTONOMY_TIERS",
+    "DOC_STATUSES",
+    " KB_SECTION_MODALITIES".strip(),
+    "MEMORY_STATUSES",
+    "MEMORY_TYPES",
+    "RUNBOOK_MODES",
+    "SCOPES",
+    "SOURCE_TRUST_LEVELS",
+    "AgentProfile",
+    "Episode",
+    "GraphEntity",
+    "GraphRelation",
+    "KBBlob",
+    "KBDocument",
+    "KBRunbookStep",
+    "KBSection",
+    "Memory",
+    "ValidationError",
+    "content_hash",
+]
 # The schema deliberately has no CHECK on scope (extended additively, see 0002);
 # the model enforces the current ADR-07 ladder — extend this set with the schema.
 
@@ -138,7 +165,7 @@ class Memory:
 
 @dataclass(frozen=True, slots=True)
 class KBSection:
-    """Knowledge-core section (L0) — kb_sections table (migration 0003)."""
+    """Knowledge-core section (L0) — kb_sections table (migrations 0003 & 0010)."""
 
     doc_id: str
     citation: str
@@ -149,6 +176,10 @@ class KBSection:
     scope: str = "project"
     version: int = 1
     id: str | None = None  # None until persisted
+    modality: str = "text"
+    blob_sha256: str | None = None
+    blob_uri: str | None = None
+    media_metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         _require(bool(self.doc_id), "KBSection.doc_id is required")
@@ -157,6 +188,18 @@ class KBSection:
         _require(bool(self.tenant_id), "KBSection.tenant_id is required")
         _require(self.scope in SCOPES, f"KBSection.scope must be one of {sorted(SCOPES)}")
         _require(self.version >= 1, "KBSection.version starts at 1")
+        _require(
+            self.modality in KB_SECTION_MODALITIES,
+            f"KBSection.modality must be one of {sorted(KB_SECTION_MODALITIES)}",
+        )
+        if self.blob_sha256 is not None:
+            _require(
+                len(self.blob_sha256) == 64
+                and all(c in "0123456789abcdefABCDEF" for c in self.blob_sha256),
+                "KBSection.blob_sha256 must be a 64-character hex SHA-256 digest",
+            )
+            object.__setattr__(self, "blob_sha256", self.blob_sha256.lower())
+        object.__setattr__(self, "media_metadata", _frozen_mapping(self.media_metadata))
 
 
 @dataclass(frozen=True, slots=True)

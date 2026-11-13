@@ -188,7 +188,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
 
 
 async def _close_adapters(adapters: Any) -> None:
-    for attr in ("graph", "events"):
+    for attr in ("graph", "events", "storage"):
         adapter = getattr(adapters, attr, None)
         if adapter is not None and hasattr(adapter, "close"):
             try:
@@ -210,6 +210,7 @@ def _run_with_surface(
         Repository(config.dsn),
         graph=adapters.graph,
         llm=getattr(adapters, "llm", None),
+        storage=getattr(adapters, "storage", None),
     )
 
     async def _runner() -> dict[str, Any]:
@@ -345,7 +346,13 @@ def _cmd_knowledge_ingest(args: argparse.Namespace) -> int:
     from engramory.core.knowledge import KnowledgeCore
 
     router = SmartExtractionRouter(enable_docling=bool(getattr(args, "docling", False)))
-    core = KnowledgeCore(repo, llm=adapters.llm, router=router)
+    core = KnowledgeCore(
+        repo,
+        llm=adapters.llm,
+        storage=getattr(adapters, "storage", None),
+        graph=adapters.graph,
+        router=router,
+    )
 
     async def run_batch() -> dict[str, Any]:
         try:
@@ -398,6 +405,8 @@ def _cmd_knowledge_sync_git(args: argparse.Namespace) -> int:
                 project_id=config.ctx.project_id,
                 scope=getattr(args, "scope", "project"),
                 llm=adapters.llm,
+                storage=getattr(adapters, "storage", None),
+                graph=adapters.graph,
             )
             return {
                 "success": sync_result.success,
@@ -431,17 +440,43 @@ def _cmd_knowledge_search(args: argparse.Namespace) -> int:
     repo = Repository(config.dsn)
     from engramory.core.knowledge import KnowledgeCore
 
-    core = KnowledgeCore(repo, llm=adapters.llm)
+    core = KnowledgeCore(
+        repo,
+        llm=adapters.llm,
+        storage=getattr(adapters, "storage", None),
+        graph=adapters.graph,
+    )
+    modality = getattr(args, "modality", None)
+    expand_graph = bool(getattr(args, "expand_graph", False))
+    graph_depth = int(getattr(args, "graph_depth", 1))
 
     async def run_search() -> dict[str, Any]:
         try:
-            sections = await core.search_sections(
-                args.query,
-                tenant_id=config.ctx.tenant_id,
-                project_id=config.ctx.project_id,
-                scope=getattr(args, "scope", None),
-                limit=getattr(args, "limit", 5),
-            )
+            if expand_graph:
+                surface = AccessSurface(
+                    repo,
+                    graph=adapters.graph,
+                    llm=adapters.llm,
+                    storage=getattr(adapters, "storage", None),
+                )
+                sections = await surface.knowledge_search(
+                    config.ctx,
+                    args.query,
+                    scope=getattr(args, "scope", None),
+                    modality=modality,
+                    expand_graph=True,
+                    graph_depth=graph_depth,
+                    limit=getattr(args, "limit", 5),
+                )
+            else:
+                sections = await core.search_sections(
+                    args.query,
+                    tenant_id=config.ctx.tenant_id,
+                    project_id=config.ctx.project_id,
+                    scope=getattr(args, "scope", None),
+                    modality=modality,
+                    limit=getattr(args, "limit", 5),
+                )
             return {
                 "query": args.query,
                 "count": len(sections),
@@ -452,6 +487,10 @@ def _cmd_knowledge_search(args: argparse.Namespace) -> int:
                         "citation": s.citation,
                         "scope": s.scope,
                         "version": s.version,
+                        "modality": s.modality,
+                        "blob_sha256": s.blob_sha256,
+                        "blob_uri": s.blob_uri,
+                        "media_metadata": dict(s.media_metadata),
                         "text": s.text[:200] + ("..." if len(s.text) > 200 else ""),
                     }
                     for s in sections
@@ -465,6 +504,100 @@ def _cmd_knowledge_search(args: argparse.Namespace) -> int:
         args.json,
         payload,
         f"found {payload['count']} section(s) for query: {args.query!r}",
+    )
+    return 0
+
+
+def _cmd_knowledge_ingest_media(args: argparse.Namespace) -> int:
+    async def op(surface: AccessSurface, ctx: ActorContext) -> dict[str, Any]:
+        return await surface.knowledge_ingest_media(
+            ctx,
+            file_path=args.path,
+            evidence_ref=args.evidence_ref,
+            scope=getattr(args, "scope", "project"),
+            embed=not bool(getattr(args, "no_embed", False)),
+            project_graph=not bool(getattr(args, "no_graph", False)),
+        )
+
+    return _run_with_surface(
+        args,
+        op,
+        lambda p: (
+            f"ingested media {p['path']} (modality={p.get('modality')}, "
+            f"sections={len(p.get('section_ids', []))}, blob={p.get('blob_uri')})"
+        ),
+    )
+
+
+def _cmd_knowledge_blob_stat(args: argparse.Namespace) -> int:
+    async def op(surface: AccessSurface, ctx: ActorContext) -> dict[str, Any]:
+        res = await surface.blob_head(
+            ctx,
+            sha256=args.sha256,
+            scope=getattr(args, "scope", "project"),
+        )
+        return {"found": res is not None, "blob": res}
+
+    return _run_with_surface(
+        args,
+        op,
+        lambda p: (
+            f"blob {args.sha256}: status={p['blob']['status']} size={p['blob']['byte_size']} "
+            f"tier={p['blob']['storage_tier']} chunks={p['blob']['chunk_count']}"
+            if p["found"] and p["blob"]
+            else f"blob {args.sha256}: not found"
+        ),
+    )
+
+
+def _cmd_knowledge_blob_get(args: argparse.Namespace) -> int:
+    from engramory.access.authz import TargetScope
+    from engramory.core.docs_tools import resolve_confined_repo_path
+
+    config = _load_config(getattr(args, "config", None))
+    adapters = dev_adapters(config.dsn)
+    repo = Repository(config.dsn)
+    surface = AccessSurface(
+        repo,
+        graph=adapters.graph,
+        llm=getattr(adapters, "llm", None),
+        storage=getattr(adapters, "storage", None),
+    )
+    out_path = resolve_confined_repo_path(args.out)
+
+    async def run_download() -> dict[str, Any]:
+        try:
+            await surface._decide(
+                config.ctx,
+                "blob_get",
+                TargetScope(
+                    tenant_id=config.ctx.tenant_id, scope=getattr(args, "scope", "project")
+                ),
+            )
+            if adapters.storage is None:
+                raise RuntimeError("StoragePort adapter is not configured")
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            total_written = 0
+            with out_path.open("wb") as fh:
+                async for chunk in adapters.storage.get_stream(
+                    key=args.sha256,
+                    tenant_id=config.ctx.tenant_id,
+                ):
+                    fh.write(chunk)
+                    total_written += len(chunk)
+            return {
+                "sha256": args.sha256,
+                "out": str(out_path),
+                "bytes_written": total_written,
+            }
+        finally:
+            await _close_adapters(adapters)
+
+    payload = asyncio.run(run_download())
+    _emit(
+        args.json,
+        payload,
+        f"wrote {payload['bytes_written']} bytes to {payload['out']}",
     )
     return 0
 
@@ -483,6 +616,7 @@ def _cmd_worker_start(args: argparse.Namespace) -> int:
             llm=adapters.llm,
             vector=adapters.vector,
             events=adapters.events,
+            storage=getattr(adapters, "storage", None),
             interval_sec=interval,
             tenant_id=tenant_id,
         )
@@ -799,6 +933,7 @@ def _cmd_mcp_serve(args: argparse.Namespace) -> int:
         repo,
         graph=adapters.graph,
         llm=getattr(adapters, "llm", None),
+        storage=getattr(adapters, "storage", None),
     )
 
     async def do_ingest(
@@ -959,7 +1094,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_pget = prof_sub.add_parser("get", help="load the caller's own profile")
     p_pget.set_defaults(func=_cmd_profile_get)
 
-    p_knowledge = sub.add_parser("knowledge", help="L0 knowledge tools")
+    p_knowledge = sub.add_parser("knowledge", aliases=["kb"], help="L0 knowledge tools")
     kb_sub = p_knowledge.add_subparsers(dest="knowledge_command", required=True)
     p_kb_ingest = kb_sub.add_parser("ingest", help="governed knowledge section/file ingest")
     p_kb_ingest.add_argument("path", nargs="?", default=None, help="path to file or directory")
@@ -975,6 +1110,29 @@ def _build_parser() -> argparse.ArgumentParser:
     p_kb_ingest.add_argument("--docling", action="store_true", help="enable Docling extraction")
     p_kb_ingest.set_defaults(func=_cmd_knowledge_ingest)
 
+    p_kb_media = kb_sub.add_parser(
+        "ingest-media", help="governed multimodal file ingest into CAS + kb_sections + graph"
+    )
+    p_kb_media.add_argument("path", help="path to media file (image, audio, video, pdf)")
+    p_kb_media.add_argument(
+        "--evidence-ref", required=True, help="approved evidence reference (ADR-06)"
+    )
+    p_kb_media.add_argument("--scope", default="project")
+    p_kb_media.add_argument("--no-embed", action="store_true", help="skip vector embedding")
+    p_kb_media.add_argument("--no-graph", action="store_true", help="skip graph projection")
+    p_kb_media.set_defaults(func=_cmd_knowledge_ingest_media)
+
+    p_kb_bstat = kb_sub.add_parser("blob-stat", help="inspect PostgreSQL CAS blob manifest")
+    p_kb_bstat.add_argument("sha256", help="64-character hex SHA-256 content address")
+    p_kb_bstat.add_argument("--scope", default="project")
+    p_kb_bstat.set_defaults(func=_cmd_knowledge_blob_stat)
+
+    p_kb_bget = kb_sub.add_parser("blob-get", help="stream PostgreSQL CAS blob to local file")
+    p_kb_bget.add_argument("sha256", help="64-character hex SHA-256 content address")
+    p_kb_bget.add_argument("--out", required=True, help="confined output file path")
+    p_kb_bget.add_argument("--scope", default="project")
+    p_kb_bget.set_defaults(func=_cmd_knowledge_blob_get)
+
     p_kb_sync = kb_sub.add_parser("sync-git", help="commit-differential incremental git sync")
     p_kb_sync.add_argument("--repo-path", default=".", help="path to git repository")
     p_kb_sync.add_argument("--base-sha", default=None, help="base commit SHA for diff")
@@ -986,6 +1144,23 @@ def _build_parser() -> argparse.ArgumentParser:
     p_kb_search.add_argument("query", help="query string")
     p_kb_search.add_argument("--limit", type=int, default=5, help="max results to return")
     p_kb_search.add_argument("--scope", default=None, help="filter by scope")
+    p_kb_search.add_argument(
+        "--modality",
+        default=None,
+        choices=["text", "markdown", "pdf", "document", "image", "audio", "video"],
+        help="filter by modality",
+    )
+    p_kb_search.add_argument(
+        "--expand-graph",
+        action="store_true",
+        help="attach connected GraphRAG neighborhood context",
+    )
+    p_kb_search.add_argument(
+        "--graph-depth",
+        type=int,
+        default=1,
+        help="GraphRAG traversal depth (1..6)",
+    )
     p_kb_search.set_defaults(func=_cmd_knowledge_search)
 
     p_worker = sub.add_parser("worker", help="background worker daemon")

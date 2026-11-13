@@ -32,6 +32,15 @@ test_cases:
         inputs: [{ name: "module_tree", type: "package", value: "engramory.core" }]
         expected_output: { type: "assert", value: "no imports from adapters/vendor packages" }
         edge_cases: [{ condition: "new module added", expected: "still no vendor imports" }]
+      - id: "TDD.06.04.a200"
+        name: "PgBlobStorageAdapter and LocalFsStorageAdapter 4 MiB streaming CAS conformance"
+        spec_ref: "@spec: SPEC-06"
+        target: "StoragePort"
+        test_file: "tests/test_storage_pg_blob_cas.py"
+        test_function: "test_pg_blob_storage_adapter_streaming_and_crash_detection"
+        inputs: [{ name: "stream", type: "AsyncIterator[bytes]", value: "4 MiB chunks across LOGGED and UNLOGGED tiers" }]
+        expected_output: { type: "KBBlob", value: "verified sha256, chunk_count, and BlobTruncatedError on crash truncation" }
+        edge_cases: [{ condition: "blob > 25 GiB", expected: "BlobTooLargeError" }]
   integration_tests:
     cases:
       - id: "TDD.06.04.b100"

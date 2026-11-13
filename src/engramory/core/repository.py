@@ -70,7 +70,10 @@ _MEMORY_COLUMNS = (
     "source_trust, valid_from, valid_to, supersedes"
 )  # explicit list: never drag embedding/ts_lex over the wire on reads
 
-_KB_SECTION_COLUMNS = "id, tenant_id, project_id, domain_id, scope, doc_id, citation, text, version"
+_KB_SECTION_COLUMNS = (
+    "id, tenant_id, project_id, domain_id, scope, doc_id, citation, text, version, "
+    "modality, blob_sha256, blob_uri, media_metadata"
+)
 
 
 class StoreUnavailable(RuntimeError):
@@ -506,15 +509,20 @@ class Repository:
                     """
                     INSERT INTO kb_sections
                         (tenant_id, project_id, domain_id, scope, doc_id, citation,
-                         text, version)
+                         text, version, modality, blob_sha256, blob_uri, media_metadata)
                     VALUES (%(tenant_id)s, %(project_id)s, %(domain_id)s, %(scope)s,
-                            %(doc_id)s, %(citation)s, %(text)s, %(version)s)
+                            %(doc_id)s, %(citation)s, %(text)s, %(version)s,
+                            %(modality)s, %(blob_sha256)s, %(blob_uri)s, %(media_metadata)s::jsonb)
                     ON CONFLICT (tenant_id, doc_id, citation, version)
                         DO UPDATE SET
                             project_id = COALESCE(EXCLUDED.project_id, kb_sections.project_id),
                             domain_id = COALESCE(EXCLUDED.domain_id, kb_sections.domain_id),
                             scope = EXCLUDED.scope,
-                            text = EXCLUDED.text
+                            text = EXCLUDED.text,
+                            modality = EXCLUDED.modality,
+                            blob_sha256 = COALESCE(EXCLUDED.blob_sha256, kb_sections.blob_sha256),
+                            blob_uri = COALESCE(EXCLUDED.blob_uri, kb_sections.blob_uri),
+                            media_metadata = EXCLUDED.media_metadata
                         WHERE kb_sections.project_id IS NULL
                            OR kb_sections.project_id = EXCLUDED.project_id
                     RETURNING id
@@ -528,6 +536,10 @@ class Repository:
                         "citation": section.citation,
                         "text": section.text,
                         "version": section.version,
+                        "modality": section.modality,
+                        "blob_sha256": section.blob_sha256,
+                        "blob_uri": section.blob_uri,
+                        "media_metadata": json.dumps(dict(section.media_metadata)),
                     },
                 )
             ).fetchone()
@@ -595,13 +607,17 @@ class Repository:
                     "citations": [sec.citation for sec in chunk],
                     "texts": [sec.text for sec in chunk],
                     "versions": [sec.version for sec in chunk],
+                    "modalities": [sec.modality for sec in chunk],
+                    "blob_sha256s": [sec.blob_sha256 for sec in chunk],
+                    "blob_uris": [sec.blob_uri for sec in chunk],
+                    "media_metadatas": [json.dumps(dict(sec.media_metadata)) for sec in chunk],
                 }
                 rows = await (
                     await conn.execute(
                         """
                         INSERT INTO kb_sections
                             (tenant_id, project_id, domain_id, scope, doc_id, citation,
-                             text, version)
+                             text, version, modality, blob_sha256, blob_uri, media_metadata)
                         SELECT * FROM UNNEST(
                             %(tenants)s::text[],
                             %(projects)s::text[],
@@ -610,7 +626,11 @@ class Repository:
                             %(doc_ids)s::text[],
                             %(citations)s::text[],
                             %(texts)s::text[],
-                            %(versions)s::int[]
+                            %(versions)s::int[],
+                            %(modalities)s::text[],
+                            %(blob_sha256s)s::text[],
+                            %(blob_uris)s::text[],
+                            %(media_metadatas)s::jsonb[]
                         )
                         ON CONFLICT (tenant_id, doc_id, citation, version)
                             DO UPDATE SET
@@ -621,7 +641,15 @@ class Repository:
                                     EXCLUDED.domain_id, kb_sections.domain_id
                                 ),
                                 scope = EXCLUDED.scope,
-                                text = EXCLUDED.text
+                                text = EXCLUDED.text,
+                                modality = EXCLUDED.modality,
+                                blob_sha256 = COALESCE(
+                                    EXCLUDED.blob_sha256, kb_sections.blob_sha256
+                                ),
+                                blob_uri = COALESCE(
+                                    EXCLUDED.blob_uri, kb_sections.blob_uri
+                                ),
+                                media_metadata = EXCLUDED.media_metadata
                             WHERE kb_sections.project_id IS NULL
                                OR kb_sections.project_id = EXCLUDED.project_id
                         RETURNING id, tenant_id, doc_id, citation, version
@@ -696,8 +724,8 @@ class Repository:
             row = await (
                 await conn.execute(
                     """
-                    SELECT id, tenant_id, project_id, domain_id, scope, doc_id,
-                           citation, text, version
+                    SELECT id, tenant_id, project_id, domain_id, scope, doc_id, citation, text,
+                           version, modality, blob_sha256, blob_uri, media_metadata
                     FROM kb_sections
                     WHERE id = %(id)s AND tenant_id = %(tenant_id)s
                     """,
@@ -727,8 +755,8 @@ class Repository:
             rows = await (
                 await conn.execute(
                     """
-                    SELECT id, tenant_id, project_id, domain_id, scope, doc_id,
-                           citation, text, version
+                    SELECT id, tenant_id, project_id, domain_id, scope, doc_id, citation, text,
+                           version, modality, blob_sha256, blob_uri, media_metadata
                     FROM kb_sections
                     WHERE tenant_id = %(tenant_id)s
                       AND (%(project_id)s::text IS NULL OR project_id = %(project_id)s)
@@ -750,28 +778,141 @@ class Repository:
         domain_id: str | None = None,
         query_vec: Sequence[float] | None = None,
         scope: str | None = None,
+        modality: str | None = None,
+        hybrid_rrf: bool = True,
+        rrf_k: int = 60,
         limit: int = 5,
     ) -> list[KBSection]:
-        """Search knowledge sections by vector similarity (if query_vec is provided)
-        or by text matching (ILIKE fallback). Guarded by tenant and scope hierarchy."""
+        """Search knowledge sections via 3-leg hybrid RRF (vector + ts_lex BM25 + citation)
+        or lexical fallback. Guarded by tenant, scope hierarchy, and optional modality."""
+        candidate_pool = max(limit * 4, 20)
         params: dict[str, Any] = {
             "tenant_id": tenant_id,
             "project_id": project_id,
             "domain_id": domain_id,
             "scope": scope,
+            "modality": modality,
             "limit": limit,
+            "candidate_pool": candidate_pool,
+            "rrf_k": max(1, int(rrf_k)),
+            "query": query,
             "qv": vector_literal(query_vec) if query_vec is not None else None,
             "pattern": f"%{query}%",
         }
         async with self._conn() as conn:
-            if query_vec is not None:
+            if query_vec is not None and hybrid_rrf and query.strip():
                 rows = await (
                     await conn.execute(
                         """
-                        SELECT id, tenant_id, project_id, domain_id, scope, doc_id,
-                               citation, text, version
+                        WITH scoped_kb AS (
+                            SELECT id, tenant_id, project_id, domain_id, scope, doc_id, citation,
+                                   text, version, modality, blob_sha256, blob_uri, media_metadata,
+                                   embedding, ts_lex
+                            FROM kb_sections
+                            WHERE tenant_id = %(tenant_id)s
+                              AND (%(modality)s::text IS NULL OR modality = %(modality)s)
+                              AND (
+                                  (
+                                      %(scope)s::text = 'space'
+                                      AND (
+                                          scope IN ('domain', 'space')
+                                          OR (
+                                              %(project_id)s::text IS NOT NULL
+                                              AND project_id = %(project_id)s
+                                          )
+                                      )
+                                  )
+                                  OR (
+                                      %(scope)s::text = 'domain'
+                                      AND (
+                                          (
+                                              scope = 'domain'
+                                              AND domain_id IS NOT NULL
+                                              AND domain_id = %(domain_id)s
+                                          )
+                                          OR scope = 'space'
+                                          OR (
+                                              %(project_id)s::text IS NOT NULL
+                                              AND project_id = %(project_id)s
+                                          )
+                                      )
+                                  )
+                                  OR (
+                                      coalesce(%(scope)s::text, '') NOT IN ('space', 'domain')
+                                      AND (
+                                          %(project_id)s::text IS NULL
+                                          OR project_id = %(project_id)s
+                                          OR scope = 'space'
+                                      )
+                                      AND (
+                                          %(scope)s::text IS NULL
+                                          OR scope IN (%(scope)s, 'space')
+                                      )
+                                  )
+                              )
+                        ),
+                        vec_leg AS (
+                            SELECT id,
+                                   ROW_NUMBER() OVER (
+                                       ORDER BY embedding <=> %(qv)s::vector ASC, id ASC
+                                   ) AS r_vec
+                            FROM scoped_kb
+                            WHERE embedding IS NOT NULL
+                            ORDER BY embedding <=> %(qv)s::vector ASC, id ASC
+                            LIMIT %(candidate_pool)s
+                        ),
+                        lex_leg AS (
+                            SELECT id,
+                                   ROW_NUMBER() OVER (
+                                       ORDER BY
+                                           ts_rank_cd(
+                                               COALESCE(ts_lex, to_tsvector('english', '')),
+                                               websearch_to_tsquery('english', %(query)s)
+                                           ) DESC,
+                                           (
+                                               CASE
+                                                   WHEN citation ILIKE %(pattern)s THEN 1
+                                                   ELSE 0
+                                               END
+                                           ) DESC,
+                                           version DESC,
+                                           id ASC
+                                   ) AS r_lex
+                            FROM scoped_kb
+                            WHERE (
+                                ts_lex @@ websearch_to_tsquery('english', %(query)s)
+                                OR text ILIKE %(pattern)s
+                                OR citation ILIKE %(pattern)s
+                            )
+                            LIMIT %(candidate_pool)s
+                        ),
+                        rrf_fused AS (
+                            SELECT COALESCE(v.id, l.id) AS sec_id,
+                                   COALESCE(1.0 / (%(rrf_k)s + v.r_vec), 0.0)
+                                   + COALESCE(1.0 / (%(rrf_k)s + l.r_lex), 0.0) AS rrf_score
+                            FROM vec_leg v
+                            FULL OUTER JOIN lex_leg l ON v.id = l.id
+                        )
+                        SELECT s.id, s.tenant_id, s.project_id, s.domain_id, s.scope,
+                               s.doc_id, s.citation, s.text, s.version, s.modality,
+                               s.blob_sha256, s.blob_uri, s.media_metadata
+                        FROM rrf_fused f
+                        JOIN scoped_kb s ON s.id = f.sec_id
+                        ORDER BY f.rrf_score DESC, s.version DESC, s.id ASC
+                        LIMIT %(limit)s
+                        """,
+                        params,
+                    )
+                ).fetchall()
+            elif query_vec is not None:
+                rows = await (
+                    await conn.execute(
+                        """
+                        SELECT id, tenant_id, project_id, domain_id, scope, doc_id, citation, text,
+                               version, modality, blob_sha256, blob_uri, media_metadata
                         FROM kb_sections
                         WHERE tenant_id = %(tenant_id)s
+                          AND (%(modality)s::text IS NULL OR modality = %(modality)s)
                           AND (
                               (
                                   %(scope)s::text = 'space'
@@ -822,10 +963,11 @@ class Repository:
                 rows = await (
                     await conn.execute(
                         """
-                        SELECT id, tenant_id, project_id, domain_id, scope, doc_id,
-                               citation, text, version
+                        SELECT id, tenant_id, project_id, domain_id, scope, doc_id, citation, text,
+                               version, modality, blob_sha256, blob_uri, media_metadata
                         FROM kb_sections
                         WHERE tenant_id = %(tenant_id)s
+                          AND (%(modality)s::text IS NULL OR modality = %(modality)s)
                           AND (
                               (
                                   %(scope)s::text = 'space'
@@ -865,8 +1007,19 @@ class Repository:
                                   )
                               )
                           )
-                          AND text ILIKE %(pattern)s
-                        ORDER BY version DESC, id
+                          AND (
+                              ts_lex @@ websearch_to_tsquery('english', %(query)s)
+                              OR text ILIKE %(pattern)s
+                              OR citation ILIKE %(pattern)s
+                          )
+                        ORDER BY
+                            ts_rank_cd(
+                                COALESCE(ts_lex, to_tsvector('english', '')),
+                                websearch_to_tsquery('english', %(query)s)
+                            ) DESC,
+                            (CASE WHEN citation ILIKE %(pattern)s THEN 1 ELSE 0 END) DESC,
+                            version DESC,
+                            id ASC
                         LIMIT %(limit)s
                         """,
                         params,
@@ -1279,6 +1432,143 @@ class Repository:
                     rel_type=row["rel_type"],
                     properties=row["properties"],
                 )
+                for row in rows
+            ]
+
+    async def find_neighbors(
+        self,
+        *,
+        id: str,
+        tenant_id: str = "default",
+        rel: str | None = None,
+        depth: int = 1,
+        project_id: str | None = None,
+    ) -> Sequence[Mapping[str, Any]]:
+        """Return bidirectional neighbor nodes reachable from `id` within `depth` hops."""
+        safe_depth = max(1, min(depth, 6))
+        prefixed_id = (
+            f"{project_id}:{id}" if project_id and not id.startswith(f"{project_id}:") else id
+        )
+        async with self._conn() as conn:
+            rows = await (
+                await conn.execute(
+                    """
+                    WITH RECURSIVE walk AS (
+                        SELECT
+                            CASE
+                                WHEN r.src_id IN (%(id)s, %(prefixed_id)s) THEN r.dst_id
+                                ELSE r.src_id
+                            END AS neighbor_id,
+                            1 AS depth,
+                            ARRAY[r.src_id, r.dst_id] AS path
+                        FROM graph_relations r
+                        JOIN graph_entities src_e
+                          ON src_e.tenant_id = r.tenant_id AND src_e.id = r.src_id
+                        JOIN graph_entities dst_e
+                          ON dst_e.tenant_id = r.tenant_id AND dst_e.id = r.dst_id
+                        WHERE r.tenant_id = %(tenant_id)s
+                          AND (
+                              r.src_id IN (%(id)s, %(prefixed_id)s)
+                              OR r.dst_id IN (%(id)s, %(prefixed_id)s)
+                          )
+                          AND (%(rel)s::text IS NULL OR r.rel_type = %(rel)s)
+                          AND (
+                              %(project_id)s::text IS NULL
+                              OR (
+                                  (
+                                      src_e.properties->>'project_id' IS NULL
+                                      OR src_e.properties->>'project_id' = %(project_id)s
+                                  )
+                                  AND (
+                                      dst_e.properties->>'project_id' IS NULL
+                                      OR dst_e.properties->>'project_id' = %(project_id)s
+                                  )
+                                  AND (
+                                      r.properties->>'project_id' IS NULL
+                                      OR r.properties->>'project_id' = %(project_id)s
+                                  )
+                              )
+                          )
+                        UNION ALL
+                        SELECT
+                            CASE
+                                WHEN r.src_id = w.neighbor_id THEN r.dst_id
+                                ELSE r.src_id
+                            END AS neighbor_id,
+                            w.depth + 1 AS depth,
+                            w.path || (
+                                CASE
+                                    WHEN r.src_id = w.neighbor_id THEN r.dst_id
+                                    ELSE r.src_id
+                                END
+                            ) AS path
+                        FROM graph_relations r
+                        JOIN walk w
+                          ON (r.src_id = w.neighbor_id OR r.dst_id = w.neighbor_id)
+                        JOIN graph_entities mid_e
+                          ON mid_e.tenant_id = r.tenant_id AND mid_e.id = w.neighbor_id
+                        WHERE r.tenant_id = %(tenant_id)s
+                          AND w.depth < %(max_depth)s
+                          AND (%(rel)s::text IS NULL OR r.rel_type = %(rel)s)
+                          AND NOT (
+                              (
+                                  CASE
+                                      WHEN r.src_id = w.neighbor_id THEN r.dst_id
+                                      ELSE r.src_id
+                                  END
+                              ) = ANY(w.path)
+                          )
+                          AND (
+                              %(project_id)s::text IS NULL
+                              OR (
+                                  (
+                                      mid_e.properties->>'project_id' IS NULL
+                                      OR mid_e.properties->>'project_id' = %(project_id)s
+                                  )
+                                  AND (
+                                      r.properties->>'project_id' IS NULL
+                                      OR r.properties->>'project_id' = %(project_id)s
+                                  )
+                              )
+                          )
+                    )
+                    SELECT DISTINCT e.id, e.entity_type, e.name, e.properties
+                    FROM walk w
+                    JOIN graph_entities e ON e.tenant_id = %(tenant_id)s AND e.id = w.neighbor_id
+                    WHERE e.id <> %(id)s AND e.id <> %(prefixed_id)s
+                      AND (
+                          %(project_id)s::text IS NULL
+                          OR e.properties->>'project_id' IS NULL
+                          OR e.properties->>'project_id' = %(project_id)s
+                      )
+                    ORDER BY e.id ASC
+                    """,
+                    {
+                        "tenant_id": tenant_id,
+                        "id": id,
+                        "prefixed_id": prefixed_id,
+                        "rel": rel,
+                        "project_id": project_id,
+                        "max_depth": safe_depth,
+                    },
+                )
+            ).fetchall()
+            return [
+                {
+                    "id": row["id"],
+                    "labels": [row["entity_type"]],
+                    "properties": {
+                        "name": row["name"],
+                        "tenant_id": tenant_id,
+                        **(
+                            row["properties"]
+                            if isinstance(row["properties"], dict)
+                            else json.loads(row["properties"])
+                            if row["properties"]
+                            else {}
+                        ),
+                    },
+                }
                 for row in rows
             ]
 
@@ -1855,6 +2145,17 @@ def _hydrate_memory(row: dict[str, Any]) -> Memory:
 
 
 def _hydrate_kb_section(row: dict[str, Any]) -> KBSection:
+    raw_meta = row.get("media_metadata")
+    if isinstance(raw_meta, str):
+        try:
+            parsed_meta: dict[str, Any] = json.loads(raw_meta)
+        except Exception:
+            parsed_meta = {}
+    elif isinstance(raw_meta, Mapping):
+        parsed_meta = dict(raw_meta)
+    else:
+        parsed_meta = {}
+
     return KBSection(
         id=str(row["id"]),
         tenant_id=row["tenant_id"],
@@ -1865,4 +2166,8 @@ def _hydrate_kb_section(row: dict[str, Any]) -> KBSection:
         citation=row["citation"],
         text=row["text"],
         version=int(row["version"]),
+        modality=str(row.get("modality") or "text"),
+        blob_sha256=row.get("blob_sha256"),
+        blob_uri=row.get("blob_uri"),
+        media_metadata=parsed_meta,
     )

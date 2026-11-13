@@ -44,8 +44,8 @@ interfaces:
     - name: "StoragePort"
       type: "class"
       signature: "class StoragePort(Protocol): ..."
-      description: "Object storage (MinIO | GCS | Azure Blob): put/get/delete/exists for documents and artifacts. NOT the relational store — Postgres is the canonical spine (ADR-01, one-way) and is reached via the Postgres driver directly; cloud migration of the canonical store is a managed-Postgres connection swap, not an adapter swap."
-      errors: []
+      description: "Content-addressable blob storage (PgBlobStorageAdapter in PostgreSQL 18 Chunked Blob CAS up to 20 GB+ per Rule D14a/D14b | LocalFsStorageAdapter | GCS | Azure Blob): put/get/delete/exists/put_file/put_stream/get_stream/head/reconcile_truncated_blobs/gc_orphan_chunks."
+      errors: ["StorageError", "BlobNotFoundError", "BlobTruncatedError", "BlobIntegrityError", "BlobTooLargeError"]
     - name: "VectorPort"
       type: "class"
       signature: "class VectorPort(Protocol): ..."
@@ -54,7 +54,7 @@ interfaces:
     - name: "GraphPort"
       type: "class"
       signature: "class GraphPort(Protocol): ..."
-      description: "Graph traversal (pure-Postgres | Neo4j)."
+      description: "Dual-engine graph traversal (Neo4j Adopt via Neo4jGraphAdapter per Decision D17 with PostgreSQL 18 recursive CTE fallback)."
       errors: []
     - name: "CachePort"
       type: "class"
@@ -64,7 +64,7 @@ interfaces:
     - name: "LLMPort"
       type: "class"
       signature: "class LLMPort(Protocol): ..."
-      description: "Embeddings/generation via gateway (Ollama|Vertex|Azure)."
+      description: "Embeddings, text generation, vision captioning (describe_image), and audio ASR transcription (transcribe_audio) via LiteLLM gateway."
       errors: []
     - name: "SecretsPort"
       type: "class"

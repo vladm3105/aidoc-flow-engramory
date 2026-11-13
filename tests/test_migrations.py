@@ -20,7 +20,20 @@ def test_migrations_exist_and_ordered() -> None:
         "0007_graph_entities_canonical.sql",
         "0008_runbooks_and_doc_governance.sql",
         "0009_tenant_profiles_and_experience_dedup.sql",
+        "0010_multimodal_rag_and_blob_cas.sql",
     ]
+
+
+def test_migration_0010_multimodal_blob_cas_invariants() -> None:
+    """Migration 0010 defines kb_blobs, tiered 4 MiB chunk tables, STORAGE EXTERNAL, and ts_lex."""
+    sql = (MIGRATIONS / "0010_multimodal_rag_and_blob_cas.sql").read_text()
+    assert "CREATE TABLE IF NOT EXISTS kb_blobs" in sql
+    assert "CREATE TABLE IF NOT EXISTS kb_blob_chunks" in sql
+    assert "CREATE UNLOGGED TABLE IF NOT EXISTS kb_blob_chunks_large" in sql
+    assert "SET STORAGE EXTERNAL" in sql
+    assert "ts_blob_cold" in sql
+    assert "ts_lex TSVECTOR GENERATED ALWAYS AS" in sql
+    assert "idx_kb_sections_lex" in sql
 
 
 def test_scope_columns_use_tenant_id_not_space_id() -> None:

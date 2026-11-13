@@ -37,6 +37,15 @@ test_cases:
         inputs: [{ name: "candidates", type: "list[Memory]", value: "1 advisory-only + 2 confirmed" }]
         expected_output: { type: "list[MemoryHit]", value: "advisory excluded; ranked by fused score" }
         edge_cases: [{ condition: "empty corpus", expected: "[]" }]
+      - id: "TDD.03.04.a200"
+        name: "3-leg hybrid RRF knowledge search and Neo4j/PG CTE GraphRAG expansion"
+        spec_ref: "@spec: SPEC-03"
+        target: "knowledge_search"
+        test_file: "tests/test_multimodal_extraction_and_graphrag.py"
+        test_function: "test_hybrid_rrf_and_graphrag_expansion"
+        inputs: [{ name: "query", type: "str", value: "query with query_vec + expand_graph=True" }]
+        expected_output: { type: "list[KBSection]", value: "RRF fused hits with media_metadata['graph_context']" }
+        edge_cases: [{ condition: "Neo4j unreachable", expected: "falls back to Repository.find_neighbors CTE" }]
   integration_tests:
     cases:
       - id: "TDD.03.04.b100"

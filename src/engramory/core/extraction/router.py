@@ -7,9 +7,19 @@ from pathlib import Path
 
 from engramory.core.extraction.docling import DoclingExtractor
 from engramory.core.extraction.enrichment import SemanticChunker
+from engramory.core.extraction.multimodal import (
+    AUDIO_EXTENSIONS,
+    IMAGE_EXTENSIONS,
+    VIDEO_EXTENSIONS,
+    ImageExtractor,
+    VideoAudioExtractor,
+    infer_media_mime_type,
+)
 from engramory.core.extraction.types import ExtractionResult, FileCategory
 from engramory.core.parsers.detector import DocumentDetector
 from engramory.core.parsers.markdown import MarkdownParser
+
+MAX_NATIVE_TEXT_BYTES: int = 10 * 1024 * 1024  # 10 MiB guard for native text decoding
 
 
 class SmartExtractionRouter:
@@ -42,6 +52,8 @@ class SmartExtractionRouter:
         self.markdown_parser = MarkdownParser(max_words_per_chunk=max_words_per_chunk)
         self.chunker = SemanticChunker(min_words=min_words_per_chunk, max_words=max_words_per_chunk)
         self.docling = DoclingExtractor(cache_dir=cache_dir) if enable_docling else None
+        self.image_extractor = ImageExtractor()
+        self.video_audio_extractor = VideoAudioExtractor()
 
     def extract_file(
         self,
@@ -57,6 +69,40 @@ class SmartExtractionRouter:
         ext = file_path.suffix.lstrip(".").lower()
         filename = file_path.name
         warnings: list[str] = []
+
+        # Inspect magic header (64 bytes) in O(1) memory to detect binary media
+        header = b""
+        if not file_path.is_symlink():
+            try:
+                with file_path.open("rb") as fh:
+                    header = fh.read(64)
+            except OSError:
+                header = b""
+        inferred_modality, _ = infer_media_mime_type(file_path, header)
+
+        # 0a. Audio / Video streaming extraction (never calls read_bytes() or refine_sections())
+        if ext in (AUDIO_EXTENSIONS | VIDEO_EXTENSIONS) or inferred_modality in ("audio", "video"):
+            return self.video_audio_extractor.extract(file_path)
+
+        # 0b. Image extraction (pure-stdlib header + optional Docling OCR)
+        if ext in IMAGE_EXTENSIONS or inferred_modality == "image":
+            ocr_text: str | None = None
+            if (
+                prefer_docling
+                and self.enable_docling
+                and self.docling is not None
+                and ext in self.DOCLING_EXTENSIONS
+                and self.docling.is_available()
+            ):
+                try:
+                    doc_res = self.docling.extract(file_path)
+                    ocr_text = doc_res.text
+                except Exception as exc:
+                    warnings.append(f"Docling image OCR failed, using header extractor: {exc}")
+            img_res = self.image_extractor.extract(file_path, ocr_text=ocr_text)
+            if warnings:
+                img_res.warnings.extend(warnings)
+            return img_res
 
         # 1. Try Docling for supported binary/complex documents
         if (
@@ -79,7 +125,11 @@ class SmartExtractionRouter:
                     sections=sections,
                     title=md_parse.title or filename,
                     file_category=doc_res.file_category,
-                    metadata={**md_parse.metadata, **doc_res.metadata},
+                    metadata={
+                        **md_parse.metadata,
+                        **doc_res.metadata,
+                        "images": doc_res.images,
+                    },
                     extractor_used="docling",
                     tables=doc_res.tables,
                     cached=doc_res.cache_hit,
@@ -89,15 +139,24 @@ class SmartExtractionRouter:
             except Exception as e:
                 warnings.append(f"Docling extraction failed, falling back to native: {e}")
 
-        # 2. Native parser fallback
-        try:
-            content = file_path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            content = file_path.read_bytes()  # type: ignore[assignment]  # reason: fallback binary content
+        # 2. Native parser fallback (bounded to MAX_NATIVE_TEXT_BYTES)
+        file_size = file_path.stat().st_size
+        content: str | bytes
+        if file_size > MAX_NATIVE_TEXT_BYTES:
+            with file_path.open("rb") as fh:
+                content = fh.read(65536)
+        else:
+            try:
+                content = file_path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                with file_path.open("rb") as fh:
+                    content = fh.read(65536)
 
         native_res = self.detector.parse(content, filename=filename)
         sections = native_res.sections
-        if refine_chunks:
+        if refine_chunks and all(
+            (s.metadata or {}).get("modality") not in {"image", "audio", "video"} for s in sections
+        ):
             sections = self.chunker.refine_sections(sections)
 
         duration_ms = int((time.perf_counter() - start_t) * 1000)
