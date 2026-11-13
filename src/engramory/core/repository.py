@@ -1202,9 +1202,17 @@ class Repository:
                                 name = EXCLUDED.name,
                                 properties = EXCLUDED.properties,
                                 updated_at = NOW()
-                            WHERE graph_entities.properties->>'project_id' IS NULL
-                               OR graph_entities.properties->>'project_id' =
-                                  EXCLUDED.properties->>'project_id'
+                            WHERE (
+                                graph_entities.properties->>'project_id' IS NULL
+                                OR graph_entities.properties->>'project_id' =
+                                   EXCLUDED.properties->>'project_id'
+                            )
+                            AND NOT (
+                                COALESCE((EXCLUDED.properties->>'stub')::boolean, false)
+                                AND NOT COALESCE(
+                                    (graph_entities.properties->>'stub')::boolean, false
+                                )
+                            )
                         """,
                         [
                             {
