@@ -202,12 +202,15 @@ class AccessSurface:
         k: int = 8,
         token_budget: int | None = DEFAULT_TOKEN_BUDGET,
         expand_graph: bool = False,
+        include_knowledge: bool = False,
     ) -> list[MemoryHit]:
         """Scoped retrieval of distilled memory; every hit is retrieval-logged.
 
         Results contain ONLY ladder levels the caller holds, up to `scope`;
         reads are bound to the caller's own project. `token_budget=None`
-        explicitly disables the PRD default cap.
+        explicitly disables the PRD default cap. When `include_knowledge=True`,
+        matching L0 canonical knowledge sections are fused into the token-budgeted
+        response alongside L2 distilled memories.
         """
         target = TargetScope(tenant_id=tenant_id or ctx.tenant_id, scope=scope)
         await self._decide(ctx, "memory_search", target)
@@ -220,12 +223,13 @@ class AccessSurface:
                     query_vec = vecs[0]
             except Exception:  # noqa: BLE001  # reason: embedding failure must fall back to lexical/recency retrieval
                 query_vec = None
+        max_hits = max(1, min(k, MAX_K))
         memories = await self._repo.get_memories(
             tenant_id=target.tenant_id,
             agent_id=ctx.agent_id,
             project_id=ctx.project_id,
             domain_id=None,  # domain membership lands on ActorContext with BRD-04
-            k=max(1, min(k, MAX_K)),
+            k=max_hits,
             query=query,
             query_vec=query_vec,
             scopes=levels,
@@ -257,7 +261,7 @@ class AccessSurface:
             agent_id=ctx.agent_id,
             project_id=ctx.project_id,
         )
-        return [
+        hits = [
             MemoryHit(
                 memory_id=memory_id,
                 summary=summary,
@@ -270,6 +274,44 @@ class AccessSurface:
                 kept, retrieval_ids, strict=True
             )
         ]
+        if include_knowledge and len(hits) < max_hits and (budget is None or budget > 0):
+            kb_scope = "project" if scope == "agent" and "project" in ctx.scopes else scope
+            if kb_scope in ("project", "domain", "space") and kb_scope in ctx.scopes:
+                kb_sections = await self.knowledge_search(
+                    ctx,
+                    query,
+                    query_vec=query_vec,
+                    scope=kb_scope,
+                    expand_graph=expand_graph,
+                    limit=max(1, max_hits - len(hits)),
+                )
+                for sec in kb_sections:
+                    tokens = _token_count(sec.text)
+                    if budget is not None:
+                        if tokens > budget:
+                            continue
+                        budget -= tokens
+                    kb_prov: dict[str, Any] = {
+                        "source": "knowledge_base",
+                        "doc_id": sec.doc_id,
+                        "citation": sec.citation,
+                        "modality": sec.modality,
+                        "blob_uri": sec.blob_uri,
+                        "media_metadata": dict(sec.media_metadata),
+                    }
+                    hits.append(
+                        MemoryHit(
+                            memory_id=f"kb:{sec.id}",
+                            summary=sec.text,
+                            score=1.0,
+                            provenance=kb_prov,
+                            retrieval_id=f"kb-ret:{sec.id}",
+                            token_count=tokens,
+                        )
+                    )
+                    if len(hits) >= max_hits:
+                        break
+        return hits
 
     async def graph_neighbors(
         self,

@@ -234,7 +234,14 @@ def _cmd_memory_add(args: argparse.Namespace) -> int:
 
 def _cmd_memory_search(args: argparse.Namespace) -> int:
     async def op(surface: AccessSurface, ctx: ActorContext) -> dict[str, Any]:
-        hits = await surface.memory_search(ctx, args.query, scope=args.scope, k=args.k)
+        extra_kwargs: dict[str, Any] = {}
+        if getattr(args, "expand_graph", False):
+            extra_kwargs["expand_graph"] = True
+        if getattr(args, "include_knowledge", False):
+            extra_kwargs["include_knowledge"] = True
+        hits = await surface.memory_search(
+            ctx, args.query, scope=args.scope, k=args.k, **extra_kwargs
+        )
         return {
             "hits": [
                 {
@@ -243,6 +250,14 @@ def _cmd_memory_search(args: argparse.Namespace) -> int:
                     "score": h.score,
                     "retrieval_id": h.retrieval_id,
                     "token_count": h.token_count,
+                    **(
+                        {"provenance": dict(h.provenance)}
+                        if (
+                            getattr(args, "include_knowledge", False)
+                            or getattr(args, "expand_graph", False)
+                        )
+                        else {}
+                    ),
                 }
                 for h in hits
             ]
@@ -1050,6 +1065,16 @@ def _build_parser() -> argparse.ArgumentParser:
     p_search.add_argument("--query", required=True)
     p_search.add_argument("--scope", default="agent")
     p_search.add_argument("-k", type=int, default=8)
+    p_search.add_argument(
+        "--include-knowledge",
+        action="store_true",
+        help="fuse matching L0 extracted knowledge sections alongside L2 memories",
+    )
+    p_search.add_argument(
+        "--expand-graph",
+        action="store_true",
+        help="attach connected GraphRAG neighborhood context",
+    )
     p_search.set_defaults(func=_cmd_memory_search)
 
     p_fb = mem_sub.add_parser("feedback", help="record a retrieval outcome")
