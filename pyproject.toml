@@ -1,6 +1,6 @@
 [project]
 name = "engramory"
-version = "0.1.0"
+version = "0.2.0"
 description = "Shared agent knowledge & memory core — per-agent distilled long-term memory over MCP."
 readme = "README.md"
 requires-python = ">=3.12"

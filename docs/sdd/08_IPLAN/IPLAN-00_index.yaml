@@ -5,8 +5,8 @@ metadata:
   schema_version: "1.0"
   document_type: "iplan-registry"
   layer: 8
-  total_plans: 6
-  last_updated: "2026-06-22"
+  total_plans: 8
+  last_updated: "2026-11-13"
 
 registry:
   plans:
@@ -79,16 +79,42 @@ registry:
       title: "Ports & Portability"
       source_spec: "@spec: SPEC-06"
       scope: "8 port interfaces + dev adapters + migration/re-embed tool"
-      status: "Draft"
-      status_date: "2026-06-22"
+      status: "Completed"
+      status_date: "2026-11-10"
       complexity: 3
-      session_count: 0
-      sessions_completed: 0
+      session_count: 1
+      sessions_completed: 1
       files_declared: 6
-      files_done: 1
+      files_done: 6
       skipped: []
       depends_on: []
+    - id: "IPLAN-07"
+      title: "CLI Face & Developer Ergonomics"
+      source_spec: "@spec: SPEC-07"
+      scope: "Thin CLI binding over AccessSurface, exit codes, JSON mode, SDD/docs/knowledge commands"
+      status: "Completed"
+      status_date: "2026-11-10"
+      complexity: 3
+      session_count: 1
+      sessions_completed: 1
+      files_declared: 4
+      files_done: 4
+      skipped: []
+      depends_on: ["IPLAN-01", "IPLAN-06"]
+    - id: "IPLAN-08"
+      title: "Multimodal RAG, Dual-Engine GraphRAG & PostgreSQL 18 Chunked Blob CAS"
+      source_spec: "@spec: SPEC-08"
+      scope: "PostgreSQL 18 20GB+ chunked blob CAS, multimodal extractors, 3-leg RRF, Neo4j+PG GraphRAG"
+      status: "Completed"
+      status_date: "2026-11-12"
+      complexity: 5
+      session_count: 1
+      sessions_completed: 1
+      files_declared: 12
+      files_done: 12
+      skipped: []
+      depends_on: ["IPLAN-01", "IPLAN-02", "IPLAN-03", "IPLAN-06", "IPLAN-07"]
 
 # Build order (topological): IPLAN-06 (ports) → IPLAN-02 (store) →
-# IPLAN-03/04 (retrieval/distillation) → IPLAN-01 (access) → IPLAN-05 (KB compat).
-build_order: ["IPLAN-06", "IPLAN-02", "IPLAN-03", "IPLAN-04", "IPLAN-01", "IPLAN-05"]
+# IPLAN-03/04 (retrieval/distillation) → IPLAN-01 (access) → IPLAN-05/07/08 (KB compat, CLI, Multimodal CAS).
+build_order: ["IPLAN-06", "IPLAN-02", "IPLAN-03", "IPLAN-04", "IPLAN-01", "IPLAN-05", "IPLAN-07", "IPLAN-08"]
