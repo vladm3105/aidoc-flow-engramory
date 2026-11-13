@@ -44,8 +44,8 @@ interfaces:
   exports:
     - name: "retrieve"
       type: "async function"
-      signature: "async def retrieve(scope: Scope, query: str, k: int = 8, include_advisory: bool = False, token_budget: int | None = None) -> list[MemoryHit]"
-      description: "Scoped hybrid retrieval (vector + optional graph), ranked, with provenance."
+      signature: "async def retrieve(scope: Scope, query: str, k: int = 8, include_advisory: bool = False, token_budget: int | None = None, brain_variant: str | None = None, specialization: str | None = None, include_knowledge: bool = False) -> list[MemoryHit]"
+      description: "Scoped hybrid retrieval (vector + lexical + optional graph + optional L0 knowledge fusion), filtered by brain_variant and specialization when supplied, ranked, with provenance."
       errors: ["StoreUnavailable: fail closed", "AuthzError"]
     - name: "traverse"
       type: "async function"

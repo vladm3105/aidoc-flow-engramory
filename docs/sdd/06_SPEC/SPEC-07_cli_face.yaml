@@ -60,10 +60,17 @@ interfaces:
     - { name: "memory search", maps_to: "AccessSurface.memory_search", notes: "--query, --scope (default agent), -k (default 8); JSON result {hits: [{memory_id, summary, score, retrieval_id, token_count}]}" }
     - { name: "memory feedback", maps_to: "AccessSurface.memory_feedback", notes: "--retrieval-id, --outcome (useful|not_useful|harmful); JSON result {ok}" }
     - { name: "memory forget", maps_to: "AccessSurface.memory_forget", notes: "--memory-id, --reason (audited); JSON result {ok}" }
-    - { name: "memory distill", maps_to: "workers.distillation.reflect (OPS COMMAND)", notes: "Interim reflect pass; JSON result {created}. Replaced in body by the SPEC-04 engine; command survives." }
+    - { name: "memory distill", maps_to: "workers.distillation.reflect (OPS COMMAND)", notes: "Interim reflect pass (--brain-variant, --distiller-model, --rag-params-json); JSON result {created, brain_variant}. Replaced in body by the SPEC-04 engine; command survives." }
+    - { name: "memory promote", maps_to: "AccessSurface.memory_promote", notes: "--memory-id, --target-scope (project|domain|space), --evidence-ref, --domain-id, --project-id, --specialization; governed promotion up ADR-07 scope ladder" }
     - { name: "memory ingest-event", maps_to: "AccessSurface.memory_ingest_event", notes: "--event-json or --event-file; validates ExperienceEvent and persists L1 episode" }
     - { name: "memory learning-health", maps_to: "AccessSurface.memory_learning_health", notes: "--project-id, --limit; computes repeat_findings_rate, calibration_delta, and mean_effectiveness_score" }
     - { name: "profile get", maps_to: "AccessSurface.agent_profile_get", notes: "Caller's own L3 profile; default profile on fresh store; JSON result {agent_id, display_name, standing_preferences}" }
+    - { name: "profile set", maps_to: "AccessSurface.agent_profile_upsert", notes: "--display-name, --agent-type, --role, --domain-id, --specialization, --brain-variant, --distiller-model, --extraction-model, --embedding-model, --rag-params-json, --pref KEY=VALUE" }
+    - { name: "profile list", maps_to: "AccessSurface.agent_roster_list", notes: "--domain-id, --agent-type, --role, --specialization; lists and ranks Virtual Employee instances with live skill statistics" }
+    - { name: "profile export-brain", maps_to: "AccessSurface.agent_brain_export", notes: "--domain-id, --brain-variant, --specialization, --limit, --redact-term, --out PATH; exports sanitized engramory.brain_passport.v1 with passport_sha256" }
+    - { name: "profile import-brain", maps_to: "AccessSurface.agent_brain_import", notes: "--in PATH, --evidence-ref, --domain-id, --brain-variant, --redact-term, --allow-type-override; verifies passport_sha256 and imports sanitized skills" }
+    - { name: "profile compare-brains", maps_to: "AccessSurface.agent_brain_compare", notes: "--variant-a, --variant-b, --query, --domain-id, --specialization, -k; side-by-side multi-model brain comparison" }
+    - { name: "profile offboard", maps_to: "AccessSurface.agent_space_offboard", notes: "--evidence-ref, --reason, --keep-episodes, --keep-memories; transactional offboarding of private agent space" }
     - { name: "knowledge search", maps_to: "AccessSurface.knowledge_search (alias: kb search)", notes: "query, --limit, --scope, --modality, --expand-graph, --graph-depth; 3-leg hybrid RRF + GraphRAG expansion" }
     - { name: "knowledge ingest-media", maps_to: "AccessSurface.knowledge_ingest_media (alias: kb ingest-media)", notes: "path, --evidence-ref, --scope, --no-embed, --no-graph; streams media into PostgreSQL 18 Chunked Blob CAS and indexes multimodal sections" }
     - { name: "knowledge blob-stat", maps_to: "AccessSurface.blob_head (alias: kb blob-stat)", notes: "sha256, --scope; inspects kb_blobs manifest and chunk completeness" }
@@ -78,6 +85,7 @@ data_models:
       agent_id = "<str>"        # required
       project_id = "<str>"      # required
       tenant_id = "<str>"       # required
+      domain_id = "<str>"       # optional department focus (e.g. "billing")
       scopes = ["agent", "project"]   # optional; MUST be a TOML list (a string is rejected as ConfigError)
       [store]
       dsn = "<postgres dsn>"    # required; credentials — the directory is gitignored

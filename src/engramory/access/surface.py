@@ -24,6 +24,7 @@ membership.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import logging
 from collections.abc import Mapping, Sequence
@@ -36,6 +37,7 @@ from engramory.access.poisoning_guard import (
     MemoryPoisoningError,
     inspect_memory_write,
     sanitize_portable_text,
+    sanitize_portable_value,
 )
 from engramory.core.models import (
     AgentProfile,
@@ -79,6 +81,26 @@ def _token_count(text: str) -> int:
     """Budget heuristic: ~4 chars/token. Replaced by real tokenizer counts when
     the LLMPort adapter lands; the MemoryHit contract does not change."""
     return max(1, len(text) // 4)
+
+
+_PASSPORT_CANONICAL_KEYS = (
+    "schema_version",
+    "agent_id",
+    "agent_type",
+    "display_name",
+    "domain_id",
+    "specializations",
+    "brain_metadata",
+    "standing_preferences",
+    "skills",
+)
+
+
+def _compute_passport_sha256(payload: Mapping[str, Any]) -> str:
+    """Compute canonical SHA-256 digest over portable Brain Passport fields."""
+    canonical = {k: payload.get(k) for k in _PASSPORT_CANONICAL_KEYS if k in payload}
+    encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,6 +218,30 @@ class AccessSurface:
             raise AuthzError(f"{action}: {decision.reason}")
         return decision
 
+    async def _enforce_domain_boundary(
+        self, ctx: ActorContext, action: str, requested_domain_id: str | None
+    ) -> str | None:
+        """Prevent a department-bound Virtual Employee from spoofing another domain_id
+        unless granted tenant-wide 'space' scope."""
+        if (
+            ctx.domain_id is not None
+            and requested_domain_id is not None
+            and requested_domain_id != ctx.domain_id
+            and "space" not in ctx.scopes
+        ):
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action=action,
+                allowed=False,
+                reason=f"out_of_scope: cross-department domain_id override ({requested_domain_id})",
+            )
+            raise AuthzError(
+                "out_of_scope: cross-department domain_id override requires space scope"
+            )
+        return requested_domain_id if requested_domain_id is not None else ctx.domain_id
+
     async def memory_search(
         self,
         ctx: ActorContext,
@@ -204,6 +250,8 @@ class AccessSurface:
         scope: str = "agent",
         tenant_id: str | None = None,
         domain_id: str | None = None,
+        brain_variant: str | None = None,
+        specialization: str | None = None,
         k: int = 8,
         token_budget: int | None = DEFAULT_TOKEN_BUDGET,
         expand_graph: bool = False,
@@ -219,8 +267,8 @@ class AccessSurface:
         """
         target = TargetScope(tenant_id=tenant_id or ctx.tenant_id, scope=scope)
         await self._decide(ctx, "memory_search", target)
+        eff_domain_id = await self._enforce_domain_boundary(ctx, "memory_search", domain_id)
         levels = _granted_levels(scope, ctx.scopes)
-        eff_domain_id = domain_id if domain_id is not None else ctx.domain_id
         query_vec: Sequence[float] | None = None
         if self._llm is not None and query and query.strip():
             try:
@@ -239,6 +287,8 @@ class AccessSurface:
             query=query,
             query_vec=query_vec,
             scopes=levels,
+            brain_variant=brain_variant,
+            specialization=specialization,
         )
         kept: list[tuple[str, str, float, Mapping[str, Any], int]] = []
         budget = token_budget
@@ -442,16 +492,26 @@ class AccessSurface:
         kind: str = "note",
         scope: str = "agent",
         domain_id: str | None = None,
+        specializations: Sequence[str] | None = None,
+        brain_variant: str | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> str:
         """Append an episode in the caller's scope (idempotent by content hash)."""
         if len(content.encode("utf-8")) > MAX_CONTENT_BYTES:
             raise ValueError(f"content exceeds {MAX_CONTENT_BYTES} bytes")
         await self._decide(ctx, "memory_add", TargetScope(tenant_id=ctx.tenant_id, scope=scope))
-        eff_domain_id = domain_id if domain_id is not None else ctx.domain_id
+        eff_domain_id = await self._enforce_domain_boundary(ctx, "memory_add", domain_id)
         merged_meta: dict[str, Any] = dict(metadata) if metadata else {}
         if scope != "agent":
             merged_meta["scope"] = scope
+        if specializations is not None:
+            specs_clean = list(
+                dict.fromkeys(str(s).strip() for s in specializations if str(s).strip())
+            )
+            if specs_clean:
+                merged_meta["specializations"] = specs_clean
+        if brain_variant is not None and brain_variant.strip():
+            merged_meta["brain_variant"] = brain_variant.strip()
         try:
             vetted_content = inspect_memory_write(
                 content,
@@ -521,32 +581,369 @@ class AccessSurface:
             else AgentProfile(agent_id=ctx.agent_id, tenant_id=ctx.tenant_id)
         )
 
+    async def agent_profile_upsert(
+        self,
+        ctx: ActorContext,
+        *,
+        display_name: str | None = None,
+        agent_type: str | None = None,
+        role: str | None = None,
+        domain_id: str | None = None,
+        specializations: Sequence[str] | None = None,
+        brain_config: Mapping[str, Any] | None = None,
+        standing_preferences: Mapping[str, Any] | None = None,
+    ) -> AgentProfile:
+        """Governed L3 Virtual Employee profile upsert storing agent_type, role,
+        department_focus (domain_id), specializations, and brain_config."""
+        await self._decide(
+            ctx, "agent_profile_upsert", TargetScope(tenant_id=ctx.tenant_id, scope="agent")
+        )
+        eff_domain = await self._enforce_domain_boundary(ctx, "agent_profile_upsert", domain_id)
+        existing = await self._repo.get_agent_profile(ctx.agent_id, tenant_id=ctx.tenant_id)
+        merged_prefs: dict[str, Any] = (
+            dict(existing.standing_preferences) if existing is not None else {}
+        )
+        if standing_preferences:
+            merged_prefs.update(dict(standing_preferences))
+        eff_agent_type = (
+            agent_type or role or merged_prefs.get("agent_type") or merged_prefs.get("role")
+        )
+        eff_role = role or agent_type or merged_prefs.get("role") or merged_prefs.get("agent_type")
+        if eff_agent_type:
+            merged_prefs["agent_type"] = str(eff_agent_type).strip()
+        if eff_role:
+            merged_prefs["role"] = str(eff_role).strip()
+        if eff_domain:
+            merged_prefs["department_focus"] = str(eff_domain).strip()
+        if specializations is not None:
+            merged_prefs["specializations"] = list(
+                dict.fromkeys(str(s).strip() for s in specializations if str(s).strip())
+            )
+        if brain_config is not None:
+            prev_cfg = (
+                dict(merged_prefs["brain_config"])
+                if isinstance(merged_prefs.get("brain_config"), Mapping)
+                else {}
+            )
+            prev_cfg.update({k: v for k, v in brain_config.items() if v is not None})
+            merged_prefs["brain_config"] = prev_cfg
+
+        eff_display = (
+            display_name
+            if display_name is not None
+            else (existing.display_name if existing is not None else ctx.agent_id)
+        )
+        try:
+            vetted_display = inspect_memory_write(
+                str(eff_display or ctx.agent_id),
+                tenant_id=ctx.tenant_id,
+                writer_agent_id=ctx.agent_id,
+                target="agent_profiles:display_name",
+            )
+            if merged_prefs:
+                inspect_memory_write(
+                    json.dumps(merged_prefs, sort_keys=True),
+                    tenant_id=ctx.tenant_id,
+                    writer_agent_id=ctx.agent_id,
+                    target="agent_profiles:standing_preferences",
+                )
+        except MemoryPoisoningError as exc:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="agent_profile_upsert",
+                allowed=False,
+                reason=f"poisoning_rejected: {exc}",
+            )
+            raise GovernedWriteRejected(str(exc)) from exc
+
+        updated = AgentProfile(
+            agent_id=ctx.agent_id,
+            display_name=vetted_display,
+            standing_preferences=merged_prefs,
+            tenant_id=ctx.tenant_id,
+        )
+        await self._repo.upsert_agent_profile(updated)
+        return updated
+
+    async def agent_roster_list(
+        self,
+        ctx: ActorContext,
+        *,
+        domain_id: str | None = None,
+        agent_type: str | None = None,
+        role: str | None = None,
+        specialization: str | None = None,
+        include_stats: bool = True,
+    ) -> list[dict[str, Any]]:
+        """List and rank Virtual Employee instances in the caller's tenant."""
+        req_scope = "project" if "project" in ctx.scopes else "agent"
+        await self._decide(
+            ctx, "agent_roster_list", TargetScope(tenant_id=ctx.tenant_id, scope=req_scope)
+        )
+        return await self._repo.list_agent_profiles(
+            tenant_id=ctx.tenant_id,
+            domain_id=domain_id,
+            agent_type=agent_type,
+            role=role,
+            specialization=specialization,
+            include_stats=include_stats,
+        )
+
+    async def memory_promote(
+        self,
+        ctx: ActorContext,
+        *,
+        memory_id: str,
+        target_scope: str,
+        evidence_ref: str | None,
+        target_domain_id: str | None = None,
+        target_project_id: str | None = None,
+        specializations: Sequence[str] | None = None,
+    ) -> dict[str, Any]:
+        """Governed promotion of a validated L2 memory up the ADR-07 scope ladder
+        (agent -> project -> domain -> space) with strict source visibility and
+        cross-instance deduplication."""
+        from engramory.core.models import Memory
+
+        if target_scope not in {"project", "domain", "space"}:
+            raise ValidationError(
+                f"target_scope must be one of ('project', 'domain', 'space'): {target_scope!r}"
+            )
+        await self._decide(
+            ctx, "memory_promote", TargetScope(tenant_id=ctx.tenant_id, scope=target_scope)
+        )
+        if not evidence_ref:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="memory_promote",
+                allowed=False,
+                reason="missing_evidence_ref",
+            )
+            raise GovernedWriteRejected("memory_promote requires evidence_ref")
+
+        source = await self._repo.get_memory(memory_id, tenant_id=ctx.tenant_id)
+        source_visible = (
+            source.status == "active"
+            and source.valid_to is None
+            and source.scope in ctx.scopes
+            and (
+                (source.scope == "agent" and source.agent_id == ctx.agent_id)
+                or (
+                    source.scope == "project"
+                    and source.project_id is not None
+                    and source.project_id == ctx.project_id
+                )
+                or (
+                    source.scope == "domain"
+                    and source.domain_id is not None
+                    and source.domain_id == ctx.domain_id
+                )
+                or source.scope == "space"
+            )
+        )
+        if not source_visible:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="memory_promote",
+                allowed=False,
+                reason="out_of_scope",
+            )
+            raise AuthzError("memory_promote: out_of_scope")
+
+        if _LADDER.index(target_scope) < _LADDER.index(source.scope):
+            raise ValidationError(
+                f"Cannot demote memory from scope {source.scope!r} to {target_scope!r}"
+            )
+
+        if "space" not in ctx.scopes:
+            if target_project_id is not None and target_project_id != ctx.project_id:
+                await self._repo.record_audit(
+                    tenant_id=ctx.tenant_id,
+                    agent_id=ctx.agent_id,
+                    project_id=ctx.project_id,
+                    action="memory_promote",
+                    allowed=False,
+                    reason="out_of_scope",
+                )
+                raise AuthzError("memory_promote: out_of_scope")
+            if (
+                ctx.domain_id is not None
+                and target_domain_id is not None
+                and target_domain_id != ctx.domain_id
+            ):
+                await self._repo.record_audit(
+                    tenant_id=ctx.tenant_id,
+                    agent_id=ctx.agent_id,
+                    project_id=ctx.project_id,
+                    action="memory_promote",
+                    allowed=False,
+                    reason="out_of_scope",
+                )
+                raise AuthzError("memory_promote: out_of_scope")
+
+        eff_project_id = (
+            (target_project_id or ctx.project_id or source.project_id)
+            if target_scope == "project"
+            else None
+        )
+        eff_domain_id = (
+            (target_domain_id or ctx.domain_id or source.domain_id)
+            if target_scope == "domain"
+            else (target_domain_id or ctx.domain_id or source.domain_id)
+        )
+        if target_scope == "project" and not eff_project_id:
+            raise ValidationError("memory_promote to scope='project' requires a project_id")
+        if target_scope == "domain" and not eff_domain_id:
+            raise ValidationError("memory_promote to scope='domain' requires a domain_id")
+
+        src_variant = str(source.provenance.get("brain_variant") or "default")
+        existing = await self._repo.find_existing_promoted_memory(
+            tenant_id=ctx.tenant_id,
+            target_scope=target_scope,
+            source_memory_id=memory_id,
+            summary=source.summary,
+            project_id=eff_project_id,
+            domain_id=eff_domain_id,
+            brain_variant=src_variant,
+        )
+        if existing is not None and existing.id is not None:
+            return {
+                "promoted_memory_id": existing.id,
+                "source_memory_id": memory_id,
+                "target_scope": target_scope,
+                "domain_id": eff_domain_id,
+                "project_id": eff_project_id,
+                "idempotent_replay": True,
+            }
+
+        try:
+            vetted_summary = inspect_memory_write(
+                source.summary,
+                tenant_id=ctx.tenant_id,
+                writer_agent_id=ctx.agent_id,
+                target=f"memory_promote:{memory_id}",
+            )
+            vetted_raw = inspect_memory_write(
+                source.content_raw,
+                tenant_id=ctx.tenant_id,
+                writer_agent_id=ctx.agent_id,
+                target=f"memory_promote:{memory_id}",
+            )
+        except MemoryPoisoningError as exc:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="memory_promote",
+                allowed=False,
+                reason=f"poisoning_rejected: {exc}",
+            )
+            raise GovernedWriteRejected(str(exc)) from exc
+
+        new_prov = dict(source.provenance)
+        new_prov.update(
+            {
+                "promoted_from_memory_id": memory_id,
+                "promoted_from_scope": source.scope,
+                "promoted_by_agent_id": ctx.agent_id,
+                "evidence_ref": evidence_ref,
+            }
+        )
+        src_specs_raw = source.provenance.get("specializations")
+        src_specs = (
+            [str(s).strip() for s in src_specs_raw if str(s).strip()]
+            if isinstance(src_specs_raw, list | tuple)
+            else []
+        )
+        extra_specs = (
+            [str(s).strip() for s in specializations if str(s).strip()]
+            if specializations is not None
+            else []
+        )
+        merged_specs = list(dict.fromkeys([*src_specs, *extra_specs]))
+        if merged_specs:
+            new_prov["specializations"] = merged_specs
+
+        vec: Sequence[float] | None = None
+        emb_model = source.embedding_model
+        emb_dims = source.embedding_dims
+        if self._llm is not None:
+            try:
+                vecs = await self._llm.embed(texts=[vetted_summary])
+                if vecs and len(vecs[0]) == 1536:
+                    vec = vecs[0]
+                    emb_dims = 1536
+            except Exception:  # noqa: BLE001  # reason: fallback to copying source embedding when LLM embed fails
+                vec = None
+
+        promoted_mem = Memory(
+            content_raw=vetted_raw,
+            summary=vetted_summary,
+            type=source.type,
+            embedding_model=emb_model,
+            embedding_dims=emb_dims,
+            provenance=new_prov,
+            confidence=source.confidence,
+            agent_id=source.agent_id,
+            project_id=eff_project_id,
+            domain_id=eff_domain_id,
+            tenant_id=ctx.tenant_id,
+            scope=target_scope,
+            source_trust=source.source_trust,
+        )
+        promoted_id = await self._repo.upsert_memory(
+            promoted_mem,
+            embedding=vec,
+            copy_embedding_from_id=memory_id if vec is None else None,
+        )
+        return {
+            "promoted_memory_id": promoted_id,
+            "source_memory_id": memory_id,
+            "target_scope": target_scope,
+            "domain_id": eff_domain_id,
+            "project_id": eff_project_id,
+            "idempotent_replay": False,
+        }
+
     async def agent_brain_export(
         self,
         ctx: ActorContext,
         *,
         domain_id: str | None = None,
+        brain_variant: str | None = None,
+        specialization: str | None = None,
         min_confidence: float = 0.5,
+        limit: int = MAX_K,
         redact_terms: Sequence[str] = (),
     ) -> dict[str, Any]:
         """Export a sanitized portable Virtual Employee Brain Passport (L3 profile + L2 skills).
 
         Raw L1 episodes and tenant-specific L0/project data are never exported.
-        All exported L2 skill summaries/content are scrubbed of PII, secrets, URLs,
-        IPs, UUIDs, and source tenant/project identifiers.
+        All exported L2 skill summaries/content and L3 preferences are recursively
+        scrubbed of PII, secrets, URLs, IPs, UUIDs, and source tenant/project identifiers,
+        and sealed with a canonical SHA-256 integrity digest (passport_sha256).
         """
         await self._decide(
             ctx, "agent_brain_export", TargetScope(tenant_id=ctx.tenant_id, scope="agent")
         )
         eff_domain = domain_id if domain_id is not None else ctx.domain_id
         profile = await self.agent_profile_get(ctx)
+        max_k = max(1, min(limit, MAX_K))
         memories = await self._repo.get_memories(
             tenant_id=ctx.tenant_id,
             agent_id=ctx.agent_id,
             project_id=ctx.project_id,
             domain_id=eff_domain,
-            k=MAX_K,
+            k=max_k,
             scopes=("agent",),
+            brain_variant=brain_variant,
+            specialization=specialization,
         )
         base_terms = [ctx.tenant_id, ctx.project_id, *redact_terms]
         skills: list[dict[str, Any]] = []
@@ -559,7 +956,28 @@ class AccessSurface:
             mem_terms = [*base_terms, *([mem.project_id] if mem.project_id else [])]
             clean_summary, r_sum = sanitize_portable_text(mem.summary, redact_terms=mem_terms)
             clean_raw, r_raw = sanitize_portable_text(mem.content_raw, redact_terms=mem_terms)
-            redactions = r_sum + r_raw
+            raw_bm = mem.provenance.get("brain_metadata")
+            skill_bm: dict[str, Any] = (
+                dict(raw_bm)
+                if isinstance(raw_bm, Mapping)
+                else {
+                    "brain_variant": str(
+                        mem.provenance.get("brain_variant") or (brain_variant or "default")
+                    ),
+                    "distiller_model": str(mem.provenance.get("distiller") or "reflect-v1"),
+                    "embedding_model": mem.embedding_model,
+                    "rag_params": {},
+                }
+            )
+            clean_bm, r_bm = sanitize_portable_value(skill_bm, redact_terms=mem_terms)
+            raw_specs = mem.provenance.get("specializations")
+            skill_specs = (
+                [str(s).strip() for s in raw_specs if str(s).strip()]
+                if isinstance(raw_specs, list | tuple)
+                else []
+            )
+            clean_specs, r_sp = sanitize_portable_value(skill_specs, redact_terms=mem_terms)
+            redactions = r_sum + r_raw + r_bm + r_sp
             total_redactions += redactions
             skills.append(
                 {
@@ -568,27 +986,63 @@ class AccessSurface:
                     "summary": clean_summary,
                     "content_raw": clean_raw,
                     "confidence": mem.confidence,
+                    "brain_variant": str(
+                        mem.provenance.get("brain_variant")
+                        or clean_bm.get("brain_variant")
+                        or (brain_variant or "default")
+                    ),
+                    "brain_metadata": clean_bm,
+                    "specializations": clean_specs,
                     "redactions_applied": redactions,
                 }
             )
-        clean_prefs: dict[str, Any] = {}
-        for k, v in (profile.standing_preferences or {}).items():
-            if isinstance(v, str):
-                cv, r_pref = sanitize_portable_text(v, redact_terms=base_terms)
-                total_redactions += r_pref
-                clean_prefs[k] = cv
-            else:
-                clean_prefs[k] = v
-        return {
+        clean_display, r_disp = sanitize_portable_text(
+            str(profile.display_name or ctx.agent_id), redact_terms=base_terms
+        )
+        total_redactions += r_disp
+        clean_prefs, r_prefs = sanitize_portable_value(
+            dict(profile.standing_preferences or {}), redact_terms=base_terms
+        )
+        total_redactions += r_prefs
+        raw_bcfg = clean_prefs.get("brain_config") if isinstance(clean_prefs, Mapping) else {}
+        bcfg = dict(raw_bcfg) if isinstance(raw_bcfg, Mapping) else {}
+        passport_brain_metadata: dict[str, Any] = {
+            "brain_variant": brain_variant or str(bcfg.get("active_brain_variant") or "default"),
+            "distiller_model": str(bcfg.get("distiller_model") or "reflect-v1"),
+            "extraction_model": str(bcfg.get("extraction_model") or "docling+litellm"),
+            "embedding_model": str(bcfg.get("embedding_model") or "text-embedding-3-small"),
+            "rag_params": dict(bcfg.get("rag_params") or {})
+            if isinstance(bcfg.get("rag_params"), Mapping)
+            else {},
+        }
+        agent_type_val = (
+            clean_prefs.get("agent_type") or clean_prefs.get("role")
+            if isinstance(clean_prefs, Mapping)
+            else None
+        )
+        prof_specs_raw = (
+            clean_prefs.get("specializations") if isinstance(clean_prefs, Mapping) else None
+        )
+        prof_specs = (
+            [str(s) for s in prof_specs_raw if str(s).strip()]
+            if isinstance(prof_specs_raw, list)
+            else []
+        )
+        payload: dict[str, Any] = {
             "schema_version": "engramory.brain_passport.v1",
             "agent_id": ctx.agent_id,
-            "display_name": profile.display_name,
+            "agent_type": agent_type_val,
+            "display_name": clean_display,
             "domain_id": eff_domain,
+            "specializations": prof_specs,
+            "brain_metadata": passport_brain_metadata,
             "standing_preferences": clean_prefs,
             "skills_exported": len(skills),
             "total_redactions": total_redactions,
             "skills": skills,
         }
+        payload["passport_sha256"] = _compute_passport_sha256(payload)
+        return payload
 
     async def agent_brain_import(
         self,
@@ -597,7 +1051,10 @@ class AccessSurface:
         passport: Mapping[str, Any],
         evidence_ref: str | None,
         target_domain_id: str | None = None,
+        brain_variant: str | None = None,
         redact_terms: Sequence[str] = (),
+        verify_integrity: bool = True,
+        allow_type_override: bool = False,
     ) -> dict[str, Any]:
         """Governed import of a sanitized Virtual Employee Brain Passport into caller's tenant."""
         from engramory.core.models import Memory
@@ -616,80 +1073,503 @@ class AccessSurface:
             )
             raise GovernedWriteRejected("agent_brain_import requires evidence_ref")
 
+        schema_ver = passport.get("schema_version")
+        if schema_ver is not None and schema_ver != "engramory.brain_passport.v1":
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="agent_brain_import",
+                allowed=False,
+                reason=f"unsupported_schema_version: {schema_ver}",
+            )
+            raise GovernedWriteRejected(
+                f"Unsupported Brain Passport schema_version: {schema_ver!r}"
+            )
+
+        if verify_integrity:
+            supplied_sha = str(passport.get("passport_sha256") or "").strip()
+            expected_sha = _compute_passport_sha256(passport)
+            if not supplied_sha or supplied_sha != expected_sha:
+                await self._repo.record_audit(
+                    tenant_id=ctx.tenant_id,
+                    agent_id=ctx.agent_id,
+                    project_id=ctx.project_id,
+                    action="agent_brain_import",
+                    allowed=False,
+                    reason="passport_integrity_mismatch",
+                )
+                raise GovernedWriteRejected("Brain passport SHA-256 integrity check failed")
+
+        existing_profile = (
+            await self._repo.get_agent_profile(ctx.agent_id, tenant_id=ctx.tenant_id)
+            if hasattr(self._repo, "get_agent_profile")
+            else None
+        )
+        if not isinstance(existing_profile, AgentProfile):
+            existing_profile = None
+        existing_prefs = (
+            dict(existing_profile.standing_preferences) if existing_profile is not None else {}
+        )
+        target_agent_type = (
+            str(existing_prefs.get("agent_type") or existing_prefs.get("role") or "").strip()
+            or None
+        )
+        raw_pass_prefs = passport.get("standing_preferences")
+        pass_prefs_dict = dict(raw_pass_prefs) if isinstance(raw_pass_prefs, Mapping) else {}
+        passport_agent_type = (
+            str(
+                passport.get("agent_type")
+                or pass_prefs_dict.get("agent_type")
+                or pass_prefs_dict.get("role")
+                or ""
+            ).strip()
+            or None
+        )
+        if (
+            target_agent_type is not None
+            and passport_agent_type is not None
+            and target_agent_type != passport_agent_type
+            and not allow_type_override
+        ):
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="agent_brain_import",
+                allowed=False,
+                reason=(
+                    f"agent_type_mismatch: target={target_agent_type} "
+                    f"passport={passport_agent_type}"
+                ),
+            )
+            raise GovernedWriteRejected(
+                f"agent_type_mismatch: cannot import {passport_agent_type!r} brain "
+                f"into {target_agent_type!r} instance without allow_type_override=True"
+            )
+
         eff_domain = (
             target_domain_id
             or (str(passport["domain_id"]) if passport.get("domain_id") else None)
             or ctx.domain_id
         )
-        prefs = dict(passport.get("standing_preferences") or {})
+        clean_prefs, _ = sanitize_portable_value(pass_prefs_dict, redact_terms=redact_terms)
+        prefs: dict[str, Any] = dict(existing_prefs)
+        prefs.update(clean_prefs if isinstance(clean_prefs, Mapping) else {})
         if eff_domain and "department_focus" not in prefs:
             prefs["department_focus"] = eff_domain
+        if passport_agent_type and "agent_type" not in prefs:
+            prefs["agent_type"] = passport_agent_type
+
+        existing_specs_raw = existing_prefs.get("specializations")
+        existing_specs = (
+            [str(s).strip() for s in existing_specs_raw if str(s).strip()]
+            if isinstance(existing_specs_raw, list | tuple)
+            else []
+        )
+        imported_specs_raw = passport.get("specializations") or pass_prefs_dict.get(
+            "specializations"
+        )
+        imported_specs = (
+            [str(s).strip() for s in imported_specs_raw if str(s).strip()]
+            if isinstance(imported_specs_raw, list | tuple)
+            else []
+        )
+        clean_imp_specs, _ = sanitize_portable_value(imported_specs, redact_terms=redact_terms)
+        merged_profile_specs = list(
+            dict.fromkeys(
+                [*existing_specs, *(clean_imp_specs if isinstance(clean_imp_specs, list) else [])]
+            )
+        )
+        if merged_profile_specs:
+            prefs["specializations"] = merged_profile_specs
+
+        is_sibling_clone = bool(
+            passport.get("agent_id") and str(passport.get("agent_id")) != ctx.agent_id
+        )
+        raw_display = (
+            existing_profile.display_name
+            if (is_sibling_clone and existing_profile is not None and existing_profile.display_name)
+            else (
+                passport.get("display_name")
+                or (existing_profile.display_name if existing_profile else ctx.agent_id)
+            )
+        )
+        clean_display, _ = sanitize_portable_text(
+            str(raw_display or ctx.agent_id), redact_terms=redact_terms
+        )
+
+        passport_bm_raw = passport.get("brain_metadata")
+        passport_bm, _ = sanitize_portable_value(
+            dict(passport_bm_raw) if isinstance(passport_bm_raw, Mapping) else {},
+            redact_terms=redact_terms,
+        )
+
+        # Screen profile + all skills BEFORE any DB write ([M2])
+        vetted_skills: list[dict[str, Any]] = []
+        try:
+            vetted_display = inspect_memory_write(
+                clean_display,
+                tenant_id=ctx.tenant_id,
+                writer_agent_id=ctx.agent_id,
+                target="brain_import:display_name",
+            )
+            if prefs:
+                inspect_memory_write(
+                    json.dumps(prefs, sort_keys=True),
+                    tenant_id=ctx.tenant_id,
+                    writer_agent_id=ctx.agent_id,
+                    target="brain_import:standing_preferences",
+                )
+            if passport_bm:
+                inspect_memory_write(
+                    json.dumps(passport_bm, sort_keys=True),
+                    tenant_id=ctx.tenant_id,
+                    writer_agent_id=ctx.agent_id,
+                    target="brain_import:brain_metadata",
+                )
+            raw_skills = passport.get("skills") or []
+            for idx, item in enumerate(raw_skills):
+                if not isinstance(item, Mapping):
+                    continue
+                raw_sum = str(item.get("summary") or "").strip()
+                raw_content = str(item.get("content_raw") or raw_sum).strip()
+                if not raw_sum:
+                    continue
+                clean_sum, _ = sanitize_portable_text(raw_sum, redact_terms=redact_terms)
+                clean_content, _ = sanitize_portable_text(raw_content, redact_terms=redact_terms)
+                vetted_sum = inspect_memory_write(
+                    clean_sum,
+                    tenant_id=ctx.tenant_id,
+                    writer_agent_id=ctx.agent_id,
+                    target=f"brain_import:{idx}",
+                )
+                vetted_content = inspect_memory_write(
+                    clean_content,
+                    tenant_id=ctx.tenant_id,
+                    writer_agent_id=ctx.agent_id,
+                    target=f"brain_import:{idx}",
+                )
+                item_bm_raw = item.get("brain_metadata")
+                item_bm, _ = sanitize_portable_value(
+                    dict(item_bm_raw)
+                    if isinstance(item_bm_raw, Mapping)
+                    else dict(passport_bm if isinstance(passport_bm, Mapping) else {}),
+                    redact_terms=redact_terms,
+                )
+                if item_bm:
+                    inspect_memory_write(
+                        json.dumps(item_bm, sort_keys=True),
+                        tenant_id=ctx.tenant_id,
+                        writer_agent_id=ctx.agent_id,
+                        target=f"brain_import:{idx}:brain_metadata",
+                    )
+                item_specs_raw = item.get("specializations")
+                item_specs = (
+                    [str(s).strip() for s in item_specs_raw if str(s).strip()]
+                    if isinstance(item_specs_raw, list | tuple)
+                    else list(merged_profile_specs)
+                )
+                clean_item_specs, _ = sanitize_portable_value(item_specs, redact_terms=redact_terms)
+                m_type = str(item.get("type") or "procedural")
+                if m_type not in {"semantic", "episodic", "procedural"}:
+                    m_type = "procedural"
+                conf = max(0.0, min(1.0, float(item.get("confidence", 0.7))))
+                eff_var = str(
+                    brain_variant
+                    or item.get("brain_variant")
+                    or (item_bm.get("brain_variant") if isinstance(item_bm, Mapping) else None)
+                    or (
+                        passport_bm.get("brain_variant")
+                        if isinstance(passport_bm, Mapping)
+                        else None
+                    )
+                    or "default"
+                )
+                if isinstance(item_bm, dict):
+                    item_bm["brain_variant"] = eff_var
+                skill_dom = (
+                    str(item.get("domain_id") or eff_domain)
+                    if (item.get("domain_id") or eff_domain)
+                    else None
+                )
+                vetted_skills.append(
+                    {
+                        "summary": vetted_sum,
+                        "content_raw": vetted_content,
+                        "type": m_type,
+                        "confidence": conf,
+                        "domain_id": skill_dom,
+                        "brain_variant": eff_var,
+                        "brain_metadata": item_bm if isinstance(item_bm, Mapping) else {},
+                        "specializations": clean_item_specs
+                        if isinstance(clean_item_specs, list)
+                        else [],
+                    }
+                )
+        except MemoryPoisoningError as exc:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="agent_brain_import",
+                allowed=False,
+                reason=f"poisoning_rejected: {exc}",
+            )
+            raise GovernedWriteRejected(str(exc)) from exc
+
         if hasattr(self._repo, "upsert_agent_profile"):
             await self._repo.upsert_agent_profile(
                 AgentProfile(
                     agent_id=ctx.agent_id,
-                    display_name=passport.get("display_name"),
+                    display_name=vetted_display,
                     standing_preferences=prefs,
                     tenant_id=ctx.tenant_id,
                 )
             )
 
-        raw_skills = passport.get("skills") or []
+        existing_memories = await self._repo.get_memories(
+            tenant_id=ctx.tenant_id,
+            agent_id=ctx.agent_id,
+            project_id=ctx.project_id,
+            domain_id=eff_domain,
+            k=MAX_K,
+            scopes=("agent",),
+        )
+        existing_by_key: dict[tuple[str, str, str | None, str, str], str] = {}
+        for em in existing_memories:
+            if em.id is None:
+                continue
+            em_var = str(em.provenance.get("brain_variant") or "default")
+            existing_by_key[(em_var, em.type, em.domain_id, em.summary, em.content_raw)] = em.id
+
+        to_insert: list[dict[str, Any]] = []
         memory_ids: list[str] = []
-        for idx, item in enumerate(raw_skills):
-            if not isinstance(item, Mapping):
-                continue
-            raw_sum = str(item.get("summary") or "").strip()
-            raw_content = str(item.get("content_raw") or raw_sum).strip()
-            if not raw_sum:
-                continue
-            clean_sum, _ = sanitize_portable_text(raw_sum, redact_terms=list(redact_terms))
-            clean_content, _ = sanitize_portable_text(raw_content, redact_terms=list(redact_terms))
-            vetted_sum = inspect_memory_write(
-                clean_sum,
-                tenant_id=ctx.tenant_id,
-                writer_agent_id=ctx.agent_id,
-                target=f"brain_import:{idx}",
+        for sk in vetted_skills:
+            dedup_key = (
+                sk["brain_variant"],
+                sk["type"],
+                sk["domain_id"],
+                sk["summary"],
+                sk["content_raw"],
             )
-            vetted_content = inspect_memory_write(
-                clean_content,
-                tenant_id=ctx.tenant_id,
-                writer_agent_id=ctx.agent_id,
-                target=f"brain_import:{idx}",
+            if dedup_key in existing_by_key:
+                memory_ids.append(existing_by_key[dedup_key])
+            else:
+                to_insert.append(sk)
+
+        embeddings: Sequence[Sequence[float]] | None = None
+        embed_model_name = "none/portable-passport"
+        if self._llm is not None and to_insert:
+            try:
+                embeddings = await self._llm.embed(texts=[s["summary"] for s in to_insert])
+                embed_model_name = next(
+                    (
+                        val
+                        for attr in ("embed_model", "_embed_model", "_default_embed_model")
+                        if isinstance((val := getattr(self._llm, attr, None)), str) and val.strip()
+                    ),
+                    "text-embedding-3-small",
+                )
+            except Exception:  # noqa: BLE001  # reason: degraded LLM endpoint must not block canonical passport import
+                embeddings = None
+
+        for idx, sk in enumerate(to_insert):
+            vec_cand = (
+                embeddings[idx]
+                if (
+                    embeddings is not None
+                    and idx < len(embeddings)
+                    and len(embeddings[idx]) == 1536
+                )
+                else None
             )
-            m_type = str(item.get("type") or "procedural")
-            if m_type not in {"semantic", "episodic", "procedural"}:
-                m_type = "procedural"
-            conf = float(item.get("confidence", 0.7))
-            conf = max(0.0, min(1.0, conf))
+            eff_emb_model = (
+                embed_model_name
+                if vec_cand is not None
+                else str(sk["brain_metadata"].get("embedding_model") or "none/portable-passport")
+            )
+            prov: dict[str, Any] = {
+                "source": "portable_brain_passport",
+                "evidence_ref": evidence_ref,
+                "source_agent_id": str(passport.get("agent_id") or "specialist"),
+                "brain_variant": sk["brain_variant"],
+                "brain_metadata": dict(sk["brain_metadata"]),
+            }
+            if passport_agent_type or target_agent_type:
+                prov["agent_type"] = target_agent_type or passport_agent_type
+            if sk["specializations"]:
+                prov["specializations"] = list(sk["specializations"])
             mem = Memory(
-                content_raw=vetted_content,
-                summary=vetted_sum,
-                type=m_type,
-                embedding_model="none/portable-passport",
-                provenance={
-                    "source": "portable_brain_passport",
-                    "evidence_ref": evidence_ref,
-                    "source_agent_id": str(passport.get("agent_id") or "specialist"),
-                },
+                content_raw=sk["content_raw"],
+                summary=sk["summary"],
+                type=sk["type"],
+                embedding_model=eff_emb_model,
+                embedding_dims=1536 if vec_cand is not None else None,
+                provenance=prov,
                 agent_id=ctx.agent_id,
                 project_id=None,
-                domain_id=str(item.get("domain_id") or eff_domain)
-                if (item.get("domain_id") or eff_domain)
-                else None,
+                domain_id=sk["domain_id"],
                 tenant_id=ctx.tenant_id,
                 scope="agent",
-                confidence=conf,
+                confidence=sk["confidence"],
             )
-            mid = await self._repo.upsert_memory(mem)
+            mid = await self._repo.upsert_memory(mem, embedding=vec_cand)
             memory_ids.append(mid)
+            dedup_key = (
+                sk["brain_variant"],
+                sk["type"],
+                sk["domain_id"],
+                sk["summary"],
+                sk["content_raw"],
+            )
+            existing_by_key[dedup_key] = mid
 
         return {
             "agent_id": ctx.agent_id,
+            "agent_type": target_agent_type or passport_agent_type,
             "tenant_id": ctx.tenant_id,
             "domain_id": eff_domain,
+            "specializations": merged_profile_specs,
             "skills_imported": len(memory_ids),
             "memory_ids": memory_ids,
+        }
+
+    async def agent_brain_compare(
+        self,
+        ctx: ActorContext,
+        *,
+        variant_a: str,
+        variant_b: str,
+        query: str | None = None,
+        k: int = 5,
+        scope: str = "agent",
+        domain_id: str | None = None,
+        specialization: str | None = None,
+    ) -> dict[str, Any]:
+        """Compare two multi-model brain variants (variant_a vs. variant_b) across
+        skill statistics, retrieval feedback useful_rate, and optional live query hits."""
+        await self._decide(
+            ctx, "agent_brain_compare", TargetScope(tenant_id=ctx.tenant_id, scope=scope)
+        )
+        eff_domain = await self._enforce_domain_boundary(ctx, "agent_brain_compare", domain_id)
+        metrics_a = await self._repo.get_brain_variant_metrics(
+            tenant_id=ctx.tenant_id,
+            variant=variant_a,
+            scope=scope,
+            agent_id=ctx.agent_id if scope == "agent" else None,
+            project_id=ctx.project_id if scope == "project" else None,
+            domain_id=eff_domain,
+            specialization=specialization,
+        )
+        metrics_b = await self._repo.get_brain_variant_metrics(
+            tenant_id=ctx.tenant_id,
+            variant=variant_b,
+            scope=scope,
+            agent_id=ctx.agent_id if scope == "agent" else None,
+            project_id=ctx.project_id if scope == "project" else None,
+            domain_id=eff_domain,
+            specialization=specialization,
+        )
+        score_a = (metrics_a["useful_rate"] * 0.6) + (metrics_a["mean_confidence"] * 0.4)
+        score_b = (metrics_b["useful_rate"] * 0.6) + (metrics_b["mean_confidence"] * 0.4)
+        if abs(score_a - score_b) < 1e-6:
+            winner = (
+                variant_a if metrics_a["skill_count"] >= metrics_b["skill_count"] else variant_b
+            )
+        else:
+            winner = variant_a if score_a > score_b else variant_b
+
+        result: dict[str, Any] = {
+            "agent_id": ctx.agent_id,
+            "tenant_id": ctx.tenant_id,
+            "scope": scope,
+            "domain_id": eff_domain,
+            "specialization": specialization,
+            "variant_a": metrics_a,
+            "variant_b": metrics_b,
+            "winner": winner,
+        }
+        if query and query.strip():
+            hits_a = await self.memory_search(
+                ctx,
+                query,
+                scope=scope,
+                domain_id=eff_domain,
+                brain_variant=variant_a,
+                specialization=specialization,
+                k=k,
+            )
+            hits_b = await self.memory_search(
+                ctx,
+                query,
+                scope=scope,
+                domain_id=eff_domain,
+                brain_variant=variant_b,
+                specialization=specialization,
+                k=k,
+            )
+            summaries_a = {h.summary for h in hits_a}
+            summaries_b = {h.summary for h in hits_b}
+            union_cnt = len(summaries_a | summaries_b)
+            overlap_ratio = (
+                round(len(summaries_a & summaries_b) / union_cnt, 4) if union_cnt > 0 else 0.0
+            )
+            result["query_comparison"] = {
+                "query": query,
+                "variant_a_hits": [
+                    {"memory_id": h.memory_id, "summary": h.summary, "score": h.score}
+                    for h in hits_a
+                ],
+                "variant_b_hits": [
+                    {"memory_id": h.memory_id, "summary": h.summary, "score": h.score}
+                    for h in hits_b
+                ],
+                "overlap_ratio": overlap_ratio,
+            }
+        return result
+
+    async def agent_space_offboard(
+        self,
+        ctx: ActorContext,
+        *,
+        evidence_ref: str | None,
+        reason: str = "cross_tenant_reassignment",
+        purge_episodes: bool = True,
+        retire_memories: bool = True,
+    ) -> dict[str, Any]:
+        """Governed transactional offboarding of a Virtual Employee's private
+        scope='agent' space on the caller's tenant."""
+        await self._decide(
+            ctx,
+            "agent_space_offboard",
+            TargetScope(tenant_id=ctx.tenant_id, scope="agent"),
+            note=reason,
+        )
+        if not evidence_ref:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="agent_space_offboard",
+                allowed=False,
+                reason="missing_evidence_ref",
+            )
+            raise GovernedWriteRejected("agent_space_offboard requires evidence_ref")
+
+        counts = await self._repo.offboard_agent_space(
+            tenant_id=ctx.tenant_id,
+            agent_id=ctx.agent_id,
+            reason=reason,
+            purge_episodes=purge_episodes,
+            retire_memories=retire_memories,
+        )
+        return {
+            "agent_id": ctx.agent_id,
+            "tenant_id": ctx.tenant_id,
+            "reason": reason,
+            "evidence_ref": evidence_ref,
+            **counts,
         }
 
     async def memory_ingest_event(
@@ -978,6 +1858,7 @@ class AccessSurface:
         await self._decide(
             ctx, "knowledge_search", TargetScope(tenant_id=ctx.tenant_id, scope=eff_scope)
         )
+        eff_domain_id = await self._enforce_domain_boundary(ctx, "knowledge_search", domain_id)
         eff_vec = query_vec
         if eff_vec is None and self._llm is not None and query and query.strip():
             try:
@@ -990,7 +1871,7 @@ class AccessSurface:
         search_kwargs: dict[str, Any] = {
             "tenant_id": ctx.tenant_id,
             "project_id": ctx.project_id,
-            "domain_id": domain_id,
+            "domain_id": eff_domain_id,
             "query_vec": eff_vec,
             "scope": scope,
             "limit": limit,

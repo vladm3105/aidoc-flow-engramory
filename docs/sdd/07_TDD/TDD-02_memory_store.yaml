@@ -65,6 +65,16 @@ test_cases:
         action: { description: "upsert correction M2 supersedes M1" }
         expected_state: ["M1.valid_to set", "M1.content_raw retained", "M2.supersedes=M1"]
         error_paths: [{ condition: "store down", expected_error: "StoreUnavailable" }]
+      - id: "TDD.02.04.b200"
+        name: "multi-model brain_variant parallel distillation, specialization filtering, and experience-ranked list_agent_profiles"
+        spec_ref: "@spec: SPEC-02"
+        contract: "get_unreflected_episodes and get_memories scope by brain_variant and specialization; list_agent_profiles ranks instances by mean_confidence and active_skill_count"
+        test_file: "tests/test_virtual_employee_lifecycle.py"
+        test_function: "test_multi_model_distillation_and_specialist_roster_ranking"
+        setup: ["seed episodes for agent-support-01 and agent-support-02"]
+        action: { description: "reflect episodes under two brain_variants and query list_agent_profiles and get_memories by specialization" }
+        expected_state: ["2 parallel brain_variant copies created", "specialization filter isolates stripe vs oidc skills", "list_agent_profiles orders by mean_confidence DESC, active_skill_count DESC"]
+        error_paths: [{ condition: "store down", expected_error: "StoreUnavailable" }]
   e2e_tests: { cases: [] }
 
 thresholds:

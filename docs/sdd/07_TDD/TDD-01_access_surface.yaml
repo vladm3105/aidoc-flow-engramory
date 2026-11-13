@@ -75,6 +75,18 @@ test_cases:
         expected_state: ["GovernedWriteRejected raised", "AuditRecord(deny) emitted within 200 ms"]
         error_paths:
           - { condition: "missing evidence_ref", expected_error: "GovernedWriteRejected" }
+      - id: "TDD.01.04.b300"
+        name: "Virtual Employee Brain Passport export/import, SHA-256 verification, archetype guard, memory_promote, and agent_space_offboard"
+        spec_ref: "@spec: SPEC-01"
+        contract: "agent_brain_export/import, memory_promote, agent_space_offboard, and agent_brain_compare enforce evidence_ref, passport_sha256, agent_type guard, and _SCOPE_CLAUSES visibility"
+        test_file: "tests/test_virtual_employee_lifecycle.py"
+        test_function: "test_virtual_employee_brain_passport_and_promotion_lifecycle"
+        setup: ["seed multi-instance fleet (agent-support-01, agent-support-02, agent-dev-01)"]
+        action: { description: "distill multi-model brain variants, promote skill to domain/project, export passport, offboard Tenant A, import into Tenant B" }
+        expected_state: ["PII scrubbed recursively", "passport_sha256 tamper rejected", "cross-archetype import rejected", "shared project episodes preserved on offboard", "promoted memory deduplicated across instances"]
+        error_paths:
+          - { condition: "tampered passport_sha256 or mismatched agent_type", expected_error: "GovernedWriteRejected" }
+          - { condition: "peer agent promotes another agent's private scope='agent' memory", expected_error: "AuthzError" }
   e2e_tests:
     cases:
       - id: "TDD.01.04.c300"

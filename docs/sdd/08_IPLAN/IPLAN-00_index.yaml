@@ -5,7 +5,7 @@ metadata:
   schema_version: "1.0"
   document_type: "iplan-registry"
   layer: 8
-  total_plans: 8
+  total_plans: 9
   last_updated: "2026-11-13"
 
 registry:
@@ -114,7 +114,20 @@ registry:
       files_done: 12
       skipped: []
       depends_on: ["IPLAN-01", "IPLAN-02", "IPLAN-03", "IPLAN-06", "IPLAN-07"]
+    - id: "IPLAN-09"
+      title: "Virtual Employee Hierarchy, Multi-Model Brain Variants & Portable Brain Passports"
+      source_spec: "@spec: SPEC-01"
+      scope: "4-level Virtual Employee hierarchy (agent/project/domain/space), multi-agent archetype & specialization taxonomy, parallel multi-model brain_variant distillation & comparison, memory_promote, agent_space_offboard, and SHA-256 Brain Passports"
+      status: "Completed"
+      status_date: "2026-11-13"
+      complexity: 4
+      session_count: 1
+      sessions_completed: 1
+      files_declared: 12
+      files_done: 12
+      skipped: []
+      depends_on: ["IPLAN-01", "IPLAN-02", "IPLAN-03", "IPLAN-04", "IPLAN-07"]
 
 # Build order (topological): IPLAN-06 (ports) → IPLAN-02 (store) →
-# IPLAN-03/04 (retrieval/distillation) → IPLAN-01 (access) → IPLAN-05/07/08 (KB compat, CLI, Multimodal CAS).
-build_order: ["IPLAN-06", "IPLAN-02", "IPLAN-03", "IPLAN-04", "IPLAN-01", "IPLAN-05", "IPLAN-07", "IPLAN-08"]
+# IPLAN-03/04 (retrieval/distillation) → IPLAN-01 (access) → IPLAN-05/07/08/09 (KB compat, CLI, Multimodal CAS, Virtual Employee Brain).
+build_order: ["IPLAN-06", "IPLAN-02", "IPLAN-03", "IPLAN-04", "IPLAN-01", "IPLAN-05", "IPLAN-07", "IPLAN-08", "IPLAN-09"]

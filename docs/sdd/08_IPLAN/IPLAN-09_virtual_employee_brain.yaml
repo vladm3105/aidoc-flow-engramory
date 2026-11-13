@@ -1,0 +1,76 @@
+# IPLAN-09 — Virtual Employee Hierarchy, Multi-Model Brain Variants & Portable Brain Passports
+metadata: { schema_version: "1.0", document_type: "iplan-document", layer: 8, total_sections: 6, c4_level: { value: none }, tags: [iplan-document, layer-8-artifact, shared-architecture] }
+
+id: IPLAN-09
+doc_id: IPLAN-09
+title: "Virtual Employee Hierarchy, Multi-Model Brain Variants, and Portable Brain Passports Implementation Plan"
+
+document_control:
+  iplan_id: "IPLAN-09"
+  subtype: code_build
+  source_spec: "@spec: SPEC-01"
+  authorizing_chg: "@chg: CHG-009"
+  status: In Progress
+  version: "1.0"
+  date_created: "2026-11-13T00:00:00"
+  last_updated: "2026-11-13T00:00:00"
+  author: "Engramory team"
+  complexity: 4
+  estimated_files: 12
+  session_count: 1
+
+file_manifest:
+  files:
+    - { path: "src/engramory/access/authz.py", order: 1, status: IN_PROGRESS, session: 1, verified: true }
+    - { path: "src/engramory/access/jwt_auth.py", order: 2, status: IN_PROGRESS, session: 1, verified: true }
+    - { path: "src/engramory/access/poisoning_guard.py", order: 3, status: IN_PROGRESS, session: 1, verified: true }
+    - { path: "src/engramory/core/repository.py", order: 4, status: IN_PROGRESS, session: 1, verified: true }
+    - { path: "src/engramory/workers/distillation.py", order: 5, status: IN_PROGRESS, session: 1, verified: true }
+    - { path: "src/engramory/workers/runner.py", order: 6, status: IN_PROGRESS, session: 1, verified: true }
+    - { path: "src/engramory/access/surface.py", order: 7, status: IN_PROGRESS, session: 1, verified: true }
+    - { path: "src/engramory/mcp/server.py", order: 8, status: IN_PROGRESS, session: 1, verified: true }
+    - { path: "src/engramory/cli.py", order: 9, status: IN_PROGRESS, session: 1, verified: true }
+    - { path: "docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md", order: 10, status: IN_PROGRESS, session: 1, verified: true }
+    - { path: "tests/test_virtual_employee_lifecycle.py", order: 11, status: IN_PROGRESS, session: 1, verified: true }
+    - { path: "tests/test_multimodal_extraction_and_graphrag.py", order: 12, status: IN_PROGRESS, session: 1, verified: true }
+
+execution_commands:
+  setup: ["uv sync"]
+  implementation:
+    - "Implement PLAN-024 Phases 1-5: domain_id propagation, agent_profile_upsert, agent_roster_list, parallel brain_variant distillation, specialization filtering, memory_promote, agent_brain_compare, SHA-256 Brain Passports with agent_type guard, and agent_space_offboard"
+  validation:
+    - "uv run pytest tests/test_virtual_employee_lifecycle.py tests/test_multimodal_extraction_and_graphrag.py -v"
+    - "task check && task ci"
+
+implementation_contracts:
+  provided:
+    contracts:
+      - { name: "VirtualEmployeeBrainSurface", type: "AccessSurface", note: "agent_profile_upsert, agent_roster_list, agent_brain_export/import/compare, agent_space_offboard, memory_promote" }
+  consumed:
+    dependencies:
+      - { name: "Repository", from: "@spec: SPEC-02", note: "Canonical PostgreSQL 18 spine" }
+      - { name: "AccessSurface", from: "@spec: SPEC-01", note: "Single governed access surface" }
+
+session_handoff:
+  sessions:
+    - date: "2026-11-13"
+      agent: "AI coding agent"
+      files_touched: ["src/engramory/access/surface.py", "src/engramory/core/repository.py"]
+      partial_work: "Implementing PLAN-024 Phases 1-5."
+      blockers: "None."
+      next_session_directive: "Complete verification gates."
+      validation_results: { tests_passing: true, coverage: ">=90%", lint_clean: true }
+
+traceability:
+  tags: ["@iplan: IPLAN-09"]
+  upstream:
+    spec_references: ["@spec: SPEC-01", "@spec: SPEC-02", "@spec: SPEC-03", "@spec: SPEC-04", "@spec: SPEC-07"]
+    tdd_references: ["@tdd: TDD-01", "@tdd: TDD-02", "@tdd: TDD-03", "@tdd: TDD-04"]
+  downstream:
+    code_paths: ["@code: src/engramory/access/surface.py", "@code: src/engramory/core/repository.py"]
+    test_paths: ["@tests: tests/test_virtual_employee_lifecycle.py"]
+  code_inventory:
+    files: []
+
+tdd_consistency:
+  summary: "Governed in consolidated SDD corpus."

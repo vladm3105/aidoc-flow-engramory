@@ -7,10 +7,10 @@ Worker-plane code: uses Repository directly by design; it is NOT a SPEC-01 agent
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
-from engramory.core.models import Episode, Memory
+from engramory.core.models import AgentProfile, Episode, Memory
 from engramory.core.repository import Repository
 from engramory.ports import LLMPort, VectorPort
 
@@ -30,15 +30,55 @@ async def reflect(
     llm: LLMPort | None = None,
     vector: VectorPort | None = None,
     batch_size: int = 32,
+    brain_variant: str | None = None,
+    distiller_model: str | None = None,
+    rag_params: Mapping[str, Any] | None = None,
 ) -> int:
     """Project not-yet-projected episodes into agent-scoped Memory rows.
 
     When ``llm`` and ``vector`` are provided, summaries are embedded in batches
     via LiteLLM / LLMPort and the resulting projections are written to pgvector.
-    Idempotent across runs: linkage is ``provenance['episode_id']``; an episode
-    already carrying a projection is skipped. Returns the number of memories created.
+    Idempotent across runs per ``brain_variant``: linkage is ``provenance['episode_id']``
+    + ``provenance['brain_variant']``; an episode already carrying a projection for
+    ``brain_variant`` is skipped. Returns the number of memories created.
     """
-    episodes = await repo.get_unreflected_episodes(tenant_id=tenant_id, agent_id=agent_id)
+    profile = (
+        await repo.get_agent_profile(agent_id, tenant_id=tenant_id)
+        if hasattr(repo, "get_agent_profile")
+        else None
+    )
+    prefs = dict(profile.standing_preferences) if isinstance(profile, AgentProfile) else {}
+    brain_cfg = (
+        dict(prefs.get("brain_config") or {})
+        if isinstance(prefs.get("brain_config"), Mapping)
+        else {}
+    )
+    eff_variant = (
+        brain_variant or str(brain_cfg.get("active_brain_variant") or "")
+    ).strip() or "default"
+    eff_distiller = (
+        distiller_model or str(brain_cfg.get("distiller_model") or "")
+    ).strip() or "reflect-v1"
+    eff_rag_params: dict[str, Any] = (
+        dict(rag_params)
+        if rag_params is not None
+        else (
+            dict(brain_cfg["rag_params"])
+            if isinstance(brain_cfg.get("rag_params"), Mapping)
+            else {}
+        )
+    )
+    profile_agent_type = str(prefs.get("agent_type") or prefs.get("role") or "").strip() or None
+    raw_prof_specs = prefs.get("specializations")
+    profile_specs = (
+        [str(s).strip() for s in raw_prof_specs if str(s).strip()]
+        if isinstance(raw_prof_specs, list | tuple)
+        else []
+    )
+
+    episodes = await repo.get_unreflected_episodes(
+        tenant_id=tenant_id, agent_id=agent_id, brain_variant=eff_variant
+    )
     if not episodes:
         return 0
 
@@ -55,7 +95,7 @@ async def reflect(
                 for attr in ("embed_model", "_embed_model", "_default_embed_model")
                 if isinstance((val := getattr(llm, attr, None)), str) and val.strip()
             ),
-            DEFAULT_EMBED_MODEL,
+            str(brain_cfg.get("embedding_model") or "").strip() or DEFAULT_EMBED_MODEL,
         )
         if llm is not None and vector is not None:
             try:
@@ -87,6 +127,15 @@ async def reflect(
             target_scope = (
                 raw_scope if raw_scope in {"agent", "project", "domain", "space"} else "agent"
             )
+            prov = _build_episode_provenance(
+                episode,
+                distiller=eff_distiller,
+                brain_variant=eff_variant,
+                embedding_model=emb_model,
+                rag_params=eff_rag_params,
+                agent_type=profile_agent_type,
+                specializations=profile_specs,
+            )
             memory = Memory(
                 content_raw=episode.content_raw,
                 summary=episode.content_raw,
@@ -95,7 +144,7 @@ async def reflect(
                 embedding_dims=len(vec_candidate)
                 if (has_vector and vec_candidate is not None)
                 else None,
-                provenance=_build_episode_provenance(episode, distiller="reflect-v1"),
+                provenance=prov,
                 confidence=_resolve_episode_confidence(episode),
                 agent_id=episode.agent_id,
                 project_id=episode.project_id,
@@ -103,7 +152,9 @@ async def reflect(
                 tenant_id=episode.tenant_id,
                 scope=target_scope,
             )
-            memory_id = await repo.upsert_memory(memory)
+            memory_id = await repo.upsert_memory(
+                memory, embedding=vec_candidate if has_vector else None
+            )
             if has_vector and vector is not None and vec_candidate is not None:
                 await vector.upsert(
                     id=memory_id,
@@ -126,17 +177,50 @@ _PROVENANCE_PASSTHROUGH_KEYS = (
     "trace_id",
     "effectiveness_score",
     "calibration_delta",
+    "agent_type",
+    "specializations",
 )
 
 
-def _build_episode_provenance(episode: Episode, *, distiller: str) -> dict[str, Any]:
-    """Build distilled Memory.provenance preserving OriginProvenance and W3C trace_id."""
-    prov: dict[str, Any] = {"episode_id": episode.id, "distiller": distiller}
+def _build_episode_provenance(
+    episode: Episode,
+    *,
+    distiller: str,
+    brain_variant: str = "default",
+    embedding_model: str = INTERIM_EMBEDDING_MODEL,
+    rag_params: Mapping[str, Any] | None = None,
+    agent_type: str | None = None,
+    specializations: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Build distilled Memory.provenance preserving OriginProvenance, W3C trace_id,
+    multi-model brain_metadata, agent_type, and specializations."""
+    prov: dict[str, Any] = {
+        "episode_id": episode.id,
+        "distiller": distiller,
+        "brain_variant": brain_variant,
+        "brain_metadata": {
+            "brain_variant": brain_variant,
+            "distiller_model": distiller,
+            "embedding_model": embedding_model,
+            "rag_params": dict(rag_params or {}),
+        },
+    }
     meta = episode.metadata or {}
     for key in _PROVENANCE_PASSTHROUGH_KEYS:
         if key in meta and meta[key] is not None:
             val = meta[key]
             prov[key] = dict(val) if isinstance(val, dict) else val
+    if agent_type and not prov.get("agent_type"):
+        prov["agent_type"] = agent_type
+    ep_specs_raw = meta.get("specializations")
+    ep_specs = (
+        [str(s).strip() for s in ep_specs_raw if str(s).strip()]
+        if isinstance(ep_specs_raw, list | tuple)
+        else []
+    )
+    merged_specs = list(dict.fromkeys([*(specializations or ()), *ep_specs]))
+    if merged_specs:
+        prov["specializations"] = merged_specs
     return prov
 
 

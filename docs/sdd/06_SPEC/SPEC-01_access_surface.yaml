@@ -76,6 +76,41 @@ interfaces:
       signature: "async def agent_profile_get(ctx: ActorContext) -> AgentProfile"
       description: "Load the caller's L3 identity profile (MEMORY_DESIGN task step 1)."
       errors: ["AuthzError"]
+    - name: "agent_profile_upsert"
+      type: "async function"
+      signature: "async def agent_profile_upsert(ctx: ActorContext, *, display_name: str | None = None, agent_type: str | None = None, role: str | None = None, domain_id: str | None = None, specializations: Sequence[str] | None = None, brain_config: Mapping[str, Any] | None = None, standing_preferences: Mapping[str, Any] | None = None) -> AgentProfile"
+      description: "Governed L3 Virtual Employee profile upsert storing agent_type, role, department_focus (domain_id), specializations, and brain_config in standing_preferences after poisoning screening."
+      errors: ["AuthzError", "GovernedWriteRejected", "StoreUnavailable"]
+    - name: "agent_roster_list"
+      type: "async function"
+      signature: "async def agent_roster_list(ctx: ActorContext, *, domain_id: str | None = None, agent_type: str | None = None, role: str | None = None, specialization: str | None = None, include_stats: bool = True) -> list[dict[str, Any]]"
+      description: "List and rank Virtual Employee instances in the caller's tenant filtered by domain_id, agent_type, role, or specialization with live active_skill_count and mean_confidence statistics."
+      errors: ["AuthzError", "StoreUnavailable"]
+    - name: "agent_brain_export"
+      type: "async function"
+      signature: "async def agent_brain_export(ctx: ActorContext, *, domain_id: str | None = None, brain_variant: str | None = None, specialization: str | None = None, limit: int = 100, redact_terms: Sequence[str] = ()) -> dict[str, Any]"
+      description: "Export a sanitized, tenant-neutral Virtual Employee Brain Passport (engramory.brain_passport.v1) with recursive PII scrubbing, brain_metadata, specializations, and canonical passport_sha256 digest."
+      errors: ["AuthzError", "StoreUnavailable"]
+    - name: "agent_brain_import"
+      type: "async function"
+      signature: "async def agent_brain_import(ctx: ActorContext, *, passport: Mapping[str, Any], evidence_ref: str | None, target_domain_id: str | None = None, brain_variant: str | None = None, redact_terms: Sequence[str] = (), verify_integrity: bool = True, allow_type_override: bool = False) -> dict[str, Any]"
+      description: "Import a sanitized Brain Passport into the caller's private scope='agent' memory space after verifying evidence_ref, passport_sha256 integrity, agent_type compatibility, and poisoning guard checks."
+      errors: ["AuthzError", "GovernedWriteRejected", "ValidationError", "StoreUnavailable"]
+    - name: "agent_brain_compare"
+      type: "async function"
+      signature: "async def agent_brain_compare(ctx: ActorContext, *, variant_a: str, variant_b: str, query: str | None = None, k: int = 5, scope: str = 'agent', domain_id: str | None = None, specialization: str | None = None) -> dict[str, Any]"
+      description: "Compare two multi-model brain variants (variant_a vs. variant_b) across skill count, confidence, token efficiency, retrieval feedback useful_rate, and optional live query hit overlap."
+      errors: ["AuthzError", "ValidationError", "StoreUnavailable"]
+    - name: "agent_space_offboard"
+      type: "async function"
+      signature: "async def agent_space_offboard(ctx: ActorContext, *, evidence_ref: str | None, reason: str = 'cross_tenant_reassignment', purge_episodes: bool = True, retire_memories: bool = True) -> dict[str, Any]"
+      description: "Governed transactional offboarding of a Virtual Employee's private scope='agent' memories, private episodes, and L3 profile on the old tenant while preserving shared project/domain/space artifacts."
+      errors: ["AuthzError", "GovernedWriteRejected", "StoreUnavailable"]
+    - name: "memory_promote"
+      type: "async function"
+      signature: "async def memory_promote(ctx: ActorContext, *, memory_id: str, target_scope: str, evidence_ref: str | None, target_domain_id: str | None = None, target_project_id: str | None = None, specializations: Sequence[str] | None = None) -> dict[str, Any]"
+      description: "Governed promotion of a validated L2 memory up the ADR-07 scope ladder (agent -> project -> domain -> space) with strict source visibility, cross-instance deduplication, and provenance."
+      errors: ["AuthzError", "GovernedWriteRejected", "ValidationError", "KeyError", "StoreUnavailable"]
     - name: "knowledge_ingest"
       type: "async function"
       signature: "async def knowledge_ingest(ctx: ActorContext, entry: KBEntryIn, evidence_ref: str | None) -> EntryId"
@@ -126,6 +161,7 @@ data_models:
         - { name: "project_id", type: "str", required: true, description: "Project scope" }
         - { name: "tenant_id", type: "str", required: true, description: "Tenant scope" }
         - { name: "scopes", type: "set[str]", required: true, description: "Granted scopes (agent|project|domain|space) per @adr: ADR-07" }
+        - { name: "domain_id", type: "str | None", required: false, description: "Optional department/domain focus (e.g. billing, security, platform)" }
     - name: "AuthzDecision"
       type: "dataclass"
       fields:
