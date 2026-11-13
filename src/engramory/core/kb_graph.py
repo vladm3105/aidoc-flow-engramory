@@ -1084,14 +1084,30 @@ def extract_knowledge_and_media_graph(
             prev_sec_node_id = sec_node_id
 
             # Extract SDD specification mentions (@spec:, SPEC-01, ADR-03, etc.)
+            sdd_targets: list[str] = []
             for match in TAG_RE.finditer(sec.text):
                 target = normalize_sdd_id(match.group("target"))
                 if target:
-                    _add_rel(sec_node_id, target, "MENTIONS_ENTITY")
+                    sdd_targets.append(target)
             for match in _SDD_REF_RE.finditer(sec.text):
                 target = normalize_sdd_id(match.group("id"))
                 if target:
-                    _add_rel(sec_node_id, target, "MENTIONS_ENTITY")
+                    sdd_targets.append(target)
+            for target in sdd_targets:
+                if target not in entities:
+                    sdd_type = target.split("-", 1)[0].upper() if "-" in target else "SDD"
+                    entities[target] = GraphEntity(
+                        id=target,
+                        entity_type=sdd_type,
+                        name=target,
+                        tenant_id=tenant_id,
+                        domain_id=sec.domain_id or eff_domain,
+                        properties={
+                            "project_id": sec.project_id or eff_project,
+                            "stub": True,
+                        },
+                    )
+                _add_rel(sec_node_id, target, "MENTIONS_ENTITY")
 
             # Extract [[Concept]] wiki-style links
             for match in _WIKI_CONCEPT_RE.finditer(sec.text):
