@@ -83,6 +83,10 @@ async def reflect(
             has_vector = bool(vec_candidate) and len(vec_candidate or ()) == EXPECTED_EMBED_DIMS
             emb_model = model_name if has_vector else INTERIM_EMBEDDING_MODEL
 
+            raw_scope = str((episode.metadata or {}).get("scope") or "agent")
+            target_scope = (
+                raw_scope if raw_scope in {"agent", "project", "domain", "space"} else "agent"
+            )
             memory = Memory(
                 content_raw=episode.content_raw,
                 summary=episode.content_raw,
@@ -97,7 +101,7 @@ async def reflect(
                 project_id=episode.project_id,
                 domain_id=episode.domain_id,
                 tenant_id=episode.tenant_id,
-                scope="agent",
+                scope=target_scope,
             )
             memory_id = await repo.upsert_memory(memory)
             if has_vector and vector is not None and vec_candidate is not None:

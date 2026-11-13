@@ -54,6 +54,7 @@ class ActorContext:
     project_id: str
     tenant_id: str
     scopes: frozenset[str]  # granted visibility levels per ADR-07
+    domain_id: str | None = None  # optional department/domain focus for virtual employees
 
 
 @dataclass(frozen=True, slots=True)

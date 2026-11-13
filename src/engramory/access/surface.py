@@ -199,6 +199,7 @@ class AccessSurface:
         *,
         scope: str = "agent",
         tenant_id: str | None = None,
+        domain_id: str | None = None,
         k: int = 8,
         token_budget: int | None = DEFAULT_TOKEN_BUDGET,
         expand_graph: bool = False,
@@ -215,6 +216,7 @@ class AccessSurface:
         target = TargetScope(tenant_id=tenant_id or ctx.tenant_id, scope=scope)
         await self._decide(ctx, "memory_search", target)
         levels = _granted_levels(scope, ctx.scopes)
+        eff_domain_id = domain_id if domain_id is not None else ctx.domain_id
         query_vec: Sequence[float] | None = None
         if self._llm is not None and query and query.strip():
             try:
@@ -228,7 +230,7 @@ class AccessSurface:
             tenant_id=target.tenant_id,
             agent_id=ctx.agent_id,
             project_id=ctx.project_id,
-            domain_id=None,  # domain membership lands on ActorContext with BRD-04
+            domain_id=eff_domain_id,
             k=max_hits,
             query=query,
             query_vec=query_vec,
@@ -434,13 +436,18 @@ class AccessSurface:
         *,
         content: str,
         kind: str = "note",
+        scope: str = "agent",
         domain_id: str | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> str:
         """Append an episode in the caller's scope (idempotent by content hash)."""
         if len(content.encode("utf-8")) > MAX_CONTENT_BYTES:
             raise ValueError(f"content exceeds {MAX_CONTENT_BYTES} bytes")
-        await self._decide(ctx, "memory_add", TargetScope(tenant_id=ctx.tenant_id, scope="agent"))
+        await self._decide(ctx, "memory_add", TargetScope(tenant_id=ctx.tenant_id, scope=scope))
+        eff_domain_id = domain_id if domain_id is not None else ctx.domain_id
+        merged_meta: dict[str, Any] = dict(metadata) if metadata else {}
+        if scope != "agent":
+            merged_meta["scope"] = scope
         try:
             vetted_content = inspect_memory_write(
                 content,
@@ -448,9 +455,9 @@ class AccessSurface:
                 writer_agent_id=ctx.agent_id,
                 target="episodes",
             )
-            if metadata:
+            if merged_meta:
                 inspect_memory_write(
-                    json.dumps(dict(metadata), sort_keys=True),
+                    json.dumps(merged_meta, sort_keys=True),
                     tenant_id=ctx.tenant_id,
                     writer_agent_id=ctx.agent_id,
                     target="episodes:metadata",
@@ -469,10 +476,10 @@ class AccessSurface:
             agent_id=ctx.agent_id,
             content_raw=vetted_content,
             project_id=ctx.project_id,
-            domain_id=domain_id,
+            domain_id=eff_domain_id,
             tenant_id=ctx.tenant_id,
             kind=kind,
-            metadata=metadata or {},
+            metadata=merged_meta,
         )
         return await self._repo.add_episode(episode)
 

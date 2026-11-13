@@ -226,7 +226,14 @@ def _run_with_surface(
 
 def _cmd_memory_add(args: argparse.Namespace) -> int:
     async def op(surface: AccessSurface, ctx: ActorContext) -> dict[str, Any]:
-        episode_id = await surface.memory_add(ctx, content=args.content, kind=args.kind)
+        extra_add_kwargs: dict[str, Any] = {}
+        if getattr(args, "scope", "agent") != "agent":
+            extra_add_kwargs["scope"] = args.scope
+        if getattr(args, "domain_id", None):
+            extra_add_kwargs["domain_id"] = args.domain_id
+        episode_id = await surface.memory_add(
+            ctx, content=args.content, kind=args.kind, **extra_add_kwargs
+        )
         return {"episode_id": episode_id}
 
     return _run_with_surface(args, op, lambda p: f"episode {p['episode_id']}")
@@ -239,6 +246,8 @@ def _cmd_memory_search(args: argparse.Namespace) -> int:
             extra_kwargs["expand_graph"] = True
         if getattr(args, "include_knowledge", False):
             extra_kwargs["include_knowledge"] = True
+        if getattr(args, "domain_id", None):
+            extra_kwargs["domain_id"] = args.domain_id
         hits = await surface.memory_search(
             ctx, args.query, scope=args.scope, k=args.k, **extra_kwargs
         )
@@ -1060,11 +1069,19 @@ def _build_parser() -> argparse.ArgumentParser:
     p_add = mem_sub.add_parser("add", help="append an episode (idempotent)")
     p_add.add_argument("--content", required=True)
     p_add.add_argument("--kind", default="note")
+    p_add.add_argument(
+        "--scope",
+        default="agent",
+        choices=["agent", "project", "domain", "space"],
+        help="target memory scope (agent, project, domain, space)",
+    )
+    p_add.add_argument("--domain-id", default=None, help="optional department/domain focus id")
     p_add.set_defaults(func=_cmd_memory_add)
 
     p_search = mem_sub.add_parser("search", help="scoped retrieval")
     p_search.add_argument("--query", required=True)
     p_search.add_argument("--scope", default="agent")
+    p_search.add_argument("--domain-id", default=None, help="optional department/domain focus id")
     p_search.add_argument("-k", type=int, default=8)
     p_search.add_argument(
         "--include-knowledge",
