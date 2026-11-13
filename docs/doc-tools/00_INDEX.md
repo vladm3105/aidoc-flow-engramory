@@ -26,7 +26,7 @@ endpoints:
   container_gateway: "http://10.250.0.1:8000"
 watched_paths:
   - "docs/**"
-last_verified: 2026-11-06
+last_verified: 2026-11-12
 ---
 
 # Platform Docs Documentation Index & Architecture Map

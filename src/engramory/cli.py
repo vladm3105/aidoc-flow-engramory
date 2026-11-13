@@ -377,6 +377,7 @@ def _cmd_knowledge_ingest(args: argparse.Namespace) -> int:
                 project_id=config.ctx.project_id,
                 scope=getattr(args, "scope", "project"),
                 evidence_ref=getattr(args, "evidence_ref", None),
+                project_graph=True,
                 repo_root=target_path if target_path.is_dir() else None,
             )
             total_sections = sum(len(ids) for ids in results.values())
