@@ -416,6 +416,7 @@ class Neo4jGraphAdapter:
         active_uids = [f"{tenant_id}:{i}" for i in active_ids]
         where_clauses = [
             "(n.tenant_id = $tenant_id OR ($tenant_id = 'default' AND n.tenant_id IS NULL))",
+            "NOT (n:DOCUMENT OR n:SECTION OR n:MEDIA_BLOB OR n:CONCEPT)",
             "NOT n.uid IN $active_uids",
         ]
         params: dict[str, Any] = {"tenant_id": tenant_id, "active_uids": active_uids}

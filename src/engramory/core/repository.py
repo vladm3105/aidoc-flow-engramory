@@ -1312,6 +1312,7 @@ class Repository:
                 SELECT id FROM graph_entities
                 WHERE tenant_id = %(tenant_id)s
                   AND properties->>'project_id' = %(project_id)s
+                  AND entity_type NOT IN ('DOCUMENT', 'SECTION', 'MEDIA_BLOB', 'CONCEPT')
                   AND NOT id = ANY(%(active_ids)s::text[])
                 """
                 cur = await conn.execute(

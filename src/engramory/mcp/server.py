@@ -58,6 +58,18 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     "type": "integer",
                     "description": "Maximum tokens returned",
                 },
+                "include_knowledge": {
+                    "type": "boolean",
+                    "description": (
+                        "Include matching L0 extracted knowledge sections alongside L2 memories"
+                    ),
+                    "default": False,
+                },
+                "expand_graph": {
+                    "type": "boolean",
+                    "description": "Attach connected GraphRAG neighborhood context",
+                    "default": False,
+                },
             },
             "required": ["query"],
         },
@@ -553,12 +565,18 @@ class McpServer:
         try:
             if name == "memory_search":
                 raw_budget = arguments.get("token_budget", 2000)
+                extra_mem_kwargs: dict[str, Any] = {}
+                if arguments.get("expand_graph"):
+                    extra_mem_kwargs["expand_graph"] = True
+                if arguments.get("include_knowledge"):
+                    extra_mem_kwargs["include_knowledge"] = True
                 hits = await self._surface.memory_search(
                     call_ctx,
                     query=arguments["query"],
                     k=arguments.get("k", 8),
                     scope=arguments.get("scope", "agent"),
                     token_budget=2000 if raw_budget is None else int(raw_budget),
+                    **extra_mem_kwargs,
                 )
                 formatted = [
                     {
@@ -567,6 +585,11 @@ class McpServer:
                         "score": h.score,
                         "token_count": h.token_count,
                         "retrieval_id": h.retrieval_id,
+                        **(
+                            {"provenance": dict(h.provenance)}
+                            if (arguments.get("include_knowledge") or arguments.get("expand_graph"))
+                            else {}
+                        ),
                     }
                     for h in hits
                 ]

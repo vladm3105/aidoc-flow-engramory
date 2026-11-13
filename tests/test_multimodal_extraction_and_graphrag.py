@@ -503,3 +503,89 @@ def test_stdlib_mp4_and_wav_container_duration_probe(
         "#t=00:00:00-00:01:00",
         "#t=00:01:00-00:02:00",
     ]
+
+
+@pytest.mark.asyncio
+async def test_memory_search_fuses_extracted_knowledge_and_graphrag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from engramory.core.models import Memory
+    from engramory.mcp.server import McpServer
+
+    monkeypatch.chdir(tmp_path)
+    storage = LocalFsStorageAdapter(base_dir=tmp_path / "cas")
+    mock_repo = AsyncMock()
+    mem = Memory(
+        id="mem-cas-1",
+        content_raw="Always verify PostgreSQL CAS SHA-256 digests before promoting video blobs.",
+        summary="Always verify PostgreSQL CAS SHA-256 digests before promoting video blobs.",
+        type="procedural",
+        embedding_model="text-embedding-3-small",
+        agent_id="agent-1",
+        confidence=0.92,
+        scope="agent",
+        provenance={"episode_ids": ["ep-1"]},
+    )
+    mock_repo.get_memories.return_value = [mem]
+    mock_repo.log_retrievals.return_value = ["ret-1"]
+
+    captured_sections: list[KBSection] = []
+
+    async def _fake_upsert_batch(sections: list[KBSection]) -> dict[Any, str]:
+        out: dict[Any, str] = {}
+        for idx, s in enumerate(sections, 1):
+            captured_sections.append(s)
+            out[(s.tenant_id, s.doc_id, s.citation, s.version)] = f"sec-{idx}"
+        return out
+
+    mock_repo.upsert_kb_sections_batch.side_effect = _fake_upsert_batch
+    mock_repo.find_neighbors.return_value = [
+        {"id": "SPEC-03", "labels": ["SPEC"], "properties": {"name": "Retrieval Graph"}}
+    ]
+
+    surface = AccessSurface(mock_repo, graph=None, llm=None, storage=storage)
+    ctx = ActorContext(
+        agent_id="agent-1",
+        tenant_id="t1",
+        project_id="p1",
+        scopes=frozenset({"agent", "project"}),
+    )
+
+    img_file = tmp_path / "cas_arch.png"
+    img_file.write_bytes(_make_png_bytes(1280, 720))
+    await surface.knowledge_ingest_media(
+        ctx,
+        file_path=img_file,
+        evidence_ref="CHG-008",
+    )
+    mock_repo.search_kb_sections.return_value = [captured_sections[0]]
+
+    hits = await surface.memory_search(
+        ctx,
+        "PostgreSQL CAS",
+        k=5,
+        include_knowledge=True,
+        expand_graph=True,
+    )
+    assert len(hits) == 2
+    assert hits[0].memory_id == "mem-cas-1"
+    assert hits[0].retrieval_id == "ret-1"
+    assert hits[1].memory_id.startswith("kb:")
+    assert hits[1].provenance["source"] == "knowledge_base"
+    assert hits[1].provenance["modality"] == "image"
+    assert "graph_context" in hits[1].provenance["media_metadata"]
+
+    mcp = McpServer(surface, ctx)
+    mcp_res = await mcp.handle_call_tool(
+        "memory_search",
+        {
+            "query": "PostgreSQL CAS",
+            "k": 5,
+            "include_knowledge": True,
+            "expand_graph": True,
+        },
+    )
+    payload = json.loads(mcp_res["content"][0]["text"])
+    assert len(payload) == 2
+    assert payload[1]["provenance"]["source"] == "knowledge_base"
+    assert payload[1]["provenance"]["modality"] == "image"
