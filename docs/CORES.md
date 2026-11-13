@@ -14,15 +14,15 @@ Both run on the **same PostgreSQL spine** and are reached through **one unified 
 
 | | **Memory core** | **Knowledge core** |
 |---|---|---|
-| Layers | L1 short-term (project/session), L2 long-term distilled (cross-project), L3 agent identity | L0 documents/sections (`kb_sections`) |
-| Author | AI agents (experience, outcomes, lessons) | Humans / governed processes (specifications, ADRs) |
+| Layers | L1 short-term (project/session), L2 long-term distilled (per-agent/domain/project/space), L3 Virtual Employee identity & `brain_config` | L0 documents/sections (`kb_sections`) & multimodal blobs (`kb_blobs`) |
+| Author | AI agents (experience, outcomes, lessons, promoted skills) | Humans / governed processes (specifications, ADRs, runbooks, media) |
 | Trust | Inferred — needs confidence + safety screening (`source_trust`: `human`/`tool`/`agent`) | Authoritative, citable, versioned |
-| Write governance | Reflection + consolidation; injection/quarantine screening | Governed write + evidence reference ([ADR-06](sdd/05_ADR/ADR-06_governed_write_failclosed.yaml)) |
-| Lifecycle | Distilled → consolidated → forgotten | Versioned, permanent (append-only) |
-| Schema | `episodes`, `memories`, `agent_profiles`, `consolidation_runs`, `memory_retrievals` | `kb_sections` (migration 0003, MVP-1) |
-| Scale profile | High-frequency append + periodic reflection/compaction | Massive document corpora (e.g. 160+ SDD docs, 17 MB in `b-local-privy`) |
-| MCP / CLI tools | `memory add`, `memory search`, `memory feedback`, `memory forget`, `profile get` | `knowledge_ingest` (reads served through `memory search` for MVP-1) |
-| Code | `src/engramory/core/memory.py` | `src/engramory/core/knowledge.py` |
+| Write governance | Reflection + consolidation; injection/quarantine screening; `evidence_ref` for `memory_promote` and `agent_brain_import` | Governed write + evidence reference ([ADR-06](sdd/05_ADR/ADR-06_governed_write_failclosed.yaml)) |
+| Lifecycle | Distilled (multi-model `brain_variant`) → promoted → exported/offboarded or forgotten | Versioned, permanent (append-only) |
+| Schema | `episodes`, `memories`, `agent_profiles`, `consolidation_runs`, `memory_retrievals` | `kb_sections`, `kb_blobs`, `kb_blob_chunks`, `kb_blob_chunks_large` (migrations `0003`–`0010`) |
+| Scale profile | High-frequency append + per-variant reflection/compaction + specialist isolation | Massive document & multimodal corpora (`PDF`, `DOCX`, images, audio, `20 GB+` video) |
+| MCP / CLI tools | `memory add/search/feedback/forget/promote/distill`, `profile get/set/list/export-brain/import-brain/compare-brains/offboard` | `knowledge ingest/ingest-media/search/sync-git`, `sdd *`, `docs *` |
+| Code | `src/engramory/core/memory.py`, `src/engramory/workers/distillation.py` | `src/engramory/core/knowledge.py`, `src/engramory/core/extraction/` |
 
 Memory is **per-agent and cross-project** (L2 recalls lessons distilled in *other* projects) — not per-project only. Knowledge is **multi-tenant and scoped**, not a single global pool.
 

@@ -26,22 +26,37 @@ close the loop**.
 ## Track A — AI agent in a terminal
 
 ```bash
-# once per repo (see INSTALL.md for the DSN)
-engramory init --agent-id my-agent --project-id my-project \
-  --tenant-id default --dsn "$ENGRAMORY_DSN"
+# once per repo (see INSTALL.md for the DSN; optional --domain-id binds department focus)
+engramory init --agent-id agent-support-01 --project-id my-project \
+  --tenant-id default --domain-id billing --dsn "$ENGRAMORY_DSN"
 
-# remember a durable fact
-engramory memory add --content "this workspace pins postgres at pg16" --kind note
+# configure Virtual Employee archetype, specializations, and default brain_variant
+engramory profile set --display-name "Billing Support Specialist #1" \
+  --agent-type agent-support --role support --domain-id billing \
+  --specialization stripe --specialization chargebacks \
+  --brain-variant claude-sonnet-4-6 --distiller-model claude-sonnet-4-6
 
-# make it retrievable, then find it
+# remember a durable fact (tagged with optional specialization)
+engramory memory add --content "this workspace pins postgres at pg18" \
+  --kind note --specialization stripe
+
+# make it retrievable (optionally under a second model variant), then find it
 engramory memory distill
-engramory --json memory search --query "postgres version"
+engramory --json memory search --query "postgres version" --specialization stripe
 
 # close the loop with the retrieval_id from the hit
 engramory memory feedback --retrieval-id <id> --outcome useful
 
+# selectively promote a validated private skill to department or project scope
+engramory memory promote --memory-id <id> --target-scope domain \
+  --evidence-ref CHG-009-PROMOTE
+
+# export a sanitized Brain Passport, offboard, or import into another tenant
+engramory profile export-brain --out passport.json --redact-term acme
+engramory profile import-brain --file passport.json --evidence-ref CHG-009-IMPORT
+
 # retire a memory that turned out wrong (soft, audited)
-engramory memory forget --memory-id <id> --reason "superseded by pg17 upgrade"
+engramory memory forget --memory-id <id> --reason "superseded by pg18 upgrade"
 ```
 
 ## Track B — CI / scripted usage
@@ -95,8 +110,9 @@ OIDC-verified identity (ADR-10). Every call — either face — is authorized
 | Question | Doc |
 |---|---|
 | Install / stand up the store | [`INSTALL.md`](INSTALL.md) |
+| Virtual Employee hierarchy, `brain_variant` comparison & Brain Passports | [`VIRTUAL_EMPLOYEE_ARCHITECTURE.md`](VIRTUAL_EMPLOYEE_ARCHITECTURE.md) |
 | Wire any agent vendor | [`AGENT-INTEGRATION.md`](AGENT-INTEGRATION.md) |
 | Every flag + exit code | `engramory <cmd> --help` · [`sdd/06_SPEC/SPEC-07_cli_face.yaml`](sdd/06_SPEC/SPEC-07_cli_face.yaml) |
-| The tool contract (memory, knowledge, SDD & docs tools) | `sdd/06_SPEC/SPEC-01_access_surface.yaml` |
+| The tool contract (memory, profile, knowledge, SDD & docs tools) | `sdd/06_SPEC/SPEC-01_access_surface.yaml` |
 | Why CLI + Skill now, MCP gateway for production | `sdd/05_ADR/ADR-10_agent_facing_packaging.yaml` |
 | Memory model (L0–L3, distillation) | [`MEMORY_DESIGN.md`](MEMORY_DESIGN.md) |

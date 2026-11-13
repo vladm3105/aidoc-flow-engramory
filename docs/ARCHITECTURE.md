@@ -10,8 +10,9 @@ watched_paths:
   - "src/engramory/ports/storage.py"
   - "src/engramory/ports/graph.py"
   - "src/engramory/ports/vector.py"
+  - "src/engramory/access/surface.py"
   - "db/migrations/0001_init_memory.sql"
-last_verified: "2026-11-12"
+last_verified: "2026-11-13"
 ---
 
 # Engramory — Target Architecture
@@ -180,17 +181,22 @@ memories(
   supersedes uuid       -- corrections instead of deletes
 )
 
--- Per-agent identity
-agent_profiles(agent_id, display_name, standing_preferences jsonb, created_at, updated_at)
+-- Per-agent L3 Virtual Employee identity (composite PK per migration 0009)
+agent_profiles(
+  tenant_id text,
+  agent_id text,
+  display_name text,
+  standing_preferences jsonb, -- agent_type, role, department_focus, specializations, brain_config
+  created_at timestamptz,
+  updated_at timestamptz,
+  PRIMARY KEY (tenant_id, agent_id)
+)
 
 -- Distillation bookkeeping
 consolidation_runs(id, agent_id, started_at, finished_at, stats jsonb)
 ```
 
-(The block above is the memory core as of migration 0001/0002. Migration 0003 adds the
-contract-reconciliation surfaces — `episodes.content_hash`, `memories.status/source_trust/ts_lex`,
-`memory_retrievals`, `audit_records` — and the L0 `kb_sections` table (MVP-1/BRD-01
-knowledge core; see `sdd/06_SPEC/SPEC-02`).)
+(The block above is the memory core across migrations `0001`–`0010`. Migration `0003` adds `episodes.content_hash`, `memories.status/source_trust/ts_lex`, `memory_retrievals`, `audit_records`, and L0 `kb_sections`; migration `0009` scopes `agent_profiles` by `(tenant_id, agent_id)`; migration `0010` adds `kb_blobs`, `kb_blob_chunks`, `kb_blob_chunks_large`, and multimodal columns on `kb_sections`.)
 
 Because `content_raw` and `provenance` are always kept and `embedding` is marked regenerable, **the brain survives any model or platform migration** — you re-embed from `content_raw`, you don't re-architect.
 
@@ -277,6 +283,16 @@ Engramory is designed specifically for multi-agent software engineering workflow
   - `(tenant_id, agent_id, project_id, action, allowed, reason, ts)`
 - **Immediate Anomaly Detection:** If an executor agent attempts an out-of-scope query, invalid governed write, or repeats failed tool patterns, the Operations Assistant can observe this in `audit_records` near real-time without needing to poll individual git branches.
 - **Continuous Learning:** The `memory_retrievals` table logs which memories were served and subsequent feedback (`useful`, `not_useful`, `harmful`), giving the supervisor immediate visibility into retrieval efficacy.
+
+### 4. Virtual Employee Fleet, Multi-Model Brain Variants, and Portable Brain Passports (`PLAN-024` / `CHG-009`)
+
+Engramory models every deployed agent instance as a **Virtual Employee** (see [VIRTUAL_EMPLOYEE_ARCHITECTURE.md](VIRTUAL_EMPLOYEE_ARCHITECTURE.md)):
+
+- **3-Level Specialist Taxonomy:** Separates `agent_type` (archetype such as `agent-support`, `agent-pm`, `agent-dev`), `agent_id` (named instance such as `agent-support-01..10`), and `specializations` + `domain_id` (`department_focus` such as `billing` with `["stripe", "chargebacks"]`).
+- **Experience-Ranked Roster Discovery (`agent_roster_list`):** Supervisors and Layer-1 Stewards filter `agent_profiles` by `domain_id`, `agent_type`, and `specialization` and rank instances by live `mean_confidence DESC, active_skill_count DESC`.
+- **Parallel Multi-Model Distillation & A/B Comparison (`brain_variant`, `agent_brain_compare`):** `reflect()` projects the same L1 episodes into 2+ parallel L2 `brain_variant` copies (for example, `claude-sonnet-4-6` vs. `gemini-2.5-pro`) with full `brain_metadata`, evaluated side-by-side via `agent_brain_compare`.
+- **Selective Skill Promotion (`memory_promote`):** Elevates validated `scope='agent'` skills to `scope='domain'` (`domain_id`), `scope='project'` (`project_id`), or `scope='space'` under `evidence_ref` governance (`ADR-06`) with cross-instance deduplication.
+- **Portable Brain Passports & Tenant Offboarding (`agent_brain_export`, `agent_brain_import`, `agent_space_offboard`):** Exports sanitized L3 profiles and L2 `scope='agent'` skills (`sanitize_portable_value`), seals the payload with `passport_sha256`, enforces `agent_type` compatibility and `1536`-dim vector re-embedding on import, and transactionally retires private memories and private episodes on the source tenant.
 
 ---
 

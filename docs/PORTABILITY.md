@@ -13,16 +13,24 @@ The core depends on **8 ports**: Memory, Storage, Vector, Graph, Cache, LLM, Sec
 
 | Capability (Port) | Self-hosted dev | GCP | Azure |
 |---|---|---|---|
-| Memory (`MemoryPort`) + Storage | Postgres 16 (canonical rows) | Cloud SQL / AlloyDB | Azure DB for PostgreSQL Flexible |
-| Vector | pgvector | Cloud SQL / AlloyDB (pgvector) | Azure DB for PostgreSQL Flexible (pgvector) |
-| Graph | pure Postgres → Neo4j Community | Neo4j Aura (or pure-Postgres) | Neo4j Aura (or managed Apache AGE) |
-| Object storage (Storage) | MinIO | Cloud Storage | Azure Blob |
-| Cache / L1 | Redis | Memorystore | Azure Cache for Redis |
+| Memory (`MemoryPort`) + Storage | PostgreSQL 18 (canonical rows) | Cloud SQL / AlloyDB | Azure DB for PostgreSQL Flexible |
+| Vector | pgvector (`vector(1536)` HNSW) | Cloud SQL / AlloyDB (pgvector) | Azure DB for PostgreSQL Flexible (pgvector) |
+| Graph | pure Postgres → Neo4j 5.26 Community | Neo4j Aura (or pure-Postgres) | Neo4j Aura (or managed Apache AGE) |
+| Object & Multimodal Blob storage (`StoragePort`) | PostgreSQL 18 Chunked Blob CAS (`PgBlobStorageAdapter` in `ts_blob_cold` up to `20 GB+`) or OCI Object Storage | Cloud Storage | Azure Blob |
+| Cache / L1 | Valkey / Redis | Memorystore | Azure Cache for Redis |
 | LLM / embeddings | LiteLLM → Ollama | LiteLLM → Vertex AI | LiteLLM → Azure OpenAI |
-| Secrets | SOPS / Infisical | Secret Manager | Key Vault |
-| Events | Redis Streams / NATS | Pub/Sub | Service Bus / Event Grid |
+| Secrets | OpenBao / SOPS | Secret Manager | Key Vault |
+| Events | NATS JetStream / Redis Streams | Pub/Sub | Service Bus / Event Grid |
 | Compute | Docker Compose | Cloud Run / GKE | Container Apps / AKS |
-| Identity/auth (**gateway concern, not a core port**) | Keycloak / OIDC | Identity Platform | Entra ID |
+| Identity/auth (**gateway concern, not a core port**) | Authentik / Keycloak OIDC | Identity Platform | Entra ID |
+
+## Virtual Employee Brain Portability (`engramory.brain_passport.v1`)
+
+In addition to infrastructure portability across self-hosted, GCP, and Azure environments, Engramory supports **Virtual Employee Brain Portability** across tenants and sibling agent instances (see [VIRTUAL_EMPLOYEE_ARCHITECTURE.md](VIRTUAL_EMPLOYEE_ARCHITECTURE.md)):
+
+1. **Sanitized Export (`agent_brain_export`):** Exports the Virtual Employee's L3 `AgentProfile` (`agent_type`, `specializations`, `brain_metadata`, `standing_preferences`) and high-confidence L2 `scope='agent'` distilled skills, recursively scrubbing secrets, emails, URLs, IPs, UUIDs, and custom `redact_terms` via `sanitize_portable_value()` while omitting all raw L1 `episodes` and `episode_id` links.
+2. **Cryptographic Integrity & Archetype Guard (`agent_brain_import`):** Verifies the canonical `passport_sha256` digest fail-closed, enforces `agent_type` compatibility (`agent_type_mismatch` guard unless `allow_type_override=True`), preserves sibling instance `display_name` while union-merging `specializations`, and re-embeds imported skill summaries into the target tenant's `1536`-dim vector space.
+3. **Clean Source Offboarding (`agent_space_offboard`):** Transactionally retires private `scope='agent'` memories, purges private `scope='agent'` episodes, and removes the L3 profile on the source tenant while leaving shared `project`/`domain`/`space` artifacts untouched.
 
 ## Graph engine note
 

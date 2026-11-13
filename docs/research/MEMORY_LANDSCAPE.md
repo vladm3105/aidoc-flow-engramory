@@ -87,7 +87,9 @@ Obsidian is local-first and single-user by default — there's no native real-ti
 - **Commit small and often**, auto-pull on a short cadence; `.gitignore` the `.obsidian/workspace.json` (it changes constantly and is the #1 source of pointless conflicts).
 - Optional: tools like **agentic-git-sync** route git/merge failures through an AI agent that resolves conflicts semantically.
 
-**One honest caveat about concurrency at team scale:** Git is *asynchronous* (pull/push), so several agents writing every few seconds across machines is not its sweet spot. If your agents do high-frequency concurrent writes, a **shared memory server handles multi-writer concurrency better than file-sync** — which is the other reason the **Mem0 server (backed by Qdrant/Neo4j)** belongs in the picture. The clean division of labor for a team:
+#### Multi-Agent Concurrency Caveat at Team Scale
+
+Git is *asynchronous* (pull/push), so several agents writing every few seconds across machines is not its sweet spot. If your agents do high-frequency concurrent writes, a **shared memory server handles multi-writer concurrency better than file-sync** — which is the other reason the **Mem0 server (backed by Qdrant/Neo4j)** belongs in the picture. The clean division of labor for a team:
 
 - **Git-synced vault** → curated, human-readable, durable knowledge (decisions, project docs, business context). Reviewed via PR.
 - **Mem0 / MemPalace server** → live, high-frequency agent recall shared across all developers and agents over MCP.
@@ -173,7 +175,7 @@ Once the vault is large enough that "just search the Markdown" returns junk, put
 
 ## Long-term, human-like memory: knowledge · skills · experience across projects
 
-This is the real goal: an agent that *keeps what it learns* — facts, how-to skills, and lived experience — and carries it from one project to the next, the way a person does. In memory terms that's three distinct stores, plus a process that turns repeated experience into durable knowledge:
+Cross-project retention is the real goal: an agent that *keeps what it learns* — facts, how-to skills, and lived experience — and carries it from one project to the next, the way a person does. In memory terms that's three distinct stores, plus a process that turns repeated experience into durable knowledge:
 
 | Human concept | Memory type | What it stores | What does it well (OSS) |
 |---|---|---|---|

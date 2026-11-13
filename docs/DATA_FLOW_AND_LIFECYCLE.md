@@ -41,9 +41,9 @@ Engramory separates persistent canonical state and relational graph traversal ac
 
 | Surface / Layer | Insertion / Add | Update / Modify | Deletion / Retire | Retrieval / Query |
 |---|---|---|---|---|
-| **Agent Face (MCP / SPEC-01)** | `memory_add`<br>`knowledge_ingest`<br>`sdd_ingest` | Append new version with `supersedes`<br>`knowledge_ingest` (upsert) | `memory_forget` (soft retire; sets `valid_to=now()`) | `memory_search`<br>`graph_neighbors`<br>`context_slice`<br>`blast_radius`<br>`agent_profile_get` |
-| **Access Surface (`AccessSurface`)** | `memory_add(...)`<br>`knowledge_ingest(...)` | `knowledge_ingest(...)`<br>Superseding append | `memory_forget(...)` (soft delete) | `memory_search(..., expand_graph=True)`<br>`graph_neighbors(id, depth)`<br>`context_slice(task_id, depth)`<br>`blast_radius(doc_id, depth)` |
-| **Canonical Repo (`Repository`)** | `add_episode`<br>`add_memory`<br>`upsert_kb_section`<br>`upsert_graph_entity`<br>`upsert_graph_relation` | `upsert_kb_section` (`ON CONFLICT DO UPDATE`)<br>`upsert_graph_entity` (`ON CONFLICT DO UPDATE`)<br>`upsert_graph_relation` (`ON CONFLICT DO UPDATE`) | `retire_memory` (soft: `status='superseded'`)<br>`delete_graph_entity` (hard: cascading FKs)<br>`delete_graph_relation` (hard) | `get_memories`<br>`get_kb_sections`<br>`get_graph_entity`<br>`get_graph_entities`<br>`get_graph_relations`<br>`count_graph_entities`<br>`count_graph_relations` |
+| **Agent Face (MCP / CLI / SPEC-01)** | `memory_add`<br>`memory_promote`<br>`memory_ingest_event`<br>`agent_profile_upsert`<br>`agent_brain_import`<br>`knowledge_ingest`<br>`knowledge_ingest_media`<br>`sdd_ingest` | Append new version with `supersedes`<br>`agent_profile_upsert`<br>`memory_feedback`<br>`knowledge_ingest` (upsert) | `memory_forget` (soft retire; sets `valid_to=now()`)<br>`agent_space_offboard` (retire private L2 + purge private L1 + delete L3 profile) | `memory_search` (`include_knowledge`, `expand_graph`, `brain_variant`, `specialization`)<br>`knowledge_search`<br>`agent_profile_get`<br>`agent_roster_list`<br>`agent_brain_export`<br>`agent_brain_compare`<br>`memory_learning_health`<br>`graph_neighbors` · `context_slice` · `blast_radius` |
+| **Access Surface (`AccessSurface`)** | `memory_add(...)`<br>`memory_promote(...)`<br>`agent_profile_upsert(...)`<br>`agent_brain_import(...)`<br>`knowledge_ingest(...)`<br>`knowledge_ingest_media(...)` | `knowledge_ingest(...)`<br>`agent_profile_upsert(...)`<br>`memory_feedback(...)`<br>Superseding append | `memory_forget(...)` (soft delete)<br>`agent_space_offboard(...)` (transactional tenant cleanup) | `memory_search(..., include_knowledge=True, expand_graph=True, brain_variant=..., specialization=...)`<br>`knowledge_search(...)`<br>`agent_roster_list(...)`<br>`agent_brain_export(...)`<br>`agent_brain_compare(...)`<br>`graph_neighbors(id, depth)` · `context_slice(task_id, depth)` · `blast_radius(doc_id, depth)` |
+| **Canonical Repo (`Repository`)** | `add_episode`<br>`upsert_memory` (with `embedding` / `copy_embedding_from_id`)<br>`upsert_agent_profile`<br>`upsert_kb_section`<br>`upsert_graph_entity`<br>`upsert_graph_relation` | `upsert_agent_profile` (`ON CONFLICT DO UPDATE`)<br>`upsert_kb_section` (`ON CONFLICT DO UPDATE`)<br>`upsert_graph_entity` (`ON CONFLICT DO UPDATE`)<br>`record_feedback` | `retire_memory` (soft: `status='superseded'`)<br>`offboard_agent_space` (transactional)<br>`delete_graph_entity` (hard: cascading FKs)<br>`delete_graph_relation` (hard) | `get_memories` (`brain_variant`, `specialization`)<br>`find_existing_promoted_memory`<br>`list_agent_profiles` (ranked by confidence & skill count)<br>`get_brain_variant_metrics`<br>`search_kb_sections` (3-leg RRF)<br>`get_graph_entity` · `get_graph_entities` · `get_graph_relations` |
 | **Graph Adapter (`Neo4jGraphAdapter`)** | `upsert_node`<br>`upsert_edge` | `upsert_node` (`MERGE ... SET +=`)<br>`upsert_edge` (`MERGE ... SET +=`) | `delete_node` (`DETACH DELETE n`)<br>`delete_edge` (`MATCH ()-[r]->() DELETE r`) | `neighbors(id, rel, depth)`<br>`ancestors(id, rel, depth)`<br>`descendants(id, rel, depth)` |
 
 ---
@@ -278,6 +278,47 @@ sequenceDiagram
   4. For each anchor memory, `AccessSurface` queries Neo4j for 1-hop neighbors (`GraphPort.neighbors(id=memory.id, depth=1)`).
   5. Discovered connected entities are appended to `MemoryHit.provenance["related_entities"]`.
   6. The agent receives a consolidated payload containing both dense text summaries and topological graph linkages.
+
+---
+
+### 3.5 Virtual Employee Lifecycle: Multi-Model Distillation, Selective Promotion & Portable Brain Passport Sequence
+
+For the complete Virtual Employee specification, see [VIRTUAL_EMPLOYEE_ARCHITECTURE.md](VIRTUAL_EMPLOYEE_ARCHITECTURE.md).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant AgentA as Specialist Instance (Tenant A)
+    participant Surface as AccessSurface
+    participant Guard as PoisoningGuard
+    participant Repo as Repository (Postgres)
+    participant LLM as LLMPort (LiteLLM)
+
+    AgentA->>Surface: memory_add(content, scope='agent', specializations=['stripe'])
+    Surface->>Repo: add_episode(...)
+    Note over Repo,LLM: reflect(brain_variant='claude-sonnet-4-6') & reflect(brain_variant='gemini-2.5-pro')
+    AgentA->>Surface: agent_brain_compare(variant_a, variant_b, specialization='stripe')
+    Surface->>Repo: get_brain_variant_metrics(...)
+    Surface-->>AgentA: Comparative metrics & winning variant
+
+    AgentA->>Surface: memory_promote(memory_id, target_scope='domain', evidence_ref='CHG-009')
+    Surface->>Repo: find_existing_promoted_memory(...) + upsert_memory(copy_embedding_from_id)
+    Surface-->>AgentA: Promoted skill visible in department ('billing')
+
+    AgentA->>Surface: agent_brain_export(brain_variant='claude-sonnet-4-6', redact_terms=['acme'])
+    Surface->>Guard: sanitize_portable_value(profile + skills)
+    Surface-->>AgentA: BrainPassport (engramory.brain_passport.v1 + passport_sha256)
+
+    AgentA->>Surface: agent_space_offboard(evidence_ref='CHG-009-OFFBOARD')
+    Surface->>Repo: offboard_agent_space (retire private L2, delete private L1, keep project L1)
+
+    AgentA->>Surface: agent_brain_import(ctx_tenant_b, passport, evidence_ref='CHG-009-IMPORT')
+    Surface->>Surface: Verify passport_sha256 & agent_type compatibility
+    Surface->>Guard: sanitize_portable_value + inspect_memory_write
+    Surface->>LLM: embed(summaries) -> 1536-dim vectors
+    Surface->>Repo: upsert_agent_profile + upsert_memory(embedding=vec)
+    Surface-->>AgentA: Skills imported into Tenant B
+```
 
 ---
 
