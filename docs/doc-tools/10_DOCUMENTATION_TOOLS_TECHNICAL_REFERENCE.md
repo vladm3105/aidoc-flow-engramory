@@ -46,7 +46,7 @@ watched_paths:
   - "src/engramory/core/portal_builder.py"
   - ".vale.ini"
   - "portal/package.json"
-last_verified: 2026-11-09
+last_verified: 2026-11-12
 ---
 
 # Documentation Tools Technical Reference: Vale, Starlight, Scalar, Docling, Engramory & Copybara Evaluation

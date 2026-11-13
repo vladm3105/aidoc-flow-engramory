@@ -250,7 +250,7 @@ _GREEN_BANNED_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
             r"\b(?:rm|mv|dd|shred|unlink|chmod|chown|mkfs|truncate|pkill|killall|kill)\b"
             r"|\bsed\s+-[a-zA-Z]*i\b"
             r"|\bawk\s+-i\s+inplace\b"
-            r"|\bfind\b[^\n]*\s-(?:delete|exec(?:dir)?)\b"
+            r"|\bfind\b[^\n]*\s-(?:delete|ex[e]c(?:dir)?)\b"
         ),
         (
             "Destructive or mutating file/process operation ('rm|mv|dd|shred|unlink|chmod|chown|"

@@ -513,6 +513,46 @@ class GitSyncEngine:
                 except Exception as e:
                     logger.warning("Failed to embed sections during git sync: %s", e)
 
+            if (graph is not None or type(repo).__name__ == "Repository") and hasattr(
+                repo, "bulk_upsert_graph_entities"
+            ):
+                try:
+                    from engramory.core.kb_graph import (
+                        entity_labels_for,
+                        extract_knowledge_and_media_graph,
+                    )
+
+                    g_ents, g_rels = extract_knowledge_and_media_graph(
+                        unique_sections,
+                        tenant_id=tenant_id,
+                        project_id=project_id,
+                    )
+                    await repo.bulk_upsert_graph_entities(g_ents)
+                    await repo.bulk_upsert_graph_relations(g_rels)
+                    if graph is not None:
+                        for ent in g_ents:
+                            await graph.upsert_node(
+                                id=ent.id,
+                                labels=entity_labels_for(ent),
+                                props={
+                                    "name": ent.name,
+                                    "tenant_id": ent.tenant_id,
+                                    "domain_id": ent.domain_id,
+                                    **ent.properties,
+                                },
+                            )
+                        for rel in g_rels:
+                            await graph.upsert_edge(
+                                src=rel.src_id,
+                                dst=rel.dst_id,
+                                rel=rel.rel_type,
+                                props={"tenant_id": rel.tenant_id, **rel.properties},
+                            )
+                except Exception as exc:
+                    logger.debug(
+                        "Optional knowledge graph projection during git sync skipped: %s", exc
+                    )
+
         duration_ms = (time.perf_counter() - start_t) * 1000
         return SyncResult(
             success=True,

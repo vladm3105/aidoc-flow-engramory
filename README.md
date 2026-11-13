@@ -58,8 +58,8 @@ All dev dependencies are free and open-source.
 
 Any AI agent with a shell or MCP client uses Engramory through two thin faces over `AccessSurface` (ADR-10):
 
-- **`engramory` CLI (dev/CI face):** `engramory memory` (`add`, `distill`, `search`, `feedback`, `forget`, `ingest-event`, `learning-health`), `engramory knowledge` (`ingest`, `sync-git`, `search`), `engramory sdd` (`ingest`, `slice`, `blast-radius`, `validate-graph`, `check-invariants`, `lint-policy`), `engramory docs` (`lint`, `ingest`, `search`, `slice-runbook`, `blast-radius`, `audit-drift`, `export-llms`, `smoke-run`, `inventory`, `build-portal`), and `engramory mcp` (`--transport stdio|sse`).
-- **MCP Gateway (`engramory mcp`, authenticated production face):** exposes `memory_*`, `knowledge_ingest`, `knowledge_search`, `graph_neighbors`, `sdd_context_slice`, `sdd_blast_radius`, `sdd_ingest`, `sdd_validate_graph`, `sdd_check_invariants`, `sdd_lint_policy`, and `docs_*` tools with OIDC/JWKS authentication and fail-closed authorization.
+- **`engramory` CLI (dev/CI face):** `engramory memory` (`add`, `distill`, `search [--include-knowledge --expand-graph]`, `feedback`, `forget`, `ingest-event`, `learning-health`), `engramory knowledge` (`ingest`, `ingest-media`, `blob-put`, `blob-stat`, `blob-get`, `sync-git`, `search [--modality --expand-graph]`), `engramory sdd` (`ingest`, `slice`, `blast-radius`, `validate-graph`, `check-invariants`, `lint-policy`), `engramory docs` (`lint`, `ingest`, `slice-runbook`, `check-drift`, `export-llms`, `smoke-run`, `tool-inventory`, `build-portal`), and `engramory mcp` (`--transport stdio|sse`).
+- **MCP Gateway (`engramory mcp`, authenticated production face):** exposes `memory_*` (including `memory_search` with `include_knowledge` & `expand_graph`), `knowledge_ingest`, `knowledge_ingest_media`, `knowledge_search`, `graph_neighbors`, `sdd_context_slice`, `sdd_blast_radius`, `sdd_ingest`, `sdd_validate_graph`, `sdd_check_invariants`, `sdd_lint_policy`, and `docs_*` tools with OIDC/JWKS authentication and fail-closed authorization.
 
 - **Install + first round-trip:** [docs/INSTALL.md](docs/INSTALL.md)
 - **Agent workflow (3 tracks: terminal agent, CI, Skill):** [docs/AGENT-QUICKSTART.md](docs/AGENT-QUICKSTART.md)
@@ -81,7 +81,7 @@ gateway is the authenticated production face and arrives in a later cycle.
 | [docs/STRATEGY.md](docs/STRATEGY.md) | Build strategy & recommendation (build the plane, adopt the engine, lead with evaluation) |
 | [docs/MEMORY_DESIGN.md](docs/MEMORY_DESIGN.md) | Layered memory (L0–L3), distillation loop, schema, portability |
 | [docs/PORTABILITY.md](docs/PORTABILITY.md) | Self-hosted → GCP/Azure principles and migration |
-| [docs/sdd/08_IPLAN/IPLAN-00_index.yaml](docs/sdd/08_IPLAN/IPLAN-00_index.yaml) | Canonical SDD implementation plan index (IPLAN-01..06) and `plans/PLAN-*.md` |
+| [docs/sdd/08_IPLAN/IPLAN-00_index.yaml](docs/sdd/08_IPLAN/IPLAN-00_index.yaml) | Canonical SDD implementation plan index (IPLAN-01..08) and `plans/PLAN-*.md` |
 | [docs/GLOSSARY.md](docs/GLOSSARY.md) | Terms |
 | [docs/HOW_TO_USE_THE_FRAMEWORK.md](docs/HOW_TO_USE_THE_FRAMEWORK.md) | Authoring SDD artifacts the UCX / aidoc-flow way |
 | [docs/UCX_INTEGRATION.md](docs/UCX_INTEGRATION.md) | How Engramory fits UCX and replaces `ucx_kb` |
