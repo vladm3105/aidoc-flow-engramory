@@ -199,6 +199,121 @@ def _stream_sha256_and_header(file_path: Path, header_limit: int = 65536) -> tup
     return digest, byte_size, header
 
 
+def _probe_container_header_duration(file_path: Path) -> dict[str, Any]:
+    """Pure-Python O(1)-RAM fallback parser for ISO-BMFF (MP4/MOV/M4A ``moov/mvhd``)
+    and RIFF WAVE (``fmt /data``) container durations when ``ffprobe`` is unavailable."""
+    try:
+        file_size = file_path.stat().st_size
+        if file_size < 16:
+            return {}
+        with file_path.open("rb") as fh:
+            prefix = fh.read(16)
+            # 1. RIFF WAVE container
+            if len(prefix) >= 12 and prefix[:4] == b"RIFF" and prefix[8:12] == b"WAVE":
+                fh.seek(12)
+                byte_rate = 0
+                data_bytes = 0
+                for _ in range(32):
+                    chk = fh.read(8)
+                    if len(chk) < 8:
+                        break
+                    chk_id = chk[:4]
+                    chk_sz = struct.unpack("<I", chk[4:8])[0]
+                    if chk_id == b"fmt " and chk_sz >= 12:
+                        fmt_body = fh.read(12)
+                        if len(fmt_body) == 12:
+                            byte_rate = struct.unpack("<I", fmt_body[8:12])[0]
+                        fh.seek(chk_sz - len(fmt_body) + (chk_sz & 1), 1)
+                    elif chk_id == b"data":
+                        data_bytes = chk_sz
+                        break
+                    else:
+                        fh.seek(chk_sz + (chk_sz & 1), 1)
+                if byte_rate > 0 and data_bytes > 0:
+                    return {
+                        "duration_seconds": float(data_bytes) / float(byte_rate),
+                        "format_name": "wav",
+                        "audio_codec": "pcm",
+                    }
+                return {}
+
+            # 2. ISO-BMFF (MP4 / MOV / M4A) — seek top-level boxes in O(1) RAM
+            if len(prefix) >= 8 and prefix[4:8] in (
+                b"ftyp",
+                b"moov",
+                b"mdat",
+                b"free",
+                b"wide",
+                b"skip",
+            ):
+                pos = 0
+                for _ in range(64):
+                    if pos + 8 > file_size:
+                        break
+                    fh.seek(pos)
+                    hdr = fh.read(8)
+                    if len(hdr) < 8:
+                        break
+                    box_sz, box_type = struct.unpack(">I4s", hdr)
+                    hdr_len = 8
+                    if box_sz == 1:
+                        ext = fh.read(8)
+                        if len(ext) < 8:
+                            break
+                        box_sz = struct.unpack(">Q", ext)[0]
+                        hdr_len = 16
+                    elif box_sz == 0:
+                        box_sz = file_size - pos
+                    if box_sz < hdr_len:
+                        break
+
+                    if box_type == b"moov":
+                        moov_end = min(file_size, pos + box_sz)
+                        sub_pos = pos + hdr_len
+                        for _ in range(64):
+                            if sub_pos + 8 > moov_end:
+                                break
+                            fh.seek(sub_pos)
+                            shdr = fh.read(8)
+                            if len(shdr) < 8:
+                                break
+                            ssz, stype = struct.unpack(">I4s", shdr)
+                            shdr_len = 8
+                            if ssz == 1:
+                                sext = fh.read(8)
+                                if len(sext) < 8:
+                                    break
+                                ssz = struct.unpack(">Q", sext)[0]
+                                shdr_len = 16
+                            elif ssz == 0:
+                                ssz = moov_end - sub_pos
+                            if ssz < shdr_len:
+                                break
+                            if stype == b"mvhd":
+                                mvhd_body = fh.read(min(64, ssz - shdr_len))
+                                if len(mvhd_body) >= 20 and mvhd_body[0] == 0:
+                                    ts, dur = struct.unpack(">II", mvhd_body[12:20])
+                                    if ts > 0:
+                                        return {
+                                            "duration_seconds": float(dur) / float(ts),
+                                            "format_name": "mov,mp4,m4a",
+                                        }
+                                elif len(mvhd_body) >= 32 and mvhd_body[0] == 1:
+                                    ts, dur = struct.unpack(">IQ", mvhd_body[20:32])
+                                    if ts > 0:
+                                        return {
+                                            "duration_seconds": float(dur) / float(ts),
+                                            "format_name": "mov,mp4,m4a",
+                                        }
+                                break
+                            sub_pos += ssz
+                        break
+                    pos += box_sz
+    except Exception as exc:
+        logger.debug("Container header duration fallback failed for %s: %s", file_path, exc)
+    return {}
+
+
 class ImageExtractor:
     """Extract structured Markdown, dimensions, and metadata from standalone images."""
 
@@ -296,7 +411,7 @@ class VideoAudioExtractor:
         """Run hardened ``ffprobe`` on ``file_path`` and return normalized stream metadata."""
         resolved = _validate_media_path(file_path)
         if not self.ffprobe_available():
-            return {}
+            return _probe_container_header_duration(resolved)
 
         cmd = [
             "ffprobe",
@@ -321,11 +436,11 @@ class VideoAudioExtractor:
                 check=False,
             )
             if proc.returncode != 0 or not proc.stdout.strip():
-                return {}
+                return _probe_container_header_duration(resolved)
             raw = json.loads(proc.stdout)
         except Exception as exc:
             logger.debug("ffprobe failed for %s: %s", resolved, exc)
-            return {}
+            return _probe_container_header_duration(resolved)
 
         fmt = raw.get("format") or {}
         streams = raw.get("streams") or []

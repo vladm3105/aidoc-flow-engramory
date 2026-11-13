@@ -461,3 +461,45 @@ async def test_litellm_adapter_describe_image_and_transcribe_audio(
     tr = await llm.transcribe_audio(audio_bytes=b"WAV_DATA", filename="clip.wav")
     assert tr["text"] == "Transcribed speech"
     assert len(tr["segments"]) == 1
+
+
+def test_stdlib_mp4_and_wav_container_duration_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from engramory.core.extraction.multimodal import VideoAudioExtractor
+
+    monkeypatch.setattr("shutil.which", lambda _: None)
+    va = VideoAudioExtractor(segment_seconds=60)
+
+    # 1. Valid ISO-BMFF MP4 with ftyp + moov/mvhd (timescale=1000, duration=150000 -> 150.0s)
+    ftyp_body = b"isom" + struct.pack(">I", 512) + b"isomiso2mp41"
+    ftyp_box = struct.pack(">I4s", 8 + len(ftyp_body), b"ftyp") + ftyp_body
+    mvhd_body = struct.pack(">B3sIIII", 0, b"\x00\x00\x00", 0, 0, 1000, 150000) + (b"\x00" * 80)
+    mvhd_box = struct.pack(">I4s", 8 + len(mvhd_body), b"mvhd") + mvhd_body
+    moov_box = struct.pack(">I4s", 8 + len(mvhd_box), b"moov") + mvhd_box
+    mdat_box = struct.pack(">I4s", 8 + 128, b"mdat") + (b"\x00" * 128)
+
+    mp4_file = tmp_path / "walkthrough.mp4"
+    mp4_file.write_bytes(ftyp_box + moov_box + mdat_box)
+
+    res_mp4 = va.extract(mp4_file)
+    assert len(res_mp4.sections) == 3
+    assert [s.citation for s in res_mp4.sections] == [
+        "#t=00:00:00-00:01:00",
+        "#t=00:01:00-00:02:00",
+        "#t=00:02:00-00:02:30",
+    ]
+
+    # 2. Valid RIFF WAVE with fmt (byte_rate=32000) + data (3840000 bytes -> 120.0s)
+    fmt_chunk = b"fmt " + struct.pack("<IHHIIHH", 16, 1, 1, 16000, 32000, 2, 16)
+    data_hdr = b"data" + struct.pack("<I", 3840000)
+    riff_hdr = b"RIFF" + struct.pack("<I", 4 + len(fmt_chunk) + 8) + b"WAVE"
+    wav_file = tmp_path / "speech.wav"
+    wav_file.write_bytes(riff_hdr + fmt_chunk + data_hdr + (b"\x00" * 64))
+
+    res_wav = va.extract(wav_file)
+    assert len(res_wav.sections) == 2
+    assert [s.citation for s in res_wav.sections] == [
+        "#t=00:00:00-00:01:00",
+        "#t=00:01:00-00:02:00",
+    ]
