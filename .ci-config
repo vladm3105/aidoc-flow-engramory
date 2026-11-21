@@ -15,12 +15,12 @@ BASE_BRANCH=dev
 # Promotion branches never use local CI: the gate is the server check(s) below on the exact commit.
 PROMOTION_BRANCHES=
 # ff = fast-forward push of the verified commit (same SHA) · pr = open a promotion PR
-PROMOTION_MODE=ff
+PROMOTION_MODE=pr
 # Split forge (#47/#48): empty = one forge for the whole chain. `github` = BASE_BRANCH lives on
 # Gitea (local CI, ship, review, sync) and PROMOTION_BRANCHES live on GitHub, where promotion
 # PRs and `verify` run on self-hosted runners. Needs a `gitea` remote and PROMOTION_REMOTE;
 # `task mirror` pushes BASE_BRANCH from Gitea to GitHub (exact SHAs, never forced).
-PROMOTION_FORGE=
+PROMOTION_FORGE=github
 # Remote carrying the promotion branches in split mode.
 PROMOTION_REMOTE=github
 # Promotion targets agents may promote into on their own (task autopromote), e.g. staging.
