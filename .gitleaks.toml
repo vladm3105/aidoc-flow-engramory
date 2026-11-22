@@ -23,5 +23,5 @@ paths = [
 regexes = [
   '''0{32,64}''',                      # Repetitive zero-padded mock hashes/tokens
   '''dummy-[a-z0-9-]+-test-fixture''', # Explicitly labeled test fixture credentials
-  '''AKIA[0-9A-Z]{16}EXAMPLE''',        # AWS docs example
+  '''AKIA[0-9A-Z]{9}EXAMPLE''',        # AWS 20-char docs example (distinct from 20-char random canary)
 ]

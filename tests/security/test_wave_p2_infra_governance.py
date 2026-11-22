@@ -246,18 +246,25 @@ def test_h14_protected_ci_governance_and_workflows() -> None:
     assert 'SHA="' in standards_drift
     assert "sha256sum -c -" in standards_drift
 
-    bot_signoff = _read(".github/workflows/bot-signoff.yml")
-    assert "branches: [dev]" in bot_signoff
-    assert "(startsWith(github.head_ref, 'dependabot/')" in bot_signoff
+    for retired_gh in (
+        ".github/workflows/quick-gates.yml",
+        ".github/workflows/audit-trail.yml",
+        ".github/workflows/bot-signoff.yml",
+    ):
+        assert not (REPO_ROOT / retired_gh).exists(), f"Retired GH workflow: {retired_gh}"
+
+    gitea_bot_signoff = _read(".gitea/workflows/bot-signoff.yml")
+    assert 'branches: ["dev", "staging", "main"]' in gitea_bot_signoff
+    assert "startsWith(github.head_ref, 'dependabot/')" in gitea_bot_signoff
+
+    gitea_auto_merge = _read(".gitea/workflows/auto-merge.yml")
+    assert 'branches: ["dev"]' in gitea_auto_merge
+
+    gh_auto_merge = _read(".github/workflows/auto-merge.yml")
+    assert "workflow_run" in gh_auto_merge
 
     branch_promo = _read(".github/workflows/branch-promotion.yml")
     assert 'PROMOTION_TARGETS: "staging main"' in branch_promo
-
-    quick_gates = _read(".github/workflows/quick-gates.yml")
-    assert "id: taskcheck" in quick_gates
-    assert "R_TASKCHECK:" in quick_gates
-    assert "R_PRECOMMIT" not in quick_gates
-    assert "./.github/actions/pre-commit" not in quick_gates
 
     ci_yml = _read(".github/workflows/ci.yml")
     assert "uv sync --locked" in ci_yml
