@@ -1,7 +1,7 @@
 <!-- plan-gate: v1 -->
 # PLAN-025: Paperclip Centralized Internal Backlog (`v0.5.0`), Audit Report Governance & Cross-Repo Rollout
 
-- **Status:** ready
+- **Status:** superseded (Tracks 1A & 1B shipped; Track 2 superseded by aiops-harness PLAN-053 / CHG-31; Track 3 declined in favor of PLAN-026)
 - **Author:** Antigravity Agent + Operator
 - **Date:** 2026-11-20
 - **Owning Repository (Track 3 & Program Coordinator):** `vladm3105/aidoc-flow-engramory` (`PLAN-025`, `CHG-010`, `IPLAN-10`)
@@ -10,6 +10,13 @@
   - **Track 1B (`platform-stage-ops`, Stage EaC Deployment Mirror):** `platform-stage-ops/plans/PLAN-005-PAPERCLIP-CENTRALIZED-BACKLOG-AND-GITEA-BRIDGE.md`
   - **Track 2 (`aiops-harness`, Governance & Control Plane):** `aiops-harness/plans/PLAN-050_audit-reports-and-paperclip-centralized-backlog-governance.md` (`CHG-28`, `IPLAN-28`, `SLICE-28`; `CHG-27`/`PLAN-049` reserved by sibling `aiops-harness-chg27`)
 - **Target Branch (`aidoc-flow-engramory`):** `feature/plan-025-paperclip-backlog-and-audit-governance`
+
+> **Supersession Notice (2026-11-21):** Remaining Tracks 2–3 of `PLAN-025` are superseded/declined as follows:
+>
+> - **Track 1A (`platform-paperclip` `v0.5.0`):** Shipped and merged on `dev` (`48dba5a`).
+> - **Track 1B (`platform-stage-ops` Paperclip `v0.5.0` EaC):** Shipped and merged on `dev` (`6fd88b2`).
+> - **Track 2 (`aiops-harness`):** Superseded by `aiops-harness/plans/PLAN-053_chg-iplan-paperclip-engramory-flywheel.md` (`CHG-31`/`IPLAN-31`, commit `f827f0c`), which delivers native `chg ingest-paperclip` / `aiops_chg_sync_paperclip`, execution comments, and Engramory distillation.
+> - **Track 3 (`aidoc-flow-engramory`):** Declined; replaced by `plans/PLAN-026_v030-deep-audit-remediation.md` (`CHG-010`–`CHG-013`) addressing all 40 verified findings in `plans/AUDIT-2026-11-20_deep-review.md` directly.
 
 ---
 

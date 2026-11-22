@@ -2,7 +2,7 @@
 
 - **Updated:** 2026-11-21T10:25:00-08:00
 - **Coordinated Master Plan:** `aidoc-flow-engramory/plans/PLAN-025_paperclip-centralized-backlog-and-audit-governance.md`
-- **Status:** Master Plan (`PLAN-025`) and Tracks 1A & 1B **complete, merged into `dev`, and synced at exact SHA parity across GitHub (`origin`) and Gitea (`gitea`)**. Track 2 (`aiops-harness`) and Track 3 (`aidoc-flow-engramory`) remain next.
+- **Status:** Superseded (2026-11-21) — Tracks 1A & 1B merged on dev; Track 2 superseded by aiops-harness PLAN-053 (f827f0c); Track 3 declined in favor of plans/PLAN-026_v030-deep-audit-remediation.md (CHG-010..CHG-013). Do not execute §4/§5 below.
 
 ---
 

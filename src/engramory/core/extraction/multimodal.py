@@ -177,12 +177,14 @@ def parse_image_dimensions(header: bytes, mime_type: str = "") -> tuple[int | No
     return None, None
 
 
-def _validate_media_path(file_path: Path) -> Path:
-    """Validate that a media path exists, is not a symlink, and does not start with ``-``."""
+def _validate_media_path(file_path: Path, root: Path | None = None) -> Path:
+    """Validate media path exists, has no symlink component, and lacks leading ``-``."""
+    from engramory.core.docs_tools import has_symlink_component
+
     raw_str = str(file_path)
     if raw_str.startswith("-") or file_path.name.startswith("-"):
         raise ValidationError(f"Media file path must not start with '-': {file_path}")
-    if file_path.is_symlink():
+    if has_symlink_component(file_path, root):
         raise ValidationError(f"Symlink media paths are rejected: {file_path}")
     if not file_path.exists():
         raise FileNotFoundError(f"Media file not found: {file_path}")

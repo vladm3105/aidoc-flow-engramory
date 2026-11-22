@@ -34,10 +34,10 @@ metadata:
 # Section 1: Document Control
 # =============================================================================
 document_control:
-  version: "1.0"
+  version: "1.1"
   status: Draft
   date_created: "2026-06-22T00:00:00"
-  last_updated: "2026-06-22T00:00:00"
+  last_updated: "2026-11-21T00:00:00"
   author: "Engramory team"
   priority: P1
   source_document: "@prd: PRD-01"
@@ -135,10 +135,11 @@ requirements:
     - id: "EARS.01.03.b800"
       name: "Low-confidence lesson quarantine (distillation noise)"
       statement: |
-        IF a distilled lesson's confidence is below the configured floor,
-        THE distillation component SHALL mark the lesson advisory-only (excluded from
-        default retrieval) and retain its provenance as part of the same consolidation pass
-        that evaluates it.
+        IF a distilled lesson's confidence is below the configured floor OR accumulates
+        harmful feedback (>= 2 distinct agent_ids for shared project/domain/space scopes,
+        immediate for private scope='agent') with reversible applied_delta tracking per retrieval_id,
+        THE distillation component SHALL mark the lesson advisory-only or quarantined (excluded from
+        default retrieval) and retain its provenance as part of the same consolidation or feedback pass.
       traceability: "@brd: BRD.01.07.5e01 | @prd: PRD.01.09.b200"
     - id: "EARS.01.03.c900"
       name: "Canonical-store unavailability fallback"

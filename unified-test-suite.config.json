@@ -26,6 +26,10 @@
         "integration"
       ],
       "needsStack": true
+    },
+    "smoke": {
+      "runner": "steps",
+      "steps": "tests/steps/smoke.list"
     }
   },
   "gates": {
@@ -48,26 +52,27 @@
       "layers": [
         "unit",
         "static",
-        "integration"
+        "integration",
+        "smoke"
       ],
       "strict": true
     }
   },
   "coverage": {
     "unit": {
-      "minPercent": null
+      "minPercent": 80
     }
   },
   "stack": {
     "backendUrl": "http://127.0.0.1:8000",
     "healthPath": "/health",
-    "compose": null,
+    "compose": "docker-compose.yml",
     "dbReset": null
   },
   "providers": null,
   "secrets": {
     "envKeys": [
-      "DATABASE_URL"
+      "ENGRAMORY_DATABASE_URL"
     ]
   }
 }

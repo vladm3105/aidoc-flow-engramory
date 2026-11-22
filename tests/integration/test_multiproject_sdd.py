@@ -61,14 +61,14 @@ async def test_multiproject_tenant_isolation_in_postgres_and_cte(repo: Repositor
             dst_id="SPEC-001",
             rel_type="IMPLEMENTS",
             tenant_id=tenant_eng,
-            properties={},
+            properties={"project_id": "engramory"},
         ),
         GraphRelation(
             src_id="SPEC-001",
             dst_id="ADR-001",
             rel_type="CONSTRAINED_BY",
             tenant_id=tenant_eng,
-            properties={},
+            properties={"project_id": "engramory"},
         ),
     ]
 
@@ -102,14 +102,14 @@ async def test_multiproject_tenant_isolation_in_postgres_and_cte(repo: Repositor
             dst_id="SPEC-001",
             rel_type="IMPLEMENTS",
             tenant_id=tenant_prv,
-            properties={},
+            properties={"project_id": "privy"},
         ),
         GraphRelation(
             src_id="SPEC-001",
             dst_id="ADR-001",
             rel_type="CONSTRAINED_BY",
             tenant_id=tenant_prv,
-            properties={},
+            properties={"project_id": "privy"},
         ),
     ]
 

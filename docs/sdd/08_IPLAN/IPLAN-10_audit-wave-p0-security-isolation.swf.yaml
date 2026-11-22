@@ -1,0 +1,432 @@
+# IPLAN-10_audit-wave-p0-security-isolation.swf.yaml — Executable Implementation Plan (CNCF v0.8 DSL)
+# Authorizing CHG: CHG-010 | @spec: SPEC-01 | @tdd: TDD.04.04.c200
+
+doc_id: IPLAN-10
+title: "Wave P0 Audit Remediation — Security, Tenant RLS, Scope Isolation & FastAPI MCP (PLAN-026 TASK-1)"
+metadata:
+  id: IPLAN-10
+  title: "Wave P0 Audit Remediation — Security, Tenant RLS, Scope Isolation & FastAPI MCP (PLAN-026 TASK-1)"
+  status: Completed
+  version: '1.0'
+  authorizing_chg: CHG-010
+  schema_version: '1.0'
+  framework_version: 0.96.25
+  document_type: iplan-document
+  layer: 8
+  subtype: workflow
+  workflow_spec: CNCF-Serverless-Workflow-v0.8
+  author_persona: tech_lead
+  author_playbook: framework/playbooks/08_IPLAN/tech_lead.md
+  workflow_standard: CNCF-Serverless-Workflow-0.8
+  total_sections: 8
+  last_updated: '2026-11-21'
+  tags:
+  - iplan-document
+  - layer-8-artifact
+  - shared-architecture
+  - cncf-workflow
+document_control:
+  iplan_id: IPLAN-10
+  authorizing_chg: CHG-010
+  flow: sdd_to_code
+  flow_code: SDD2C
+  subtype: workflow
+  source_spec: '@spec: SPEC-01'
+  status: Completed
+  version: '1.0'
+  date_created: '2026-11-21T19:40:00'
+  last_updated: '2026-11-21T20:42:00'
+  author: Antigravity + Operator
+  complexity: 5
+  estimated_files: 68
+  session_count: 1
+file_manifest:
+  files:
+  - {"path":"docs/sdd/03_EARS/EARS-01_engramory_core.yaml","action":"MODIFY","task_id":"TASK.08.10.a001","status":"DONE"}
+  - {"path":"docs/archive/CHG-010/EARS-01_engramory_core_v1.0.yaml","action":"CREATE","task_id":"TASK.08.10.a001","status":"DONE"}
+  - {"path":"docs/sdd/06_SPEC/SPEC-01_access_surface.yaml","action":"MODIFY","task_id":"TASK.08.10.a001","status":"DONE"}
+  - {"path":"docs/sdd/06_SPEC/SPEC-02_memory_store.yaml","action":"MODIFY","task_id":"TASK.08.10.a001","status":"DONE"}
+  - {"path":"docs/sdd/06_SPEC/SPEC-04_distillation_engine.yaml","action":"MODIFY","task_id":"TASK.08.10.a001","status":"DONE"}
+  - {"path":"docs/sdd/06_SPEC/SPEC-06_ports_portability.yaml","action":"MODIFY","task_id":"TASK.08.10.a001","status":"DONE"}
+  - {"path":"docs/archive/CHG-010/SPEC-01_access_surface_v1.1.yaml","action":"CREATE","task_id":"TASK.08.10.a001","status":"DONE"}
+  - {"path":"docs/archive/CHG-010/SPEC-02_memory_store_v1.0.yaml","action":"CREATE","task_id":"TASK.08.10.a001","status":"DONE"}
+  - {"path":"docs/archive/CHG-010/SPEC-04_distillation_engine_v1.0.yaml","action":"CREATE","task_id":"TASK.08.10.a001","status":"DONE"}
+  - {"path":"docs/archive/CHG-010/SPEC-06_ports_portability_v1.0.yaml","action":"CREATE","task_id":"TASK.08.10.a001","status":"DONE"}
+  - {"path":"docs/sdd/07_TDD/TDD-04_distillation_engine.yaml","action":"MODIFY","task_id":"TASK.08.10.a001","status":"DONE"}
+  - {"path":"docs/archive/CHG-010/TDD-04_distillation_engine_v1.0.yaml","action":"CREATE","task_id":"TASK.08.10.a001","status":"DONE"}
+  - {"path":"docs/sdd/08_IPLAN/IPLAN-00_index.yaml","action":"MODIFY","task_id":"TASK.08.10.a001","status":"DONE"}
+  - {"path":"docs/sdd/08_IPLAN/IPLAN-10_audit-wave-p0-security-isolation.swf.yaml","action":"CREATE","task_id":"TASK.08.10.a001","status":"DONE"}
+  - {"path":"docs/sdd/09_CHG/CHG-010_audit-wave-p0-security-isolation.yaml","action":"CREATE","task_id":"TASK.08.10.a001","status":"DONE"}
+  - {"path":"docs/sdd/graph/SLICE-10_audit-wave-p0-security-isolation.graph.yaml","action":"CREATE","task_id":"TASK.08.10.a001","status":"DONE"}
+  - {"path":"db/migrations/0004_ambient_gateway_view.sql","action":"MODIFY","task_id":"TASK.08.10.a002","status":"DONE"}
+  - {"path":"db/migrations/0005_pin_embeddings_hnsw.sql","action":"MODIFY","task_id":"TASK.08.10.a002","status":"DONE"}
+  - {"path":"db/migrations/0006_resize_embeddings_1536.sql","action":"MODIFY","task_id":"TASK.08.10.a002","status":"DONE"}
+  - {"path":"db/migrations/0011_wave_p0_isolation_and_rls.sql","action":"CREATE","task_id":"TASK.08.10.a002","status":"DONE"}
+  - {"path":"db/migrations/down/0011_wave_p0_isolation_and_rls.sql","action":"CREATE","task_id":"TASK.08.10.a002","status":"DONE"}
+  - {"path":"pyproject.toml","action":"MODIFY","task_id":"TASK.08.10.a002","status":"DONE"}
+  - {"path":"uv.lock","action":"MODIFY","task_id":"TASK.08.10.a002","status":"DONE"}
+  - {"path":"src/engramory/access/surface.py","action":"MODIFY","task_id":"TASK.08.10.a003","status":"DONE"}
+  - {"path":"src/engramory/adapters/dev/graph_neo4j.py","action":"MODIFY","task_id":"TASK.08.10.a003","status":"DONE"}
+  - {"path":"src/engramory/adapters/dev/storage_pg.py","action":"MODIFY","task_id":"TASK.08.10.a003","status":"DONE"}
+  - {"path":"src/engramory/adapters/dev/vector_pg.py","action":"MODIFY","task_id":"TASK.08.10.a003","status":"DONE"}
+  - {"path":"src/engramory/core/chunking.py","action":"MODIFY","task_id":"TASK.08.10.a003","status":"DONE"}
+  - {"path":"src/engramory/core/kb_graph.py","action":"MODIFY","task_id":"TASK.08.10.a003","status":"DONE"}
+  - {"path":"src/engramory/core/models.py","action":"MODIFY","task_id":"TASK.08.10.a003","status":"DONE"}
+  - {"path":"src/engramory/core/repository.py","action":"MODIFY","task_id":"TASK.08.10.a003","status":"DONE"}
+  - {"path":"src/engramory/ports/graph.py","action":"MODIFY","task_id":"TASK.08.10.a003","status":"DONE"}
+  - {"path":"src/engramory/ports/vector.py","action":"MODIFY","task_id":"TASK.08.10.a003","status":"DONE"}
+  - {"path":"src/engramory/workers/distillation.py","action":"MODIFY","task_id":"TASK.08.10.a003","status":"DONE"}
+  - {"path":"src/engramory/workers/graph_projection.py","action":"MODIFY","task_id":"TASK.08.10.a003","status":"DONE"}
+  - {"path":"src/engramory/access/jwt_auth.py","action":"MODIFY","task_id":"TASK.08.10.a004","status":"DONE"}
+  - {"path":"src/engramory/access/poisoning_guard.py","action":"MODIFY","task_id":"TASK.08.10.a004","status":"DONE"}
+  - {"path":"src/engramory/cli.py","action":"MODIFY","task_id":"TASK.08.10.a004","status":"DONE"}
+  - {"path":"src/engramory/core/docs_tools.py","action":"MODIFY","task_id":"TASK.08.10.a004","status":"DONE"}
+  - {"path":"src/engramory/core/git_sync.py","action":"MODIFY","task_id":"TASK.08.10.a004","status":"DONE"}
+  - {"path":"src/engramory/core/knowledge.py","action":"MODIFY","task_id":"TASK.08.10.a004","status":"DONE"}
+  - {"path":"src/engramory/core/portal_builder.py","action":"MODIFY","task_id":"TASK.08.10.a004","status":"DONE"}
+  - {"path":"src/engramory/mcp/server.py","action":"MODIFY","task_id":"TASK.08.10.a004","status":"DONE"}
+  - {"path":"docs/ARCHITECTURE.md","action":"MODIFY","task_id":"TASK.08.10.a005","status":"DONE"}
+  - {"path":"docs/MULTIMODAL_AND_POSTGRES_BLOB_STORAGE.md","action":"MODIFY","task_id":"TASK.08.10.a005","status":"DONE"}
+  - {"path":"docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md","action":"MODIFY","task_id":"TASK.08.10.a005","status":"DONE"}
+  - {"path":"docs/doc-tools/00_INDEX.md","action":"MODIFY","task_id":"TASK.08.10.a005","status":"DONE"}
+  - {"path":"docs/doc-tools/03_LINTING_GATES_AND_DRIFT_ENGINE.md","action":"MODIFY","task_id":"TASK.08.10.a005","status":"DONE"}
+  - {"path":"docs/doc-tools/07_PORTAL_API_CONTRACTS_AND_DEPLOYMENT_RUNBOOK.md","action":"MODIFY","task_id":"TASK.08.10.a005","status":"DONE"}
+  - {"path":"docs/doc-tools/10_DOCUMENTATION_TOOLS_TECHNICAL_REFERENCE.md","action":"MODIFY","task_id":"TASK.08.10.a005","status":"DONE"}
+  - {"path":"plans/PLAN-025_paperclip-centralized-backlog-and-audit-governance.md","action":"MODIFY","task_id":"TASK.08.10.a005","status":"DONE"}
+  - {"path":"tests/conformance/test_adapters.py","action":"MODIFY","task_id":"TASK.08.10.a005","status":"DONE"}
+  - {"path":"tests/conftest.py","action":"MODIFY","task_id":"TASK.08.10.a005","status":"DONE"}
+  - {"path":"tests/integration/test_access_surface.py","action":"MODIFY","task_id":"TASK.08.10.a005","status":"DONE"}
+  - {"path":"tests/integration/test_adr_knowledge_graph.py","action":"MODIFY","task_id":"TASK.08.10.a005","status":"DONE"}
+  - {"path":"tests/integration/test_distillation_embedding.py","action":"MODIFY","task_id":"TASK.08.10.a005","status":"DONE"}
+  - {"path":"tests/integration/test_doc_ingest.py","action":"MODIFY","task_id":"TASK.08.10.a005","status":"DONE"}
+  - {"path":"tests/integration/test_multiproject_sdd.py","action":"MODIFY","task_id":"TASK.08.10.a005","status":"DONE"}
+  - {"path":"tests/integration/test_repository.py","action":"MODIFY","task_id":"TASK.08.10.a005","status":"DONE"}
+  - {"path":"tests/security/test_wave_p0_security_remediation.py","action":"CREATE","task_id":"TASK.08.10.a005","status":"DONE"}
+  - {"path":"tests/test_docs_tools.py","action":"MODIFY","task_id":"TASK.08.10.a005","status":"DONE"}
+  - {"path":"tests/test_migrations.py","action":"MODIFY","task_id":"TASK.08.10.a005","status":"DONE"}
+  - {"path":"tests/test_plan017_remediation.py","action":"MODIFY","task_id":"TASK.08.10.a005","status":"DONE"}
+  - {"path":"tests/test_storage_pg_blob_cas.py","action":"MODIFY","task_id":"TASK.08.10.a005","status":"DONE"}
+  - {"path":"tests/test_virtual_employee_lifecycle.py","action":"MODIFY","task_id":"TASK.08.10.a005","status":"DONE"}
+  - {"path":"tests/unit/test_graph_neo4j.py","action":"MODIFY","task_id":"TASK.08.10.a005","status":"DONE"}
+  - {"path":"tests/unit/test_jwt_auth.py","action":"MODIFY","task_id":"TASK.08.10.a005","status":"DONE"}
+  - {"path":"tests/unit/test_mcp_server.py","action":"MODIFY","task_id":"TASK.08.10.a005","status":"DONE"}
+workflow:
+  id: IPLAN-10
+  name: wave_p0_security_isolation_remediation
+  specVersion: '0.8'
+  version: '1.0'
+  start: Step1_PreFlightCheck
+  functions:
+  - name: runCommand
+    type: custom
+    operation: shell:exec
+  - name: remediateLayerFindings
+    type: custom
+    operation: sdd:remediate
+  - name: incrementCounter
+    type: custom
+    operation: metrics:counter
+  - name: sealDocumentBaseline
+    type: custom
+    operation: sdd:seal
+  - name: registerGraphBaselineNode
+    type: custom
+    operation: sdd:graph_register
+  - name: emitCloudEvent
+    type: custom
+    operation: cloudevent:emit
+  states:
+  - name: Step1_PreFlightCheck
+    type: operation
+    actions:
+    - name: checkCleanBranchState
+      functionRef:
+        refName: runCommand
+        arguments:
+          command: git status --porcelain
+    transition: Step2_TaskA001SddBaseline
+  - name: Step2_TaskA001SddBaseline
+    type: operation
+    metadata:
+      task_id: TASK.08.10.a001
+    compensatedBy: Rollback_TASK.08.10.a001
+    actions:
+    - name: verifySddBaseline
+      functionRef:
+        refName: runCommand
+        arguments:
+          command: uv --project ${AIOPS_HARNESS_ROOT} run aiops-harness chg verify docs/sdd/09_CHG/CHG-010_audit-wave-p0-security-isolation.yaml
+          task_id: TASK.08.10.a001
+          target_files:
+          - docs/sdd/03_EARS/EARS-01_engramory_core.yaml
+          - docs/archive/CHG-010/EARS-01_engramory_core_v1.0.yaml
+          - docs/sdd/06_SPEC/SPEC-01_access_surface.yaml
+          - docs/sdd/06_SPEC/SPEC-02_memory_store.yaml
+          - docs/sdd/06_SPEC/SPEC-04_distillation_engine.yaml
+          - docs/sdd/06_SPEC/SPEC-06_ports_portability.yaml
+          - docs/archive/CHG-010/SPEC-01_access_surface_v1.1.yaml
+          - docs/archive/CHG-010/SPEC-02_memory_store_v1.0.yaml
+          - docs/archive/CHG-010/SPEC-04_distillation_engine_v1.0.yaml
+          - docs/archive/CHG-010/SPEC-06_ports_portability_v1.0.yaml
+          - docs/sdd/07_TDD/TDD-04_distillation_engine.yaml
+          - docs/archive/CHG-010/TDD-04_distillation_engine_v1.0.yaml
+          - docs/sdd/08_IPLAN/IPLAN-00_index.yaml
+          - docs/sdd/08_IPLAN/IPLAN-10_audit-wave-p0-security-isolation.swf.yaml
+          - docs/sdd/09_CHG/CHG-010_audit-wave-p0-security-isolation.yaml
+          - docs/sdd/graph/SLICE-10_audit-wave-p0-security-isolation.graph.yaml
+    transition: Step3_TaskA002MigrationsAndDeps
+  - name: Step3_TaskA002MigrationsAndDeps
+    type: operation
+    metadata:
+      task_id: TASK.08.10.a002
+    compensatedBy: Rollback_TASK.08.10.a002
+    actions:
+    - name: applyDepsAndMigrations
+      functionRef:
+        refName: runCommand
+        arguments:
+          command: uv run --extra dev pytest -q tests/test_migrations.py
+          task_id: TASK.08.10.a002
+          target_files:
+          - db/migrations/0004_ambient_gateway_view.sql
+          - db/migrations/0005_pin_embeddings_hnsw.sql
+          - db/migrations/0006_resize_embeddings_1536.sql
+          - db/migrations/0011_wave_p0_isolation_and_rls.sql
+          - db/migrations/down/0011_wave_p0_isolation_and_rls.sql
+          - pyproject.toml
+          - uv.lock
+    transition: Step4_TaskA003DataScopeIsolation
+  - name: Step4_TaskA003DataScopeIsolation
+    type: operation
+    metadata:
+      task_id: TASK.08.10.a003
+    compensatedBy: Rollback_TASK.08.10.a003
+    actions:
+    - name: implementDataAndScopeIsolation
+      functionRef:
+        refName: runCommand
+        arguments:
+          command: uv run --extra dev ruff check src tests
+          task_id: TASK.08.10.a003
+          target_files:
+          - src/engramory/access/surface.py
+          - src/engramory/adapters/dev/graph_neo4j.py
+          - src/engramory/adapters/dev/storage_pg.py
+          - src/engramory/adapters/dev/vector_pg.py
+          - src/engramory/core/chunking.py
+          - src/engramory/core/kb_graph.py
+          - src/engramory/core/models.py
+          - src/engramory/core/repository.py
+          - src/engramory/ports/graph.py
+          - src/engramory/ports/vector.py
+          - src/engramory/workers/distillation.py
+          - src/engramory/workers/graph_projection.py
+    transition: Step5_TaskA004SandboxMcpOidc
+  - name: Step5_TaskA004SandboxMcpOidc
+    type: operation
+    metadata:
+      task_id: TASK.08.10.a004
+    compensatedBy: Rollback_TASK.08.10.a004
+    actions:
+    - name: implementSandboxMcpOidc
+      functionRef:
+        refName: runCommand
+        arguments:
+          command: uv run --extra dev mypy src
+          task_id: TASK.08.10.a004
+          target_files:
+          - src/engramory/access/jwt_auth.py
+          - src/engramory/access/poisoning_guard.py
+          - src/engramory/cli.py
+          - src/engramory/core/docs_tools.py
+          - src/engramory/core/git_sync.py
+          - src/engramory/core/knowledge.py
+          - src/engramory/core/portal_builder.py
+          - src/engramory/mcp/server.py
+    transition: Step6_TaskA005DocsAndTests
+  - name: Step6_TaskA005DocsAndTests
+    type: operation
+    metadata:
+      task_id: TASK.08.10.a005
+    compensatedBy: Rollback_TASK.08.10.a005
+    actions:
+    - name: verifyWaveP0SecurityAndDocs
+      functionRef:
+        refName: runCommand
+        arguments:
+          command: uv run --extra dev pytest -q tests/security/test_wave_p0_security_remediation.py
+          task_id: TASK.08.10.a005
+          target_files:
+          - docs/ARCHITECTURE.md
+          - docs/MULTIMODAL_AND_POSTGRES_BLOB_STORAGE.md
+          - docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md
+          - docs/doc-tools/00_INDEX.md
+          - docs/doc-tools/03_LINTING_GATES_AND_DRIFT_ENGINE.md
+          - docs/doc-tools/07_PORTAL_API_CONTRACTS_AND_DEPLOYMENT_RUNBOOK.md
+          - docs/doc-tools/10_DOCUMENTATION_TOOLS_TECHNICAL_REFERENCE.md
+          - plans/PLAN-025_paperclip-centralized-backlog-and-audit-governance.md
+          - tests/conformance/test_adapters.py
+          - tests/conftest.py
+          - tests/integration/test_access_surface.py
+          - tests/integration/test_adr_knowledge_graph.py
+          - tests/integration/test_distillation_embedding.py
+          - tests/integration/test_doc_ingest.py
+          - tests/integration/test_multiproject_sdd.py
+          - tests/integration/test_repository.py
+          - tests/security/test_wave_p0_security_remediation.py
+          - tests/test_docs_tools.py
+          - tests/test_migrations.py
+          - tests/test_plan017_remediation.py
+          - tests/test_storage_pg_blob_cas.py
+          - tests/test_virtual_employee_lifecycle.py
+          - tests/unit/test_graph_neo4j.py
+          - tests/unit/test_jwt_auth.py
+          - tests/unit/test_mcp_server.py
+    transition: EvaluateLayerConsistency
+  - name: EvaluateLayerConsistency
+    type: switch
+    dataConditions:
+    - condition: ${ .consistencyScore >= 1.0 }
+      transition: PassConsistencyGate
+    defaultCondition:
+      transition: EscalateToRemediation
+  - name: EscalateToRemediation
+    type: operation
+    actions:
+    - name: dispatchRemediationAction
+      functionRef:
+        refName: remediateLayerFindings
+        arguments:
+          layer: 08_IPLAN
+          documentId: IPLAN-10
+    transition: SealLayerDocumentBaseline
+  - name: PassConsistencyGate
+    type: operation
+    actions:
+    - name: logConsistencyPass
+      functionRef:
+        refName: incrementCounter
+        arguments:
+          metric: iplan_consistency_gate_pass
+          layer: 08_IPLAN
+          documentId: IPLAN-10
+    transition: SealLayerDocumentBaseline
+  - name: SealLayerDocumentBaseline
+    type: operation
+    actions:
+    - name: sealFrontmatterStatus
+      functionRef:
+        refName: sealDocumentBaseline
+        arguments:
+          documentId: IPLAN-10
+          layer: 08_IPLAN
+          targetStatus: Baselined
+          checksumAlgorithm: SHA-256
+    transition: RegisterSddGraphBaselineNode
+  - name: RegisterSddGraphBaselineNode
+    type: operation
+    actions:
+    - name: updateGraphNode
+      functionRef:
+        refName: registerGraphBaselineNode
+        arguments:
+          nodeType: IplanNode
+          nodeId: IPLAN-10
+          status: Baselined
+          lockIncomingEdges: true
+    transition: EmitLayerHandoffEvent
+  - name: EmitLayerHandoffEvent
+    type: operation
+    actions:
+    - name: publishCompletionEvent
+      functionRef:
+        refName: emitCloudEvent
+        arguments:
+          event: IplanApprovedEvent
+          iplan_id: IPLAN-10
+    end: true
+  - name: Rollback_TASK.08.10.a001
+    type: operation
+    usedForCompensation: true
+    actions:
+    - name: compensateTaskA001
+      functionRef:
+        refName: runCommand
+        arguments:
+          command: git checkout b760e3a -- docs/sdd/
+    end:
+      terminate: true
+  - name: Rollback_TASK.08.10.a002
+    type: operation
+    usedForCompensation: true
+    actions:
+    - name: compensateTaskA002
+      functionRef:
+        refName: runCommand
+        arguments:
+          command: git checkout b760e3a -- db/migrations/ pyproject.toml uv.lock && rm -f db/migrations/0011_wave_p0_isolation_and_rls.sql db/migrations/down/0011_wave_p0_isolation_and_rls.sql
+    end:
+      terminate: true
+  - name: Rollback_TASK.08.10.a003
+    type: operation
+    usedForCompensation: true
+    actions:
+    - name: compensateTaskA003
+      functionRef:
+        refName: runCommand
+        arguments:
+          command: git checkout b760e3a -- src/engramory/
+    end:
+      terminate: true
+  - name: Rollback_TASK.08.10.a004
+    type: operation
+    usedForCompensation: true
+    actions:
+    - name: compensateTaskA004
+      functionRef:
+        refName: runCommand
+        arguments:
+          command: git checkout b760e3a -- src/engramory/
+    end:
+      terminate: true
+  - name: Rollback_TASK.08.10.a005
+    type: operation
+    usedForCompensation: true
+    actions:
+    - name: compensateTaskA005
+      functionRef:
+        refName: runCommand
+        arguments:
+          command: git checkout b760e3a -- docs/ tests/
+    end:
+      terminate: true
+session_handoff:
+  current_phase: Completed
+  completed_states:
+  - Step1_PreFlightCheck
+  - Step2_TaskA001SddBaseline
+  - Step3_TaskA002MigrationsAndDeps
+  - Step4_TaskA003DataScopeIsolation
+  - Step5_TaskA004SandboxMcpOidc
+  - Step6_TaskA005DocsAndTests
+  pending_states: []
+implementation_contracts:
+  provided:
+    contracts:
+    - { name: "WaveP0IsolationSurface", type: "AccessSurface", note: "Postgres FORCE RLS (14 tables + non-owner roles), C1-C5/H9 scope & graph isolation, C6 shlex smoke sandbox, C7 FastAPI/Starlette MCP & OIDC, C8 symlink/poisoning guards" }
+  consumed:
+    dependencies:
+    - { name: "Repository", from: "@spec: SPEC-02", note: "Canonical PostgreSQL 18 spine with transaction-local app.tenant_id GUC" }
+    - { name: "AccessSurface", from: "@spec: SPEC-01", note: "Single governed access surface" }
+tdd_consistency:
+  summary: "Verified via tests/security/test_wave_p0_security_remediation.py and full offline + live Postgres/Neo4j test suites."
+traceability:
+  upstream:
+  - '@spec: SPEC-01'
+  - '@spec: SPEC-02'
+  - '@spec: SPEC-04'
+  - '@spec: SPEC-06'
+  - '@tdd: TDD.04.04.c200'
+  downstream:
+  - '@doc: plans/PLAN-026_v030-deep-audit-remediation.md'
+  - '@test: tests/security/test_wave_p0_security_remediation.py'

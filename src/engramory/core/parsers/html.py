@@ -109,6 +109,13 @@ class HTMLParser(BaseParser):
 
         if not header_nodes:
             body_text = soup.get_text(separator="\n", strip=True)
+            if not body_text:
+                return ParseResult(
+                    sections=[],
+                    doc_type=self.doc_type,
+                    title=title,
+                    warnings=["Empty document"],
+                )
             sec = Section(
                 section_id="sec_1",
                 name="Content",
@@ -124,7 +131,7 @@ class HTMLParser(BaseParser):
                 sections=[sec],
                 doc_type=self.doc_type,
                 title=title,
-                warnings=["No header elements found in HTML"] if body_text else ["Empty document"],
+                warnings=["No header elements found in HTML"],
             )
 
         for h_node in header_nodes:
@@ -183,6 +190,13 @@ class HTMLParser(BaseParser):
 
         if not headers:
             body_clean = full_text.strip()
+            if not body_clean:
+                return ParseResult(
+                    sections=[],
+                    doc_type=self.doc_type,
+                    title=title,
+                    warnings=["Empty document"],
+                )
             sec = Section(
                 section_id="sec_1",
                 name="Content",
@@ -198,7 +212,7 @@ class HTMLParser(BaseParser):
                 sections=[sec],
                 doc_type=self.doc_type,
                 title=title,
-                warnings=["No header elements found in HTML"] if body_clean else ["Empty document"],
+                warnings=["No header elements found in HTML"],
             )
 
         sections: list[Section] = []

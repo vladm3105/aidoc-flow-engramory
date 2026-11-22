@@ -161,7 +161,9 @@ async def test_git_sync_deletion_reconciliation(tmp_path: Path) -> None:
     )
 
     assert result.files_deleted == 1
-    mock_repo.delete_kb_sections_for_doc.assert_awaited_once_with("tenant-x", "proj-y:old_doc.md")
+    mock_repo.delete_kb_sections_for_doc.assert_awaited_once_with(
+        "tenant-x", "proj-y:old_doc.md", project_id="proj-y"
+    )
 
 
 @pytest.mark.asyncio

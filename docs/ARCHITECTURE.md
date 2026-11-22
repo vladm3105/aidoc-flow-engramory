@@ -12,7 +12,7 @@ watched_paths:
   - "src/engramory/ports/vector.py"
   - "src/engramory/access/surface.py"
   - "db/migrations/0001_init_memory.sql"
-last_verified: "2026-11-13"
+last_verified: "2026-11-22"
 ---
 
 # Engramory — Target Architecture
@@ -97,6 +97,12 @@ Engramory is designed **agent-first**:
 The unified access surface means **all agents (Project Executors, Operations Assistant, CI runners)** interact through consistent tool contracts. The ports layer means **backends swap per environment** with zero code changes.
 
 The **Knowledge core** and **Memory core** are two *bounded cores of one platform*, not two projects — they share the spine (Postgres, scope/tenant model, gateway, ports) and are separated by schema, write-governance, lifecycle, and tool namespace. See [CORES.md](CORES.md) and [ADR-08](sdd/05_ADR/ADR-08_two_bounded_cores.yaml).
+
+### Wave P1 Data Integrity & Runtime Hardening (`CHG-011`)
+
+- **CAS Ownership & Concurrency (`C10`):** Migration `0012` provisions `kb_blob_projects` and `kb_blob_aliases` under PostgreSQL RLS so content-addressed blobs deduplicate per tenant without exposing metadata or deletes across projects; `PgBlobStorageAdapter` holds transactional advisory locks (`pg_advisory_lock`) and row locks (`FOR UPDATE`) continuously across upload and GC, while `LocalFsStorageAdapter` persists blobs and aliases on disk.
+- **Durable Events & Hexagonal Memory (`H1`, `H2`):** `NatsEventsAdapter` runs NATS JetStream durable pull consumers with ACK-on-yield, NAK-on-error, CRLF header rejection, and token-exact wildcards; `MemoryCore` implements `MemoryPort`, and background workers enforce broker `_nats_subject` tenant verification with per-event DLQ isolation (`engramory.dlq.worker`).
+- **Unified Governance & Fail-Closed SDD Gates (`H6`, `H11`):** Every CLI knowledge, SDD ingest, experience-event, and learning-health command routes through `AccessSurface` (exit code `2` reserved for `DevTierFenceError`, exit code `1` for authorization/ownership denials), and `InvariantChecker` / `ContextSlicer` fail closed when git is unavailable or contract prefixes (`03_EARS`, `05_ADR`, `06_SPEC`, `db/migrations/`) change on fast paths.
 
 ---
 
@@ -196,7 +202,7 @@ agent_profiles(
 consolidation_runs(id, agent_id, started_at, finished_at, stats jsonb)
 ```
 
-(The block above is the memory core across migrations `0001`–`0010`. Migration `0003` adds `episodes.content_hash`, `memories.status/source_trust/ts_lex`, `memory_retrievals`, `audit_records`, and L0 `kb_sections`; migration `0009` scopes `agent_profiles` by `(tenant_id, agent_id)`; migration `0010` adds `kb_blobs`, `kb_blob_chunks`, `kb_blob_chunks_large`, and multimodal columns on `kb_sections`.)
+(The schema block spans migrations `0001`–`0011`. Migration `0003` adds `episodes.content_hash`, `memories.status/source_trust/ts_lex`, `memory_retrievals`, `audit_records`, and L0 `kb_sections`; migration `0009` scopes `agent_profiles` by `(tenant_id, agent_id)`; migration `0010` adds `kb_blobs`, `kb_blob_chunks`, `kb_blob_chunks_large`, and multimodal columns on `kb_sections`; migration `0011` (`CHG-010`) enables `FORCE ROW LEVEL SECURITY` with `app.tenant_id` GUC isolation across all 14 tenant tables, provisions `engramory_app` / `engramory_worker` non-owner roles, converts `v_ambient_memory_active` to `security_invoker = true`, enforces composite `(tenant_id, doc_id, step_uid)` keys, and pairs with scoped `VectorPort.delete(tenant_id)` / `GraphPort` filters and FastAPI MCP Bearer transport.)
 
 Because `content_raw` and `provenance` are always kept and `embedding` is marked regenerable, **the brain survives any model or platform migration** — you re-embed from `content_raw`, you don't re-architect.
 
@@ -393,7 +399,7 @@ Phases 0–2 are entirely free/self-hosted. Phase 3 is a **configuration + adapt
 
 ## Recommended dev stack (Phase 0 docker-compose)
 
-Provisioned in `docker-compose.yml` **today:** `postgres` (PostgreSQL 18 + `pgvector` + `ts_blob_cold` Chunked Blob CAS) · `redis` · `ghcr.io/berriai/litellm` + `ollama` (`--profile local-ai`) · `neo4j` (`neo4j:5.26-community`, `Decision D17`) · `mcp` (MCP gateway, authenticating against Stage Authentik or `--profile legacy-idp` `keycloak`) · `worker` (reflection/consolidation). Optional observability connects via OTel (`docs/OBSERVABILITY.md`).
+Provisioned in `docker-compose.yml` **today:** `postgres` (PostgreSQL 18 at `/var/lib/postgresql` + `pgvector` + `ts_blob_cold` Chunked Blob CAS) · `valkey` (`valkey/valkey:8-alpine`) · `nats` (`nats:2.10-alpine` JetStream) · `ghcr.io/berriai/litellm` + `ollama` (`--profile local-ai`, 1536d `embed`) · `neo4j` (`neo4j:5.26-community`, `Decision D17`) · `mcp` (hardened MCP gateway on `127.0.0.1:8000` with dependency-aware `/health`, authenticating against Authentik) · `worker` (hardened reflection/consolidation daemon). Stage deployment (`compose.platform.yaml`) uses OpenBao `/dev/shm` fail-closed secrets and declarative `platform-stage-ops` OpenTofu/`pyinfra` EaC. Optional observability connects via OTel (`docs/OBSERVABILITY.md`).
 
 All open-source, all free, all with a documented GCP **and** Azure adapter for later. Start here; the cloud is a swap, not a rebuild.
 

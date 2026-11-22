@@ -17,7 +17,7 @@ from engramory.adapters.dev.storage_pg import PgBlobStorageAdapter
 from engramory.adapters.dev.vector_pg import PgVectorAdapter
 from engramory.ports import EventsPort, GraphPort, LLMPort, StoragePort, VectorPort
 
-PROFILES = ("dev", "gcp", "azure")
+PROFILES = ("dev", "stage", "gcp", "azure")
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,13 +37,15 @@ def dev_adapters(
     neo4j_uri: str | None = None,
     nats_url: str | None = None,
     blob_dsn: str | None = None,
+    *,
+    profile: str = "dev",
 ) -> AdapterSet:
     # GAP-03: PgBlobStorageAdapter connects directly to PostgreSQL :5432 via
     # ENGRAMORY_BLOB_DSN in stage/prod (bypassing PgBouncer :6432 transaction pooling),
     # falling back to dsn in local dev when ENGRAMORY_BLOB_DSN is unset.
     effective_blob_dsn = blob_dsn or os.environ.get("ENGRAMORY_BLOB_DSN") or dsn
     return AdapterSet(
-        profile="dev",
+        profile=profile,
         vector=PgVectorAdapter(dsn),
         llm=LiteLLMAdapter(),
         graph=Neo4jGraphAdapter(uri=neo4j_uri),
@@ -55,11 +57,15 @@ def dev_adapters(
 def adapters_for_profile(profile: str | None = None, *, dsn: str) -> AdapterSet:
     """Select the adapter set; profile defaults to $ENGRAMORY_PROFILE, then dev."""
     resolved = profile or os.environ.get("ENGRAMORY_PROFILE", "dev")
-    if resolved == "dev":
-        return dev_adapters(dsn)
+    if resolved in ("dev", "stage"):
+        return dev_adapters(dsn, profile=resolved)
     if resolved in PROFILES:
         raise NotImplementedError(f"adapter set '{resolved}' arrives with BRD-02")
     raise ValueError(f"unknown ENGRAMORY_PROFILE: {resolved!r} (expected one of {PROFILES})")
+
+
+class DevTierFenceError(PermissionError):
+    """Raised when a dev-only face is invoked under non-dev ENGRAMORY_PROFILE (ADR-10)."""
 
 
 def require_dev_profile(face: str, profile: str | None = None) -> str:
@@ -68,7 +74,7 @@ def require_dev_profile(face: str, profile: str | None = None) -> str:
     production identity is gateway-only (OIDC-verified claims)."""
     resolved = profile or os.environ.get("ENGRAMORY_PROFILE", "dev")
     if resolved != "dev":
-        raise PermissionError(
+        raise DevTierFenceError(
             f"{face}: client-constructed ActorContext is dev-tier only (ADR-10); "
             f"ENGRAMORY_PROFILE={resolved!r} — use the MCP gateway"
         )

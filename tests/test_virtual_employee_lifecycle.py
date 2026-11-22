@@ -435,7 +435,7 @@ def test_cli_init_profile_preservation_and_config_domain(monkeypatch: pytest.Mon
 
 @pytest.mark.asyncio
 async def test_domain_id_propagation_across_jwt_and_mcp() -> None:
-    # 1. JWT claims -> ActorContext preserves domain_id and grants 'domain' scope
+    # 1. JWT claims -> ActorContext preserves domain_id and does NOT auto-grant 'domain' scope
     claims = TokenClaims(
         sub="agent-support-01",
         iss="https://auth.example.com",
@@ -450,7 +450,23 @@ async def test_domain_id_propagation_across_jwt_and_mcp() -> None:
     )
     ctx = claims_to_actor_context(claims)
     assert ctx.domain_id == "billing"
-    assert "domain" in ctx.scopes
+    assert "domain" not in ctx.scopes
+
+    # Domain scope requires explicit 'domain-admin' (or platform-admin/superuser) role
+    claims_dom = TokenClaims(
+        sub="agent-support-01",
+        iss="https://auth.example.com",
+        aud="engramory",
+        exp=9999999999,
+        raw_claims={
+            "tenant_id": "tenant-acme",
+            "department_focus": "billing",
+            "groups": ["domain:billing", "domain-admin"],
+            "projects": ["proj-checkout"],
+        },
+    )
+    ctx_dom = claims_to_actor_context(claims_dom)
+    assert "domain" in ctx_dom.scopes
 
     # 2. McpServer._resolve_call_ctx preserves base.domain_id on project override
     fake_repo = InMemoryVirtualEmployeeRepo()

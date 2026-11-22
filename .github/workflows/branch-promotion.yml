@@ -12,7 +12,7 @@ env:
   # Space-separated promotion branches, baked by install.sh ("none" when
   # empty). Jurisdiction guards key off this; the chain arms below assume
   # the standard dev/staging/main names (installer warns otherwise).
-  PROMOTION_TARGETS: none
+  PROMOTION_TARGETS: "staging main"
   # Canon the ancestry guard is fetched from when the base predates .ci/ entirely (the
   # adoption PR itself has no base .ci/SOURCE to read). Baked by install.sh from the canon
   # origin; the release tag still comes from the head's .ci/VERSION.
@@ -21,6 +21,7 @@ env:
 jobs:
   verify-source:
     runs-on: [self-hosted, ci, ephemeral]
+    timeout-minutes: 10
     steps:
       - name: Require the preceding promotion branch
         env:

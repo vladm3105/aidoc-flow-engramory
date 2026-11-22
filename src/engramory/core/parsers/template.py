@@ -49,6 +49,13 @@ class TemplateParser(BaseParser):
         markers = self._find_markers(text)
 
         if not markers:
+            if not text.strip():
+                return ParseResult(
+                    sections=[],
+                    doc_type=self.doc_type,
+                    title=filename or "Template",
+                    warnings=["Empty document"],
+                )
             # Fallback if no markers
             sec = Section(
                 section_id="sec_1",
@@ -73,7 +80,6 @@ class TemplateParser(BaseParser):
 
         for i, m in enumerate(markers):
             name = m["name"]
-            order = i + 1
             sec_start = m["end"]  # Content begins after marker
             sec_end = markers[i + 1]["start"] if i + 1 < len(markers) else len(text)
 
@@ -83,7 +89,10 @@ class TemplateParser(BaseParser):
                 sec_end = end_match
 
             sec_content = text[sec_start:sec_end].strip()
+            if not sec_content:
+                continue
 
+            order = len(sections) + 1
             # Extract {var} placeholders
             for v in self.VARIABLE_PATTERN.findall(sec_content):
                 variables_found.add(v)

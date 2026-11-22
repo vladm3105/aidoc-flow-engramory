@@ -145,6 +145,7 @@ async def test_mcp_call_sdd_ingest(mock_surface: AccessSurface, mock_ctx: ActorC
             "arguments": {
                 "sdd_root": "sdd",
                 "project_id": "my-project",
+                "evidence_ref": "CHG-010",
                 "reconcile": True,
             },
         },
@@ -357,13 +358,22 @@ def test_mcp_http_server_authenticated_endpoints(mock_surface: AccessSurface) ->
         assert resp.status == 401
         conn.close()
 
-        # 6. GET /sse with query param token -> 200
+        # 6. GET /sse with query param token MUST be rejected with 401 (C7)
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
         conn.request("GET", "/sse?token=valid-token")
         resp = conn.getresponse()
+        assert resp.status == 401
+        conn.close()
+
+        # 7. GET /sse with Authorization: Bearer header -> 200 & session-bound endpoint
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/sse", headers={"Authorization": "Bearer valid-token"})
+        resp = conn.getresponse()
         assert resp.status == 200
         line1 = resp.readline().decode("utf-8")
+        line2 = resp.readline().decode("utf-8")
         assert "event: endpoint" in line1
+        assert "data: /messages?session_id=" in line2
         conn.close()
     finally:
         httpd.shutdown()

@@ -6,7 +6,7 @@
 # THIS job and share one cycle.
 #
 # ── SCOPE: three checks, not four or five (PLAN-025 §3.2d) ───────────────────
-# pre-commit + markdownlint + links. Deliberately NOT here:
+# task check + markdownlint + links. Deliberately NOT here:
 #
 #   audit-trail  — needs `types: [… labeled, unlabeled]` so its skip-label
 #                  escape hatch can fire (D32). Adding those types would re-run
@@ -120,13 +120,14 @@ jobs:
       # `continue-on-error` is supported HERE because these are job steps.
       # §3.2a defers it INSIDE a composite action as unverified; the two are
       # different surfaces, and that distinction is what makes this shape work.
-      - name: Lint / format / security hooks
-        id: precommit
-        if: hashFiles('.pre-commit-config.yaml') != ''
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+
+      - name: Hybrid CI fast gate (task check)
+        id: taskcheck
         continue-on-error: true
-        uses: ./.github/actions/pre-commit
-        with:
-          config-path: .pre-commit-config.yaml
+        run: |
+          task deps
+          task check
 
       # The exclusions are v2 parity and load-bearing: without them cli2 walks
       # `node_modules`, `vendor` and `.git`, so any repo with dependencies gets a
@@ -199,23 +200,19 @@ jobs:
         if: always()
         shell: bash
         env:
-          R_PRECOMMIT: ${{ steps.precommit.outcome }}
+          R_TASKCHECK: ${{ steps.taskcheck.outcome }}
           R_MARKDOWNLINT: ${{ steps.markdownlint.outcome }}
           R_LINKS: ${{ steps.links.outcome }}
         run: |
           set -euo pipefail
           rc=0
-          for chk in PRECOMMIT MARKDOWNLINT LINKS; do
+          for chk in TASKCHECK MARKDOWNLINT LINKS; do
             var="R_${chk}"; out="${!var-}"
             case "$out" in
               success) printf '  %-14s %s\n' "$chk" "pass" ;;
               skipped)
-                if [ "$chk" = "PRECOMMIT" ]; then
-                  printf '  %-14s %s\n' "$chk" "skipped (no .pre-commit-config.yaml)"
-                else
-                  printf '::error::%s skipped unexpectedly — failing closed\n' "$chk"
-                  rc=1
-                fi
+                printf '::error::%s skipped unexpectedly — failing closed\n' "$chk"
+                rc=1
                 ;;
               failure) printf '::error::%s failed\n' "$chk"; rc=1 ;;
               *)

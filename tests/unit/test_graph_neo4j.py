@@ -259,8 +259,9 @@ async def test_neighbors_restricts_default_tenant_and_intermediate_hops() -> Non
     cypher_query = mock_session.run.await_args[0][0]
     assert "$tenant_id = 'default' OR n.tenant_id = $tenant_id" not in cypher_query
     assert (
-        "n.tenant_id = $tenant_id OR ($tenant_id = 'default' AND n.tenant_id IS NULL)"
+        "(($tenant_id = 'default' AND n.tenant_id IS NULL) OR n.tenant_id = $tenant_id)"
         in cypher_query
     )
     assert "ALL(" in cypher_query
     assert "x IN nodes(p)" in cypher_query
+    assert "r IN relationships(p)" in cypher_query

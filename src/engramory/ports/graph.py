@@ -31,6 +31,8 @@ class GraphPort(Protocol):
         depth: int = 1,
         tenant_id: str = "default",
         project_id: str | None = None,
+        domain_id: str | None = None,
+        allowed_scopes: Sequence[str] | None = None,
     ) -> Sequence[Mapping[str, Any]]:
         """Return nodes reachable from `id` within `depth` hops (bounded traversal)."""
         ...
@@ -43,6 +45,8 @@ class GraphPort(Protocol):
         depth: int = 6,
         tenant_id: str = "default",
         project_id: str | None = None,
+        domain_id: str | None = None,
+        allowed_scopes: Sequence[str] | None = None,
     ) -> Sequence[Mapping[str, Any]]:
         """Return upstream ancestor nodes reachable from `id` along directed out-edges."""
         ...
@@ -55,16 +59,26 @@ class GraphPort(Protocol):
         depth: int = 6,
         tenant_id: str = "default",
         project_id: str | None = None,
+        domain_id: str | None = None,
+        allowed_scopes: Sequence[str] | None = None,
     ) -> Sequence[Mapping[str, Any]]:
         """Return downstream descendant nodes reachable from `id` along directed in-edges."""
         ...
 
-    async def delete_node(self, *, id: str, tenant_id: str = "default") -> None:
+    async def delete_node(
+        self, *, id: str, tenant_id: str = "default", project_id: str | None = None
+    ) -> None:
         """Delete a node and its attached relationships."""
         ...
 
     async def delete_edge(
-        self, *, src: str, dst: str, rel: str | None = None, tenant_id: str = "default"
+        self,
+        *,
+        src: str,
+        dst: str,
+        rel: str | None = None,
+        tenant_id: str = "default",
+        project_id: str | None = None,
     ) -> None:
         """Delete relationship(s) between src and dst."""
         ...
@@ -75,6 +89,7 @@ class GraphPort(Protocol):
         tenant_id: str,
         active_ids: Sequence[str],
         project_id: str | None = None,
+        exclude_kb_labels: bool = True,
     ) -> int:
         """Delete any nodes belonging to tenant_id (and optional project_id)
         whose IDs are not in active_ids.

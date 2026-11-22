@@ -31,6 +31,7 @@ KNOWN_ACTIONS = frozenset(
         "knowledge_ingest",
         "knowledge_ingest_media",
         "knowledge_search",
+        "knowledge_sync_git",
         "blob_put",
         "blob_get",
         "blob_head",

@@ -40,7 +40,7 @@ permissions:
   issues: write          # gh api label create/apply paths
 jobs:
   call:
-    uses: vladm3105/aidoc-flow-ci/.github/workflows/ai-review.yml@ci/v1.9.5
+    uses: vladm3105/aidoc-flow-ci/.github/workflows/ai-review.yml@845964a439747001b5e3febbeebde4aa5a551d20 # ci/v1.9.5
     with:
       # reviewer engine is CONFIG-DRIVEN: leave this unset and the reusable reads
       # `.reviewer` (claude|codex) from your trust-config repo's
@@ -49,8 +49,8 @@ jobs:
       # CLAUDE_CODE_OAUTH_TOKEN (CLI) or ANTHROPIC_API_KEY (API); codex:
       # OPENAI_API_KEY. Uncomment to force an engine here regardless of config:
       # reviewer: claude
-      runner_labels_routine: '"ubuntu-latest"'
-      runner_labels_review: '"ubuntu-latest"'
+      runner_labels_routine: '["self-hosted", "ci", "ephemeral"]'
+      runner_labels_review: '["self-hosted", "ci", "ephemeral"]'
       # External adopters: point the trust config at YOUR ops/config repo
       # (holds `.github/ai-review/config.json`). Defaults to
       # vladm3105/aidoc-flow-operations@main.

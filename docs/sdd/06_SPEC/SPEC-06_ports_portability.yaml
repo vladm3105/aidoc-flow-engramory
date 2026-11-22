@@ -15,9 +15,9 @@ title: "Ports & Portability"
 
 document_control:
   status: Draft
-  version: "1.0"
+  version: "1.3"
   date_created: "2026-06-22T00:00:00"
-  last_updated: "2026-06-22T00:00:00"
+  last_updated: "2026-11-22T00:00:00"
   author: "Engramory team"
   component: "PortsAndAdapters"
   tdd_ready_score: "[Pending]/100"
@@ -25,7 +25,9 @@ document_control:
 component_overview:
   description: |
     The vendor-neutral interfaces the core depends on, their per-environment adapters
-    (dev/gcp/azure) selected by ENGRAMORY_PROFILE, and the migration/re-projection path
+    (dev/stage/gcp/azure) selected by ENGRAMORY_PROFILE (where "stage" binds self-hosted
+    Postgres/Neo4j/NATS/LiteLLM adapters while ADR-10 require_dev_profile still refuses
+    non-"dev" CLI execution), and the migration/re-projection path
     (re-embed from canonical text, rebuild graph). Guarantees cloud portability.
   architecture_decision: "@adr: ADR-02"
   diagram:
@@ -44,17 +46,17 @@ interfaces:
     - name: "StoragePort"
       type: "class"
       signature: "class StoragePort(Protocol): ..."
-      description: "Content-addressable blob storage (PgBlobStorageAdapter in PostgreSQL 18 Chunked Blob CAS up to 20 GB+ per Rule D14a/D14b | LocalFsStorageAdapter | GCS | Azure Blob): put/get/delete/exists/put_file/put_stream/get_stream/head/reconcile_truncated_blobs/gc_orphan_chunks."
+      description: "Project- and tenant-scoped content-addressable blob storage (PgBlobStorageAdapter with advisory CAS locks, kb_blob_projects ownership, contiguous chunk verification & bounded get(max_bytes) | LocalFsStorageAdapter with on-disk chunk persistence & mtime GC | GCS | Azure Blob): put/get/delete/exists/put_file/put_stream/get_stream/head/reconcile_truncated_blobs/gc_orphan_chunks."
       errors: ["StorageError", "BlobNotFoundError", "BlobTruncatedError", "BlobIntegrityError", "BlobTooLargeError"]
     - name: "VectorPort"
       type: "class"
       signature: "class VectorPort(Protocol): ..."
-      description: "Vector index (rebuildable projection)."
+      description: "Vector index (rebuildable projection). Enforces explicit tenant_id on upsert/search/delete, validates 1536-dim vectors in PgVectorAdapter, and filters active non-expired rows (valid_to IS NULL AND status = 'active')."
       errors: []
     - name: "GraphPort"
       type: "class"
       signature: "class GraphPort(Protocol): ..."
-      description: "Dual-engine graph traversal (Neo4j Adopt via Neo4jGraphAdapter per Decision D17 with PostgreSQL 18 recursive CTE fallback)."
+      description: "Dual-engine graph traversal (Neo4j Adopt via Neo4jGraphAdapter per Decision D17 with PostgreSQL 18 recursive CTE fallback). Enforces tenant_id + allowed_scopes + project_id/domain_id + exclude_kb_labels filtering on all traversals/deletes, strips reserved identity keys before $props writes, and rejects ':' in tenant_id."
       errors: []
     - name: "CachePort"
       type: "class"
@@ -74,7 +76,7 @@ interfaces:
     - name: "EventsPort"
       type: "class"
       signature: "class EventsPort(Protocol): ..."
-      description: "Events (NATS JetStream engramory.events.> via NatsEventsAdapter in dev | Pub/Sub | Service Bus)."
+      description: "Events (NATS JetStream durable pull consumers & PubAck via NatsEventsAdapter with automatic reconnect, CRLF header validation, strict token wildcards, and broker subject-to-tenant binding | Pub/Sub | Service Bus)."
       errors: []
     - name: "MemoryPort"
       type: "class"

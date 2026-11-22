@@ -37,8 +37,8 @@ from typing import Any
 from engramory.access.authz import ActorContext
 from engramory.access.poisoning_guard import MemoryPoisoningError
 from engramory.access.surface import AccessSurface, AuthzError, GovernedWriteRejected
-from engramory.adapters.factory import dev_adapters, require_dev_profile
-from engramory.core.kb_graph import ingest_sdd_knowledge_graph, resolve_sdd_project_id
+from engramory.adapters.factory import DevTierFenceError, dev_adapters, require_dev_profile
+from engramory.core.kb_graph import ingest_sdd_knowledge_graph
 from engramory.core.models import ValidationError
 from engramory.core.repository import Repository, StoreUnavailable
 from engramory.workers.distillation import reflect
@@ -417,8 +417,6 @@ def _cmd_knowledge_ingest(args: argparse.Namespace) -> int:
         sys.stderr.write("knowledge ingest requires a path or --text\n")
         return 2
 
-    config = _load_config(getattr(args, "config", None))
-
     target_path = Path(args.path)
     if not target_path.exists():
         sys.stderr.write(f"Path does not exist: {target_path}\n")
@@ -437,174 +435,104 @@ def _cmd_knowledge_ingest(args: argparse.Namespace) -> int:
         _emit(args.json, {"files": 0, "sections": 0}, "No files found to ingest")
         return 0
 
-    adapters = dev_adapters(config.dsn)
-    repo = Repository(config.dsn)
+    async def op_files(surface: AccessSurface, ctx: ActorContext) -> dict[str, Any]:
+        results = await surface.knowledge_ingest_files(
+            ctx,
+            paths=files_to_ingest,
+            evidence_ref=getattr(args, "evidence_ref", None),
+            scope=getattr(args, "scope", "project"),
+            domain_id=getattr(args, "domain_id", None),
+            project_graph=True,
+            docling=bool(getattr(args, "docling", False)),
+            repo_root=target_path if target_path.is_dir() else None,
+        )
+        total_sections = sum(len(ids) for ids in results.values())
+        return {
+            "files": len(results),
+            "sections": total_sections,
+            "details": results,
+        }
 
-    from engramory.core.extraction.router import SmartExtractionRouter
-    from engramory.core.knowledge import KnowledgeCore
-
-    router = SmartExtractionRouter(enable_docling=bool(getattr(args, "docling", False)))
-    core = KnowledgeCore(
-        repo,
-        llm=adapters.llm,
-        storage=getattr(adapters, "storage", None),
-        graph=adapters.graph,
-        router=router,
+    return _run_with_surface(
+        args,
+        op_files,
+        lambda p: f"ingested {p['files']} file(s), {p['sections']} section(s)",
     )
-
-    async def run_batch() -> dict[str, Any]:
-        try:
-            results = await core.ingest_documents_batch(
-                files_to_ingest,
-                tenant_id=config.ctx.tenant_id,
-                project_id=config.ctx.project_id,
-                scope=getattr(args, "scope", "project"),
-                evidence_ref=getattr(args, "evidence_ref", None),
-                project_graph=True,
-                repo_root=target_path if target_path.is_dir() else None,
-            )
-            total_sections = sum(len(ids) for ids in results.values())
-            return {
-                "files": len(results),
-                "sections": total_sections,
-                "details": results,
-            }
-        finally:
-            await _close_adapters(adapters)
-
-    payload = asyncio.run(run_batch())
-    _emit(
-        args.json,
-        payload,
-        f"ingested {payload['files']} file(s), {payload['sections']} section(s)",
-    )
-    return 0
 
 
 def _cmd_knowledge_sync_git(args: argparse.Namespace) -> int:
-    config = _load_config(getattr(args, "config", None))
-    adapters = dev_adapters(config.dsn)
-    repo = Repository(config.dsn)
     repo_path = Path(getattr(args, "repo_path", "."))
     base_sha = getattr(args, "base_sha", None)
     head_sha = getattr(args, "head_sha", None)
+    sync_status: dict[str, bool] = {"success": True}
 
-    from engramory.core.git_sync import GitSyncEngine
+    async def op(surface: AccessSurface, ctx: ActorContext) -> dict[str, Any]:
+        payload = await surface.knowledge_sync_git(
+            ctx,
+            repo_path=repo_path,
+            base_sha=base_sha,
+            head_sha=head_sha,
+            scope=getattr(args, "scope", "project"),
+        )
+        sync_status["success"] = bool(payload.get("success", True))
+        return payload
 
-    engine = GitSyncEngine()
-
-    async def run_sync() -> dict[str, Any]:
-        try:
-            sync_result = await engine.sync(
-                repo,
-                repo_path=repo_path,
-                base_sha=base_sha,
-                head_sha=head_sha,
-                tenant_id=config.ctx.tenant_id,
-                project_id=config.ctx.project_id,
-                scope=getattr(args, "scope", "project"),
-                llm=adapters.llm,
-                storage=getattr(adapters, "storage", None),
-                graph=adapters.graph,
-            )
-            return {
-                "success": sync_result.success,
-                "base_sha": sync_result.base_sha,
-                "head_sha": sync_result.head_sha,
-                "files_added": sync_result.files_added,
-                "files_modified": sync_result.files_modified,
-                "files_deleted": sync_result.files_deleted,
-                "files_skipped": sync_result.files_skipped,
-                "sections_created": sync_result.sections_created,
-                "duration_ms": sync_result.duration_ms,
-            }
-        finally:
-            await _close_adapters(adapters)
-
-    payload = asyncio.run(run_sync())
-    _emit(
-        args.json,
-        payload,
-        f"git sync {'success' if payload['success'] else 'failed'}: "
-        f"{payload['sections_created']} sections, {payload['files_added']} added, "
-        f"{payload['files_modified']} modified, {payload['files_skipped']} skipped "
-        f"({payload['duration_ms']}ms)",
+    rc = _run_with_surface(
+        args,
+        op,
+        lambda payload: (
+            f"git sync {'success' if payload['success'] else 'failed'}: "
+            f"{payload['sections_created']} sections, {payload['files_added']} added, "
+            f"{payload['files_modified']} modified, {payload['files_skipped']} skipped "
+            f"({payload['duration_ms']}ms)"
+        ),
     )
-    return 0 if payload.get("success", True) else 1
+    if rc != 0:
+        return rc
+    return 0 if sync_status["success"] else 1
 
 
 def _cmd_knowledge_search(args: argparse.Namespace) -> int:
-    config = _load_config(getattr(args, "config", None))
-    adapters = dev_adapters(config.dsn)
-    repo = Repository(config.dsn)
-    from engramory.core.knowledge import KnowledgeCore
-
-    core = KnowledgeCore(
-        repo,
-        llm=adapters.llm,
-        storage=getattr(adapters, "storage", None),
-        graph=adapters.graph,
-    )
     modality = getattr(args, "modality", None)
     expand_graph = bool(getattr(args, "expand_graph", False))
     graph_depth = int(getattr(args, "graph_depth", 1))
 
-    async def run_search() -> dict[str, Any]:
-        try:
-            if expand_graph:
-                surface = AccessSurface(
-                    repo,
-                    graph=adapters.graph,
-                    llm=adapters.llm,
-                    storage=getattr(adapters, "storage", None),
-                )
-                sections = await surface.knowledge_search(
-                    config.ctx,
-                    args.query,
-                    scope=getattr(args, "scope", None),
-                    modality=modality,
-                    expand_graph=True,
-                    graph_depth=graph_depth,
-                    limit=getattr(args, "limit", 5),
-                )
-            else:
-                sections = await core.search_sections(
-                    args.query,
-                    tenant_id=config.ctx.tenant_id,
-                    project_id=config.ctx.project_id,
-                    scope=getattr(args, "scope", None),
-                    modality=modality,
-                    limit=getattr(args, "limit", 5),
-                )
-            return {
-                "query": args.query,
-                "count": len(sections),
-                "results": [
-                    {
-                        "id": s.id,
-                        "doc_id": s.doc_id,
-                        "citation": s.citation,
-                        "scope": s.scope,
-                        "version": s.version,
-                        "modality": s.modality,
-                        "blob_sha256": s.blob_sha256,
-                        "blob_uri": s.blob_uri,
-                        "media_metadata": dict(s.media_metadata),
-                        "text": s.text[:200] + ("..." if len(s.text) > 200 else ""),
-                    }
-                    for s in sections
-                ],
-            }
-        finally:
-            await _close_adapters(adapters)
+    async def op(surface: AccessSurface, ctx: ActorContext) -> dict[str, Any]:
+        sections = await surface.knowledge_search(
+            ctx,
+            args.query,
+            domain_id=getattr(args, "domain_id", None),
+            scope=getattr(args, "scope", None),
+            modality=modality,
+            expand_graph=expand_graph,
+            graph_depth=graph_depth,
+            limit=getattr(args, "limit", 5),
+        )
+        return {
+            "query": args.query,
+            "count": len(sections),
+            "results": [
+                {
+                    "id": s.id,
+                    "doc_id": s.doc_id,
+                    "citation": s.citation,
+                    "scope": s.scope,
+                    "version": s.version,
+                    "modality": s.modality,
+                    "blob_sha256": s.blob_sha256,
+                    "blob_uri": s.blob_uri,
+                    "media_metadata": dict(s.media_metadata),
+                    "text": s.text[:200] + ("..." if len(s.text) > 200 else ""),
+                }
+                for s in sections
+            ],
+        }
 
-    payload = asyncio.run(run_search())
-    _emit(
-        args.json,
-        payload,
-        f"found {payload['count']} section(s) for query: {args.query!r}",
+    return _run_with_surface(
+        args,
+        op,
+        lambda payload: f"found {payload['count']} section(s) for query: {args.query!r}",
     )
-    return 0
 
 
 def _cmd_knowledge_ingest_media(args: argparse.Namespace) -> int:
@@ -677,10 +605,17 @@ def _cmd_knowledge_blob_get(args: argparse.Namespace) -> int:
                 raise RuntimeError("StoragePort adapter is not configured")
             out_path.parent.mkdir(parents=True, exist_ok=True)
             total_written = 0
+            eff_scope = getattr(args, "scope", "project")
+            eff_proj = (
+                None
+                if (eff_scope == "space" and "space" in config.ctx.scopes)
+                else config.ctx.project_id
+            )
             with out_path.open("wb") as fh:
                 async for chunk in adapters.storage.get_stream(
                     key=args.sha256,
                     tenant_id=config.ctx.tenant_id,
+                    project_id=eff_proj,
                 ):
                     fh.write(chunk)
                     total_written += len(chunk)
@@ -942,49 +877,33 @@ def _cmd_graph_reproject(args: argparse.Namespace) -> int:
 
 
 def _cmd_sdd_ingest(args: argparse.Namespace) -> int:
-    """Ingest SDD multi-layer corpus into PostgreSQL and project to Neo4j."""
-    config = _load_config(getattr(args, "config", None))
-    adapters = dev_adapters(config.dsn)
-    repo = Repository(config.dsn)
+    """Ingest SDD multi-layer corpus into PostgreSQL and project to Neo4j via AccessSurface."""
     sdd_root = Path(args.sdd_root)
-    tenant_id = args.tenant_id or config.ctx.tenant_id
-    project_id = resolve_sdd_project_id(
-        sdd_root,
-        explicit_id=args.project_id,
-        config_id=config.ctx.project_id,
-    )
     reconcile = not getattr(args, "no_reconcile", False)
 
-    async def run_ingest() -> dict[str, Any]:
-        try:
-            num_ent, num_rel = await ingest_sdd_knowledge_graph(
-                repo,
-                adapters.graph,
-                sdd_root=sdd_root,
-                tenant_id=tenant_id,
-                project_id=project_id,
-                reconcile=reconcile,
-            )
-            return {
-                "status": "ok",
-                "sdd_root": str(sdd_root),
-                "tenant_id": tenant_id,
-                "project_id": project_id,
-                "reconcile": reconcile,
-                "entities_ingested": num_ent,
-                "relations_ingested": num_rel,
-            }
-        finally:
-            await _close_adapters(adapters)
+    async def op(surface: AccessSurface, ctx: ActorContext) -> dict[str, Any]:
+        req_tenant = getattr(args, "tenant_id", None)
+        if req_tenant and req_tenant != ctx.tenant_id:
+            await surface.audit_denial(ctx, "sdd_ingest", f"cross_tenant_denied: {req_tenant}")
+            raise AuthzError("out_of_scope: cross-tenant sdd_ingest denied")
+        return await surface.sdd_ingest(
+            ctx,
+            sdd_root=sdd_root,
+            evidence_ref=getattr(args, "evidence_ref", None),
+            project_id=getattr(args, "project_id", None),
+            scope=getattr(args, "scope", "project"),
+            reconcile=reconcile,
+        )
 
-    payload = asyncio.run(run_ingest())
-    msg = (
-        f"ingested SDD corpus from '{sdd_root}': "
-        f"{payload['entities_ingested']} entities, {payload['relations_ingested']} relations "
-        f"(project '{project_id}', tenant '{tenant_id}')"
+    return _run_with_surface(
+        args,
+        op,
+        lambda payload: (
+            f"ingested SDD corpus from '{payload['sdd_root']}': "
+            f"{payload['entities_ingested']} entities, {payload['relations_ingested']} relations "
+            f"(project '{payload['project_id']}', tenant '{payload['tenant_id']}')"
+        ),
     )
-    _emit(args.json, payload, msg)
-    return 0
 
 
 def _cmd_sdd_slice(args: argparse.Namespace) -> int:
@@ -1196,7 +1115,24 @@ def _cmd_sdd_lint_policy(args: argparse.Namespace) -> int:
 
 def _cmd_mcp_serve(args: argparse.Namespace) -> int:
     """Run the MCP Gateway JSON-RPC server over stdio or SSE (SPEC-01 / ADR-10)."""
-    from engramory.mcp.server import McpServer
+    from engramory.mcp.server import McpServer, is_loopback_host
+
+    auth_env = os.environ.get("AUTHENTIK_ENABLED", "").lower() in ("1", "true", "yes")
+    auth_enabled = bool(getattr(args, "auth", False) or auth_env)
+    transport = getattr(args, "transport", "stdio")
+    host = getattr(args, "host", "127.0.0.1")
+    port = getattr(args, "port", 8000)
+
+    if auth_enabled and transport != "sse":
+        raise PermissionError(
+            "MCP stdio transport cannot be used with --auth enabled (ADR-10); "
+            "pass '--transport sse'"
+        )
+    if transport == "sse" and not auth_enabled and not is_loopback_host(host):
+        raise PermissionError(
+            f"Refusing to bind unauthenticated MCP SSE server to non-loopback host '{host}'; "
+            "pass --auth or bind to 127.0.0.1"
+        )
 
     config = _load_config(getattr(args, "config", None))
     adapters = dev_adapters(config.dsn)
@@ -1220,9 +1156,6 @@ def _cmd_mcp_serve(args: argparse.Namespace) -> int:
             reconcile=reconcile,
         )
 
-    auth_env = os.environ.get("AUTHENTIK_ENABLED", "").lower() in ("1", "true", "yes")
-    auth_enabled = bool(getattr(args, "auth", False) or auth_env)
-
     token_validator = None
     security_gate_url = os.environ.get("SECURITY_GATE_URL")
     if auth_enabled:
@@ -1230,11 +1163,11 @@ def _cmd_mcp_serve(args: argparse.Namespace) -> int:
 
         jwks_url = os.environ.get(
             "AUTHENTIK_JWKS_URL",
-            "https://auth-stage.aiops-flow.io/application/o/engramory/jwks/",
+            "https://auth.int.aiops-flow.io/application/o/engramory/jwks/",
         )
         issuer = os.environ.get(
             "AUTHENTIK_ISSUER",
-            "https://auth-stage.aiops-flow.io/application/o/engramory/",
+            "https://auth.int.aiops-flow.io/application/o/engramory/",
         )
         audience = os.environ.get("AUTHENTIK_AUDIENCE", "engramory")
         token_validator = JWKSValidator(jwks_url, issuer=issuer, audience=audience)
@@ -1247,11 +1180,8 @@ def _cmd_mcp_serve(args: argparse.Namespace) -> int:
         auth_enabled=auth_enabled,
         security_gate_url=security_gate_url,
     )
-    transport = getattr(args, "transport", "stdio")
     try:
         if transport == "sse":
-            host = getattr(args, "host", "127.0.0.1")
-            port = getattr(args, "port", 8000)
             server.run_sse(host=host, port=port)
         else:
             asyncio.run(server.run_stdio())
@@ -1395,6 +1325,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="also publish the validated event to EventsPort (engramory.events.<kind>)",
     )
+    p_ingest_ev.add_argument(
+        "--scope",
+        default="project",
+        help="target scope (project|domain|space)",
+    )
     p_ingest_ev.set_defaults(func=_cmd_memory_ingest_event)
 
     p_learn_health = mem_sub.add_parser(
@@ -1403,6 +1338,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_learn_health.add_argument("--project-id", default=None)
     p_learn_health.add_argument("--limit", type=int, default=500)
+    p_learn_health.add_argument("--scope", default="project")
     p_learn_health.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     p_learn_health.set_defaults(func=_cmd_memory_learning_health)
 
@@ -1512,6 +1448,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_kb_ingest.add_argument("--text", default=None)
     p_kb_ingest.add_argument("--evidence-ref", default=None)
     p_kb_ingest.add_argument("--scope", default="project")
+    p_kb_ingest.add_argument("--domain-id", default=None)
     p_kb_ingest.add_argument("--version", type=int, default=1)
     p_kb_ingest.add_argument(
         "--recursive", "-r", action="store_true", help="recursively ingest directory"
@@ -1553,6 +1490,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_kb_search.add_argument("query", help="query string")
     p_kb_search.add_argument("--limit", type=int, default=5, help="max results to return")
     p_kb_search.add_argument("--scope", default=None, help="filter by scope")
+    p_kb_search.add_argument("--domain-id", default=None, help="filter by domain_id")
     p_kb_search.add_argument(
         "--modality",
         default=None,
@@ -1602,6 +1540,16 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_sdd_ingest.add_argument(
         "--tenant-id", default=None, help="target tenant id (default: from config)"
+    )
+    p_sdd_ingest.add_argument(
+        "--evidence-ref",
+        default=None,
+        help="approved governance evidence reference (ADR-06)",
+    )
+    p_sdd_ingest.add_argument(
+        "--scope",
+        default="project",
+        help="visibility scope (project, domain, space)",
     )
     p_sdd_ingest.add_argument(
         "--no-reconcile",
@@ -1753,12 +1701,12 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     # AuthzError/GovernedWriteRejected/MemoryPoisoningError MUST
     # be matched before the fence clause or every deny would exit 2, not 1.
-    except (AuthzError, GovernedWriteRejected, MemoryPoisoningError) as exc:
-        print(f"engramory: denied: {exc}", file=sys.stderr)
-        return 1
-    except PermissionError as exc:  # the ADR-10 dev-tier fence
+    except DevTierFenceError as exc:  # the ADR-10 dev-tier fence
         print(f"engramory: {exc}", file=sys.stderr)
         return 2
+    except (AuthzError, GovernedWriteRejected, MemoryPoisoningError, PermissionError) as exc:
+        print(f"engramory: denied: {exc}", file=sys.stderr)
+        return 1
     except (ValidationError, ValueError) as exc:
         print(f"engramory: rejected: {exc}", file=sys.stderr)
         return 1
@@ -2123,8 +2071,20 @@ def _cmd_docs_ingest(args: argparse.Namespace) -> int:
     ]
 
     async def _op(surface: AccessSurface, actor: ActorContext) -> dict[str, Any]:
+        if args.project_id and args.project_id != actor.project_id and "space" not in actor.scopes:
+            await surface.audit_denial(
+                actor,
+                "docs_ingest_runbook",
+                f"cross_project_override_denied: {args.project_id}",
+            )
+            raise AuthzError("out_of_scope: --project-id override requires space scope")
         eff_actor = (
             dataclasses.replace(actor, project_id=args.project_id) if args.project_id else actor
+        )
+        trust_fm = (
+            eff_actor.domain_id is not None
+            or "domain" in eff_actor.scopes
+            or "space" in eff_actor.scopes
         )
         docs_ingested = 0
         steps_ingested = 0
@@ -2135,6 +2095,8 @@ def _cmd_docs_ingest(args: argparse.Namespace) -> int:
                 repo_root=bound_root,
                 tenant_id=eff_actor.tenant_id,
                 project_id=eff_actor.project_id,
+                domain_id=eff_actor.domain_id,
+                trust_frontmatter_domain=trust_fm,
             )
             if not parsed.has_frontmatter or parsed.kb_document is None:
                 continue
@@ -2168,6 +2130,7 @@ def _cmd_docs_ingest(args: argparse.Namespace) -> int:
                 doc=doc,
                 steps=parsed.steps,
                 evidence_ref=ev_ref,
+                scope=doc.scope,
             )
             docs_ingested += 1
             steps_ingested += int(r.get("step_count", 0))
@@ -2190,14 +2153,17 @@ def _cmd_docs_ingest(args: argparse.Namespace) -> int:
 
 
 def _cmd_memory_ingest_event(args: argparse.Namespace) -> int:
-    """Ingest a canonical ExperienceEvent via CLI (and optionally publish to EventsPort)."""
+    """Ingest a canonical ExperienceEvent via AccessSurface (and optionally publish to NATS)."""
+    from engramory.core.docs_tools import has_symlink_component
     from engramory.core.experience import ExperienceEvent
-    from engramory.workers.runner import ingest_experience_event
 
     raw_str = getattr(args, "event_json", None)
     event_file = getattr(args, "event_file", None)
     if event_file:
-        raw_str = Path(event_file).read_text(encoding="utf-8")
+        ev_path = Path(event_file)
+        if has_symlink_component(ev_path):
+            raise ValidationError(f"Symlink event file rejected: {event_file}")
+        raw_str = ev_path.read_text(encoding="utf-8")
     if not isinstance(raw_str, str) or not raw_str:
         raise ValueError("memory ingest-event requires either --event-json or --event-file")
     raw_dict = json.loads(raw_str)
@@ -2205,28 +2171,38 @@ def _cmd_memory_ingest_event(args: argparse.Namespace) -> int:
         raise ValueError("ExperienceEvent JSON must decode to a JSON object")
 
     config = _load_config(getattr(args, "config", None))
-    if "tenant_id" not in raw_dict:
-        raw_dict = {**raw_dict, "tenant_id": config.ctx.tenant_id}
-
-    event = ExperienceEvent.from_dict(raw_dict)
     adapters = dev_adapters(config.dsn)
     repo = Repository(config.dsn)
+    surface = AccessSurface(
+        repo,
+        graph=adapters.graph,
+        llm=getattr(adapters, "llm", None),
+        storage=getattr(adapters, "storage", None),
+    )
 
     async def _run() -> dict[str, Any]:
         try:
-            episode_id = await ingest_experience_event(
-                repo,
-                event,
-                enforce_tenant_id=config.ctx.tenant_id,
+            res = await surface.memory_ingest_event(
+                config.ctx,
+                raw_dict,
+                scope=getattr(args, "scope", "project"),
             )
             published_topic: str | None = None
             if getattr(args, "publish_nats", False) and adapters.events is not None:
-                published_topic = f"engramory.events.{event.kind}"
-                await adapters.events.publish(topic=published_topic, event=event.to_dict())
+                ev_obj = ExperienceEvent.from_dict(
+                    {
+                        **raw_dict,
+                        "tenant_id": res["tenant_id"],
+                        "project": res["project"],
+                        "producer": res["producer"],
+                    }
+                )
+                published_topic = f"engramory.events.{res['kind']}"
+                await adapters.events.publish(topic=published_topic, event=ev_obj.to_dict())
             return {
-                "episode_id": episode_id,
-                "event_id": event.event_id,
-                "kind": event.kind,
+                "episode_id": res["episode_id"],
+                "event_id": res["event_id"],
+                "kind": res["kind"],
                 "published_topic": published_topic,
             }
         finally:
@@ -2242,27 +2218,22 @@ def _cmd_memory_ingest_event(args: argparse.Namespace) -> int:
 
 
 def _cmd_memory_learning_health(args: argparse.Namespace) -> int:
-    """Compute closed-loop learning effectiveness signals over recent episodes."""
-    config = _load_config(getattr(args, "config", None))
-    repo = Repository(config.dsn)
-    project_id = getattr(args, "project_id", None) or config.ctx.project_id
-    limit = int(getattr(args, "limit", 500))
-    payload = asyncio.run(
-        repo.get_learning_health_summary(
-            tenant_id=config.ctx.tenant_id,
-            project_id=project_id,
-            limit=limit,
+    """Compute closed-loop learning effectiveness signals over recent episodes via AccessSurface."""
+
+    async def op(surface: AccessSurface, ctx: ActorContext) -> dict[str, Any]:
+        return await surface.memory_learning_health(
+            ctx,
+            project_id=getattr(args, "project_id", None) or ctx.project_id,
+            limit=int(getattr(args, "limit", 500)),
+            scope=getattr(args, "scope", "project"),
         )
-    )
-    cal = payload["exec_ready_calibration"]
-    rep = payload["repeat_findings"]
-    _emit(
-        args.json,
-        payload,
-        (
-            f"paired_plans={cal['paired_plans']} "
-            f"calibration_mae={cal['calibration_mae']} "
-            f"repeat_findings_rate={rep['repeat_findings_rate']}"
+
+    return _run_with_surface(
+        args,
+        op,
+        lambda payload: (
+            f"paired_plans={payload['exec_ready_calibration']['paired_plans']} "
+            f"calibration_mae={payload['exec_ready_calibration']['calibration_mae']} "
+            f"repeat_findings_rate={payload['repeat_findings']['repeat_findings_rate']}"
         ),
     )
-    return 0

@@ -107,19 +107,44 @@ class StoragePort(Protocol):
         """Store an in-memory object at `key` (or by its SHA-256 digest)."""
         ...
 
-    async def get(self, *, key: str, tenant_id: str = "default") -> bytes:
-        """Fetch the full object bytes at `key`. Raises BlobNotFoundError if missing."""
+    async def get(
+        self,
+        *,
+        key: str,
+        tenant_id: str = "default",
+        project_id: str | None = None,
+        max_bytes: int | None = None,
+    ) -> bytes:
+        """Fetch the object bytes at `key`. Raises BlobNotFoundError / BlobTooLargeError."""
         ...
 
-    async def delete(self, *, key: str, tenant_id: str = "default") -> None:
-        """Remove the object and its chunks at `key` within `tenant_id` (idempotent)."""
+    async def delete(
+        self,
+        *,
+        key: str,
+        tenant_id: str = "default",
+        project_id: str | None = None,
+    ) -> None:
+        """Remove the project association and/or object + chunks at `key` within `tenant_id`."""
         ...
 
-    async def exists(self, *, key: str, tenant_id: str = "default") -> bool:
+    async def exists(
+        self,
+        *,
+        key: str,
+        tenant_id: str = "default",
+        project_id: str | None = None,
+    ) -> bool:
         """Return True if a complete, non-truncated object exists at `key`."""
         ...
 
-    async def head(self, *, key: str, tenant_id: str = "default") -> KBBlob | None:
+    async def head(
+        self,
+        *,
+        key: str,
+        tenant_id: str = "default",
+        project_id: str | None = None,
+    ) -> KBBlob | None:
         """Return the KBBlob manifest (verifying chunk completeness) or None if missing."""
         ...
 
@@ -155,6 +180,7 @@ class StoragePort(Protocol):
         *,
         key: str,
         tenant_id: str = "default",
+        project_id: str | None = None,
         chunk_batch_size: int = 4,
     ) -> AsyncIterator[bytes]:
         """Stream chunks for `key` in bounded keyset batches with per-chunk SHA-256 verification."""
@@ -164,6 +190,8 @@ class StoragePort(Protocol):
         """Mark status='failed' on any 'ready' UNLOGGED blob truncated on crash."""
         ...
 
-    async def gc_orphan_chunks(self, *, older_than_seconds: int = 7200) -> int:
+    async def gc_orphan_chunks(
+        self, *, older_than_seconds: int = 7200, tenant_id: str | None = None
+    ) -> int:
         """Delete stale 'uploading'/'failed' manifests and orphan chunk rows."""
         ...

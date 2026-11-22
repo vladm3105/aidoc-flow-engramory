@@ -19,7 +19,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from engramory.core.repository import Repository, vector_literal
+from engramory.core.models import ValidationError
+from engramory.core.repository import EXPECTED_EMBEDDING_DIMS, Repository, vector_literal
 
 # Filter allowlist — a security boundary: filter keys become SQL column names.
 _FILTER_COLUMNS = frozenset(
@@ -40,33 +41,31 @@ class PgVectorAdapter:
         embedding: Sequence[float],
         metadata: Mapping[str, Any] | None = None,
     ) -> None:
-        """Write/replace the projection for memory `id`. Optional tenant_id in
-        metadata scopes the update to that tenant."""
-        tenant_id = (metadata or {}).get("tenant_id")
-        async with self._repo._conn() as conn:  # dev adapter shares the spine (SPEC-06)
-            if tenant_id is not None:
-                await conn.execute(
-                    """
-                    UPDATE memories
-                    SET embedding = %(vec)s::vector, embedding_dims = %(dims)s
-                    WHERE id = %(id)s AND tenant_id = %(tenant_id)s
-                    """,
-                    {
-                        "vec": vector_literal(embedding),
-                        "dims": len(embedding),
-                        "id": id,
-                        "tenant_id": str(tenant_id),
-                    },
-                )
-            else:
-                await conn.execute(
-                    """
-                    UPDATE memories
-                    SET embedding = %(vec)s::vector, embedding_dims = %(dims)s
-                    WHERE id = %(id)s
-                    """,
-                    {"vec": vector_literal(embedding), "dims": len(embedding), "id": id},
-                )
+        """Write/replace the projection for memory `id` within mandatory tenant_id."""
+        if len(embedding) != EXPECTED_EMBEDDING_DIMS:
+            raise ValidationError(
+                f"PgVectorAdapter.upsert expected {EXPECTED_EMBEDDING_DIMS}-dim vector, "
+                f"got {len(embedding)}"
+            )
+        tenant_id = str((metadata or {}).get("tenant_id") or "").strip()
+        if not tenant_id:
+            raise ValidationError("PgVectorAdapter.upsert requires non-empty metadata['tenant_id']")
+        async with self._repo._conn(
+            tenant_id=tenant_id
+        ) as conn:  # dev adapter shares the spine (SPEC-06)
+            await conn.execute(
+                """
+                UPDATE memories
+                SET embedding = %(vec)s::vector, embedding_dims = %(dims)s
+                WHERE id = %(id)s AND tenant_id = %(tenant_id)s
+                """,
+                {
+                    "vec": vector_literal(embedding),
+                    "dims": len(embedding),
+                    "id": id,
+                    "tenant_id": tenant_id,
+                },
+            )
 
     async def query(
         self,
@@ -75,7 +74,12 @@ class PgVectorAdapter:
         k: int = 8,
         filter: Mapping[str, Any] | None = None,
     ) -> Sequence[tuple[str, float]]:
-        """Up to k (memory_id, cosine_distance) pairs, closest first."""
+        """Up to k active non-expired (id, cosine_distance) pairs within mandatory tenant_id."""
+        if len(embedding) != EXPECTED_EMBEDDING_DIMS:
+            raise ValidationError(
+                f"PgVectorAdapter.query expected {EXPECTED_EMBEDDING_DIMS}-dim vector, "
+                f"got {len(embedding)}"
+            )
         params: dict[str, Any] = {
             "vec": vector_literal(embedding),
             "k": k,
@@ -91,19 +95,24 @@ class PgVectorAdapter:
             if key not in _FILTER_COLUMNS:
                 raise ValueError(f"refusing to filter on unknown column: {key!r}")
             params[f"f_{key}"] = value
-        async with self._repo._conn() as conn:
+        tenant_id = str(params.get("f_tenant_id") or "").strip()
+        if not tenant_id:
+            raise ValidationError("PgVectorAdapter.query requires non-empty filter['tenant_id']")
+        params["f_tenant_id"] = tenant_id
+        async with self._repo._conn(tenant_id=tenant_id) as conn:
             rows = await (
                 await conn.execute(
                     """
                     SELECT id, embedding <=> %(vec)s::vector AS distance
                     FROM memories
                     WHERE embedding IS NOT NULL
-                      AND (%(f_tenant_id)s::text IS NULL OR tenant_id = %(f_tenant_id)s)
+                      AND valid_to IS NULL
+                      AND tenant_id = %(f_tenant_id)s
+                      AND status = COALESCE(%(f_status)s::text, 'active')
                       AND (%(f_agent_id)s::text IS NULL OR agent_id = %(f_agent_id)s)
                       AND (%(f_project_id)s::text IS NULL OR project_id = %(f_project_id)s)
                       AND (%(f_domain_id)s::text IS NULL OR domain_id = %(f_domain_id)s)
                       AND (%(f_scope)s::text IS NULL OR scope = %(f_scope)s)
-                      AND (%(f_status)s::text IS NULL OR status = %(f_status)s)
                       AND (%(f_type)s::text IS NULL OR type = %(f_type)s)
                     ORDER BY distance
                     LIMIT %(k)s
@@ -113,10 +122,14 @@ class PgVectorAdapter:
             ).fetchall()
             return [(str(row["id"]), float(row["distance"])) for row in rows]
 
-    async def delete(self, *, id: str) -> None:
-        """Remove the projection (idempotent). The canonical row is untouched."""
-        async with self._repo._conn() as conn:
+    async def delete(self, *, id: str, tenant_id: str) -> None:
+        """Remove the projection within tenant_id (idempotent). Canonical row is untouched."""
+        clean_tid = str(tenant_id or "").strip()
+        if not clean_tid:
+            raise ValidationError("PgVectorAdapter.delete requires non-empty tenant_id")
+        async with self._repo._conn(tenant_id=clean_tid) as conn:
             await conn.execute(
-                "UPDATE memories SET embedding = NULL, embedding_dims = NULL WHERE id = %(id)s",
-                {"id": id},
+                "UPDATE memories SET embedding = NULL, embedding_dims = NULL "
+                "WHERE id = %(id)s AND tenant_id = %(tenant_id)s",
+                {"id": id, "tenant_id": clean_tid},
             )

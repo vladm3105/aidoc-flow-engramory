@@ -234,7 +234,7 @@ class ScopedContractResolver:
         self,
         workspace_root: str | Path,
         *,
-        allow_sibling_lookup: bool = True,
+        allow_sibling_lookup: bool = False,
     ) -> None:
         self.workspace_root = Path(workspace_root).resolve()
         self.allow_sibling_lookup = allow_sibling_lookup
@@ -672,9 +672,9 @@ class AidocDependencyGraph:
                 c_node
                 for c in children
                 if (c_node := self.get_node(c)) is not None
-                and c_node.layer in ("EARS", "SPEC", "BDD", "TASK", "IPLAN")
+                and c_node.layer in ("PRD", "EARS", "SPEC", "BDD", "TASK", "IPLAN")
             ]
-            if not downstream and not seed.dependencies:
+            if not downstream:
                 violations.append(
                     f"GRAPH-CARD-001: Seed intent '{seed.node_id}' ({seed.layer}) "
                     "does not decompose into any downstream capability or requirement."
@@ -686,7 +686,7 @@ class AidocDependencyGraph:
                 (d_node := self.get_node(d)) is not None and d_node.layer in ("BRD", "PRD", "ADR")
                 for d in ears.dependencies
             )
-            if seed_nodes and not traces_to_intent:
+            if not traces_to_intent:
                 violations.append(
                     f"GRAPH-CARD-002: EARS requirement '{ears.node_id}' "
                     "does not trace to any upstream seed intent (PRD/BRD)."
@@ -1196,7 +1196,31 @@ class ContextSlicer:
             f"<!-- Compaction: budget {max_tokens}, estimated {est2} tokens, "
             f"{condensed_count} ancestors condensed -->"
         )
-        return assemble_digest(new_blocks_step2, final_notice2)
+        digest_step2 = assemble_digest(new_blocks_step2, final_notice2)
+        if estimate_tokens(digest_step2) <= max_tokens:
+            return digest_step2
+
+        # Pass 3: Hard budget truncation keeping top header and footer Compaction marker
+        max_chars = max(1, int(max_tokens * 3.8))
+        hard_notice = (
+            f"<!-- Compaction: budget {max_tokens}, truncated to budget, "
+            f"{condensed_count} ancestors condensed -->"
+        )
+        hard_suffix = f"\n\n{hard_notice}\n" + "\n".join(footer)
+        top_line = header_lines[0]
+        if len(top_line) + len(hard_suffix) + 16 < max_chars:
+            keep_prefix = max_chars - len(hard_suffix) - len("\n...[truncated]")
+            prefix_part = digest_step2[:keep_prefix].rstrip()
+            if not prefix_part.startswith(top_line):
+                prefix_part = top_line
+            return f"{prefix_part}\n...[truncated]{hard_suffix}"
+        minimal_tail = f"\n{hard_notice}\n=== END OF DIGEST ==="
+        if len(top_line) + len(minimal_tail) + 1 <= max_chars:
+            avail = max_chars - len(top_line) - len(minimal_tail) - 1
+            mid = digest_step2[len(top_line) : len(top_line) + max(0, avail)]
+            return f"{top_line}{mid}{minimal_tail}"
+        compact_pair = f"{top_line}\n<!-- Compaction: budget {max_tokens} -->"
+        return compact_pair[:max_chars] if len(compact_pair) > max_chars else compact_pair
 
 
 class InvariantChecker:
@@ -1208,20 +1232,29 @@ class InvariantChecker:
     def _run_git(self, args: list[str]) -> subprocess.CompletedProcess[str] | None:
         with contextlib.suppress(OSError, subprocess.SubprocessError):
             return subprocess.run(  # nosec B603 B607 # reason: fixed git binary with validated refs
-                ["git", *args],
+                ["git", "-c", "core.quotepath=false", *args],
                 cwd=self.workspace_root,
                 capture_output=True,
                 text=True,
                 check=False,
-                timeout=10,
+                timeout=15,
             )
         return None
 
     def get_changed_files(self, base_ref: str = "origin/dev") -> list[str]:
         """Run git diff against `base_ref` including uncommitted working tree changes."""
         safe_base = _validate_git_ref(base_ref)
-        changed: set[str] = set()
+        wt_check = self._run_git(["rev-parse", "--is-inside-work-tree"])
+        if (
+            wt_check is None
+            or wt_check.returncode != 0
+            or wt_check.stdout.strip().lower() != "true"
+        ):
+            raise ValidationError(
+                f"Git repository unavailable for invariant check in {self.workspace_root}"
+            )
 
+        changed: set[str] = set()
         candidates = [
             safe_base,
             "origin/main",
@@ -1239,6 +1272,7 @@ class InvariantChecker:
                 break
 
         diff_found = False
+        history_ok = False
         if discovered_ref:
             mb = self._run_git(["merge-base", "HEAD", discovered_ref])
             if mb is not None and mb.returncode == 0 and mb.stdout.strip():
@@ -1246,6 +1280,7 @@ class InvariantChecker:
                 res = self._run_git(["diff", "--name-only", f"{merge_base}...HEAD"])
                 if res is not None and res.returncode == 0:
                     diff_found = True
+                    history_ok = True
                     for line in res.stdout.splitlines():
                         if line.strip():
                             changed.add(line.strip())
@@ -1253,27 +1288,38 @@ class InvariantChecker:
         if not diff_found:
             res2 = self._run_git(["diff", "--name-only", "HEAD~1...HEAD"])
             if res2 is not None and res2.returncode == 0:
+                history_ok = True
                 for line in res2.stdout.splitlines():
                     if line.strip():
                         changed.add(line.strip())
             else:
                 res3 = self._run_git(["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"])
                 if res3 is not None and res3.returncode == 0:
+                    history_ok = True
                     for line in res3.stdout.splitlines():
                         if line.strip():
                             changed.add(line.strip())
 
         res_working = self._run_git(["diff", "--name-only", "HEAD"])
-        if res_working is not None and res_working.returncode == 0:
+        working_ok = res_working is not None and res_working.returncode == 0
+        if working_ok and res_working is not None:
             for line in res_working.stdout.splitlines():
                 if line.strip():
                     changed.add(line.strip())
 
         res_untracked = self._run_git(["ls-files", "--others", "--exclude-standard"])
-        if res_untracked is not None and res_untracked.returncode == 0:
+        untracked_ok = res_untracked is not None and res_untracked.returncode == 0
+        if untracked_ok and res_untracked is not None:
             for line in res_untracked.stdout.splitlines():
                 if line.strip():
                     changed.add(line.strip())
+
+        head_check = self._run_git(["rev-parse", "--verify", "HEAD"])
+        has_head = head_check is not None and head_check.returncode == 0
+        if has_head and not (history_ok or working_ok):
+            raise ValidationError("Failed to compute changed files from git (fail-closed)")
+        if not has_head and not untracked_ok:
+            raise ValidationError("Failed to enumerate git workspace files (fail-closed)")
 
         return sorted(changed)
 
@@ -1287,10 +1333,17 @@ class InvariantChecker:
         protected_prefixes = (
             "proto/",
             "schemas/",
-            "docs/sdd/06_SPEC/contracts/",
-            "sdd/06_SPEC/contracts/",
+            "docs/sdd/03_EARS/",
+            "sdd/03_EARS/",
+            "docs/sdd/04_BDD/",
+            "sdd/04_BDD/",
+            "docs/sdd/05_ADR/",
+            "sdd/05_ADR/",
+            "docs/sdd/06_SPEC/",
+            "sdd/06_SPEC/",
             "framework/layers/06_SPEC/",
             "framework/layers/04_BDD/",
+            "db/migrations/",
         )
 
         if chg_type.upper() in ("CODE2C", "DIR2C", "HOTFIX"):
@@ -1315,7 +1368,7 @@ class InvariantChecker:
         changed_files: Sequence[str],
         *,
         graph: AidocDependencyGraph | None = None,
-        allow_sibling_lookup: bool = True,
+        allow_sibling_lookup: bool = False,
     ) -> list[str]:
         """Emit blast-radius advisories when modified contracts have unchanged downstream tasks."""
         warnings: list[str] = []
@@ -1662,6 +1715,14 @@ class StackPolicyValidator:
         """Scan source files for prohibited AST / string patterns (skipping Python docstrings)."""
         violations: list[str] = []
         excluded_dirs = _EXCLUDED_SCAN_DIRS | {"tests", "test"}
+        compiled_patterns: list[tuple[str, re.Pattern[str]]] = []
+        for pattern in banned_patterns:
+            escaped = re.escape(pattern)
+            if pattern and (pattern[0].isalnum() or pattern[0] == "_"):
+                regex = re.compile(rf"(?<![A-Za-z0-9_]){escaped}")
+            else:
+                regex = re.compile(escaped)
+            compiled_patterns.append((pattern, regex))
 
         for root, dirs, files in os.walk(self.root_dir, followlinks=False):
             dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in excluded_dirs)
@@ -1681,8 +1742,8 @@ class StackPolicyValidator:
                     if line_no in doc_lines:
                         continue
                     code_part = self._strip_inline_comment(line, is_python=is_py)
-                    for pattern in banned_patterns:
-                        if pattern in code_part:
+                    for pattern, regex in compiled_patterns:
+                        if regex.search(code_part):
                             violations.append(
                                 f"Banned pattern '{pattern}' detected in {rel_path}:{line_no}"
                             )
@@ -1700,7 +1761,7 @@ def slice_local_context(
     layers: Sequence[str] | None = None,
     max_tokens: int = 2000,
     output_format: str = "json",
-    allow_sibling_lookup: bool = True,
+    allow_sibling_lookup: bool = False,
 ) -> dict[str, Any]:
     """Slice local SDD workspace DAG for `task_id` with optional Tier 0/1/2 digest rendering."""
     resolved_root = Path(root_dir).resolve()
@@ -1751,7 +1812,7 @@ def local_blast_radius(
     *,
     doc_id: str,
     depth: int = 6,
-    allow_sibling_lookup: bool = True,
+    allow_sibling_lookup: bool = False,
 ) -> dict[str, Any]:
     """Compute downstream blast radius for `doc_id` from the local SDD workspace DAG."""
     resolved_root = Path(root_dir).resolve()
@@ -1773,7 +1834,7 @@ def validate_sdd_graph(
     root_dir: str | Path,
     *,
     check_invariants: bool = False,
-    allow_sibling_lookup: bool = True,
+    allow_sibling_lookup: bool = False,
 ) -> dict[str, Any]:
     """Validate SDD dependency graph acyclicity and optional SDD-GRAPH v2.0 invariants."""
     resolved_root = Path(root_dir).resolve()
@@ -1804,7 +1865,7 @@ def check_sdd_invariants(
     base_ref: str = "origin/dev",
     chg_type: str = "CODE2C",
     include_blast_warnings: bool = True,
-    allow_sibling_lookup: bool = True,
+    allow_sibling_lookup: bool = False,
 ) -> dict[str, Any]:
     """Run pre-merge contract erosion check and optional downstream blast-radius advisories."""
     resolved_root = Path(root_dir).resolve()

@@ -49,8 +49,8 @@ async def _seed(repo: Repository, vec: PgVectorAdapter) -> tuple[str, str]:
     """Two memories with orthogonal-ish embeddings; returns (near_id, far_id)."""
     near = await repo.upsert_memory(_memory("pin image tags"))
     far = await repo.upsert_memory(_memory("write tests first"))
-    await vec.upsert(id=near, embedding=_vec1536(1.0, 0.0, 0.0))
-    await vec.upsert(id=far, embedding=_vec1536(0.0, 1.0, 0.0))
+    await vec.upsert(id=near, embedding=_vec1536(1.0, 0.0, 0.0), metadata={"tenant_id": "t-vec"})
+    await vec.upsert(id=far, embedding=_vec1536(0.0, 1.0, 0.0), metadata={"tenant_id": "t-vec"})
     return near, far
 
 
@@ -67,12 +67,12 @@ async def test_vector_upsert_replaces_and_delete_is_idempotent(pg_dsn: str) -> N
     repo = Repository(pg_dsn)
     vec = PgVectorAdapter(pg_dsn)
     mid = await repo.upsert_memory(_memory("replace me", tenant_id="t-vec2"))
-    await vec.upsert(id=mid, embedding=_vec1536(1.0, 0.0))
-    await vec.upsert(id=mid, embedding=_vec1536(0.0, 1.0))  # replace
+    await vec.upsert(id=mid, embedding=_vec1536(1.0, 0.0), metadata={"tenant_id": "t-vec2"})
+    await vec.upsert(id=mid, embedding=_vec1536(0.0, 1.0), metadata={"tenant_id": "t-vec2"})
     hits = await vec.query(embedding=_vec1536(0.0, 1.0), k=1, filter={"tenant_id": "t-vec2"})
     assert hits[0][0] == mid and hits[0][1] == pytest.approx(0.0, abs=1e-6)
-    await vec.delete(id=mid)
-    await vec.delete(id=mid)  # idempotent
+    await vec.delete(id=mid, tenant_id="t-vec2")
+    await vec.delete(id=mid, tenant_id="t-vec2")  # idempotent
     assert await vec.query(embedding=_vec1536(0.0, 1.0), k=1, filter={"tenant_id": "t-vec2"}) == []
 
 
@@ -80,14 +80,18 @@ async def test_vector_filter_rejects_unknown_column(pg_dsn: str) -> None:
     """The filter allowlist is a security boundary — unknown keys raise, never interpolate."""
     vec = PgVectorAdapter(pg_dsn)
     with pytest.raises(ValueError):
-        await vec.query(embedding=_vec1536(1.0), k=1, filter={"1=1; DROP TABLE memories; --": "x"})
+        await vec.query(
+            embedding=_vec1536(1.0),
+            k=1,
+            filter={"tenant_id": "t-vec", "1=1; DROP TABLE memories; --": "x"},
+        )
 
 
 async def test_adapter_failclosed() -> None:
     """BDD.01.03.b800 — adapter unavailable fails closed with a retryable error."""
     vec = PgVectorAdapter("postgresql://nobody:nope@127.0.0.1:1/nothing")
     with pytest.raises(StoreUnavailable):
-        await vec.query(embedding=_vec1536(1.0), k=1)
+        await vec.query(embedding=_vec1536(1.0), k=1, filter={"tenant_id": "t-offline"})
 
 
 async def test_factory_wires_dev_profile(pg_dsn: str) -> None:

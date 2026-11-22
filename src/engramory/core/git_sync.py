@@ -163,12 +163,16 @@ class GitSyncEngine:
         head_sha: str | None = None,
     ) -> list[ChangedFile]:
         """Compute git differential between base_sha and head_sha (or uncommitted diff)."""
+        from engramory.core.docs_tools import _is_within_root, has_symlink_component
+
         if not (repo_path / ".git").exists():
-            # Not a git repo — treat all existing supported files as ADDED
+            # Not a git repo — treat all existing confined, non-symlink supported files as ADDED
             return [
                 ChangedFile(rel_path=str(p.relative_to(repo_path)), status=FileChangeStatus.ADDED)
                 for p in repo_path.rglob("*")
-                if p.is_file() and p.suffix.lower() in self.SUPPORTED_EXTENSIONS
+                if p.is_file()
+                and _is_within_root(p, repo_path)
+                and p.suffix.lower() in self.SUPPORTED_EXTENSIONS
             ]
 
         if not base_sha:
@@ -185,6 +189,7 @@ class GitSyncEngine:
                 ChangedFile(rel_path=f, status=FileChangeStatus.ADDED)
                 for f in files
                 if Path(f).suffix.lower() in self.SUPPORTED_EXTENSIONS
+                and not has_symlink_component(repo_path / f, repo_path)
             ]
 
         # Incremental diff between base and head
@@ -244,8 +249,10 @@ class GitSyncEngine:
         version: int = 1,
     ) -> list[KBSection]:
         """Extract sections from an added or modified file and construct KBSection records."""
+        from engramory.core.docs_tools import _is_within_root
+
         full_path = repo_path / changed_file.rel_path
-        if not full_path.exists() or not full_path.resolve().is_relative_to(repo_path.resolve()):
+        if not full_path.exists() or not _is_within_root(full_path, repo_path):
             return []
 
         doc_id = build_doc_id(project_id, changed_file.rel_path)
@@ -358,6 +365,7 @@ class GitSyncEngine:
     ) -> SyncResult:
         """Perform commit-differential sync and batch persist changes to Repository."""
         from engramory.access.poisoning_guard import inspect_memory_write
+        from engramory.core.docs_tools import _is_within_root, has_symlink_component
 
         start_t = time.perf_counter()
         target_head = head_sha or self.get_git_head_sha(repo_path)
@@ -369,19 +377,25 @@ class GitSyncEngine:
         files_skipped: list[str] = []
         all_sections: list[KBSection] = []
         doc_ids_to_delete: list[str] = []
+        pending_blob_targets: dict[str, ChangedFile] = {}
 
-        async def _maybe_store_blob(cf: ChangedFile, secs: list[KBSection]) -> list[KBSection]:
+        async def _maybe_store_blob(
+            cf: ChangedFile, secs: list[KBSection]
+        ) -> tuple[str, str] | None:
             if storage is None or not secs:
-                return secs
-            fp = (repo_path / cf.rel_path).resolve()
-            if not fp.is_file() or not fp.is_relative_to(repo_path.resolve()):
-                return secs
+                return None
+            raw_fp = repo_path / cf.rel_path
+            if has_symlink_component(raw_fp, repo_path) or not _is_within_root(raw_fp, repo_path):
+                return None
+            fp = raw_fp.resolve()
+            if not fp.is_file():
+                return None
             ext_cf = fp.suffix.lstrip(".").lower()
             sz = fp.stat().st_size
             if sz <= 256 * 1024 and ext_cf not in (
                 MEDIA_EXTENSIONS | {"pdf", "docx", "pptx", "xlsx"}
             ):
-                return secs
+                return None
             _, mime = infer_media_mime_type(fp)
             try:
                 blob = await storage.put_file(
@@ -391,16 +405,14 @@ class GitSyncEngine:
                     project_id=project_id,
                     metadata={"source_file": fp.name, "rel_path": cf.rel_path},
                 )
-                uri = f"pgblob://{tenant_id}/{blob.sha256}"
-                return [dataclasses.replace(s, blob_sha256=blob.sha256, blob_uri=uri) for s in secs]
+                return blob.sha256, f"pgblob://{tenant_id}/{blob.sha256}"
             except Exception as exc:
                 logger.warning("Failed to store git sync blob for %s: %s", cf.rel_path, exc)
-                return secs
+                return None
 
         for cf in changed_files:
             if cf.status == FileChangeStatus.ADDED:
                 files_added.append(cf.rel_path)
-                doc_ids_to_delete.append(build_doc_id(project_id, cf.rel_path))
                 secs = self.extract_sync_sections(
                     repo_path,
                     cf,
@@ -410,7 +422,8 @@ class GitSyncEngine:
                     head_sha=target_head,
                     version=1,
                 )
-                secs = await _maybe_store_blob(cf, secs)
+                if secs:
+                    pending_blob_targets[secs[0].doc_id] = cf
                 all_sections.extend(secs)
             elif cf.status in (FileChangeStatus.MODIFIED, FileChangeStatus.RENAMED):
                 files_modified.append(cf.rel_path)
@@ -426,7 +439,8 @@ class GitSyncEngine:
                     head_sha=target_head,
                     version=2,
                 )
-                secs = await _maybe_store_blob(cf, secs)
+                if secs:
+                    pending_blob_targets[secs[0].doc_id] = cf
                 all_sections.extend(secs)
             elif cf.status == FileChangeStatus.DELETED:
                 files_deleted.append(cf.rel_path)
@@ -459,6 +473,26 @@ class GitSyncEngine:
             repo, repo_path, changed_files, tenant_id, project_id, scope
         )
 
+        # Store CAS blobs only AFTER all inspect_memory_write and metadata checks succeed (C9)
+        if unique_sections and pending_blob_targets and storage is not None:
+            stored_blobs: dict[str, tuple[str, str]] = {}
+            for target_doc_id, cf in pending_blob_targets.items():
+                doc_secs = [s for s in unique_sections if s.doc_id == target_doc_id]
+                res_blob = await _maybe_store_blob(cf, doc_secs)
+                if res_blob is not None:
+                    stored_blobs[target_doc_id] = res_blob
+            if stored_blobs:
+                unique_sections = [
+                    dataclasses.replace(
+                        s,
+                        blob_sha256=stored_blobs[s.doc_id][0],
+                        blob_uri=stored_blobs[s.doc_id][1],
+                    )
+                    if s.doc_id in stored_blobs
+                    else s
+                    for s in unique_sections
+                ]
+
         if hasattr(repo, "delete_kb_sections_for_doc"):
             import inspect as _inspect
 
@@ -466,21 +500,28 @@ class GitSyncEngine:
             for del_doc_id in doc_ids_to_delete:
                 if del_doc_id not in seen_del:
                     seen_del.add(del_doc_id)
-                    c_del = repo.delete_kb_sections_for_doc(tenant_id, del_doc_id)
+                    c_del = repo.delete_kb_sections_for_doc(
+                        tenant_id, del_doc_id, project_id=project_id
+                    )
                     if _inspect.isawaitable(c_del):
                         await c_del
                     if hasattr(repo, "delete_graph_entity"):
-                        c_ge = repo.delete_graph_entity(del_doc_id, tenant_id=tenant_id)
-                        if _inspect.isawaitable(c_ge):
-                            await c_ge
+                        try:
+                            c_ge = repo.delete_graph_entity(del_doc_id, tenant_id=tenant_id)
+                            if _inspect.isawaitable(c_ge):
+                                await c_ge
+                        except KeyError:
+                            pass
                     if graph is not None and hasattr(graph, "delete_node"):
-                        c_gn = graph.delete_node(id=del_doc_id, tenant_id=tenant_id)
+                        c_gn = graph.delete_node(
+                            id=del_doc_id, tenant_id=tenant_id, project_id=project_id
+                        )
                         if _inspect.isawaitable(c_gn):
                             await c_gn
 
         if doc_ids_to_delete and storage is not None and hasattr(storage, "gc_orphan_chunks"):
             try:
-                await storage.gc_orphan_chunks(older_than_seconds=7200)
+                await storage.gc_orphan_chunks(older_than_seconds=7200, tenant_id=tenant_id)
             except Exception as exc:
                 logger.debug("Optional blob GC during git sync skipped: %s", exc)
 
@@ -508,6 +549,7 @@ class GitSyncEngine:
                         )
                         await repo.set_kb_sections_embedding_batch(
                             valid_updates,
+                            tenant_id=tenant_id,
                             embedding_model=embed_model,
                         )
                 except Exception as e:
@@ -535,10 +577,10 @@ class GitSyncEngine:
                                 id=ent.id,
                                 labels=entity_labels_for(ent),
                                 props={
-                                    "name": ent.name,
-                                    "tenant_id": ent.tenant_id,
-                                    "domain_id": ent.domain_id,
                                     **ent.properties,
+                                    "name": ent.name,
+                                    "domain_id": ent.domain_id,
+                                    "tenant_id": ent.tenant_id,
                                 },
                             )
                         for rel in g_rels:
@@ -546,7 +588,10 @@ class GitSyncEngine:
                                 src=rel.src_id,
                                 dst=rel.dst_id,
                                 rel=rel.rel_type,
-                                props={"tenant_id": rel.tenant_id, **rel.properties},
+                                props={
+                                    **rel.properties,
+                                    "tenant_id": rel.tenant_id,
+                                },
                             )
                 except Exception as exc:
                     logger.debug(
@@ -608,7 +653,13 @@ class GitSyncEngine:
                 and hasattr(repo, "upsert_kb_document")
             ):
                 full_p = repo_path / cf.rel_path
-                if full_p.is_file():
+                from engramory.core.docs_tools import _is_within_root, has_symlink_component
+
+                if (
+                    not has_symlink_component(full_p, repo_path)
+                    and full_p.is_file()
+                    and _is_within_root(full_p, repo_path)
+                ):
                     try:
                         parsed = parse_markdown_document(
                             full_p,

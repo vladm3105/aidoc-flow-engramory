@@ -3,6 +3,6 @@ message: "Retired tool '%s' referenced; use canonical stack component '%s' per $
 level: error
 ignorecase: true
 swap:
-  seaweedfs: MinIO / RustFS
-  bytebase: Atlas CLI
+  seaweedfs: OCI Object Storage / Cloudflare R2 + PostgreSQL 18 Blob CAS
+  bytebase: Apache Superset SQL Lab + Gitea Actions CI (Squawk + pgroll) + postgres-mcp
   pre-commit: lefthook

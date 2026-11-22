@@ -174,6 +174,7 @@ class KBSection:
     domain_id: str | None = None
     tenant_id: str = "default"
     scope: str = "project"
+    agent_id: str = "system"
     version: int = 1
     id: str | None = None  # None until persisted
     modality: str = "text"
@@ -186,6 +187,7 @@ class KBSection:
         _require(bool(self.citation), "KBSection.citation is required (citation anchor)")
         _require(bool(self.text), "KBSection.text is required")
         _require(bool(self.tenant_id), "KBSection.tenant_id is required")
+        _require(bool(self.agent_id), "KBSection.agent_id is required")
         _require(self.scope in SCOPES, f"KBSection.scope must be one of {sorted(SCOPES)}")
         _require(self.version >= 1, "KBSection.version starts at 1")
         _require(
@@ -281,13 +283,16 @@ class KBDocument:
     domain_id: str | None = None
     tenant_id: str = "default"
     scope: str = "project"
+    agent_id: str = "system"
 
     def __post_init__(self) -> None:
         _require(bool(self.doc_id), "KBDocument.doc_id is required")
+        _require("#" not in self.doc_id, "KBDocument.doc_id must not contain '#'")
         _require(bool(self.repo_path), "KBDocument.repo_path is required")
         _require(bool(self.title), "KBDocument.title is required")
         _require(bool(self.kind), "KBDocument.kind is required")
         _require(bool(self.tenant_id), "KBDocument.tenant_id is required")
+        _require(bool(self.agent_id), "KBDocument.agent_id is required")
         _require(self.scope in SCOPES, f"KBDocument.scope must be one of {sorted(SCOPES)}")
         _require(
             self.status in DOC_STATUSES,
@@ -331,7 +336,13 @@ class KBRunbookStep:
     def __post_init__(self) -> None:
         _require(bool(self.step_uid), "KBRunbookStep.step_uid is required")
         _require(bool(self.doc_id), "KBRunbookStep.doc_id is required")
+        _require("#" not in self.doc_id, "KBRunbookStep.doc_id must not contain '#'")
         _require(bool(self.step_id), "KBRunbookStep.step_id is required")
+        _require("#" not in self.step_id, "KBRunbookStep.step_id must not contain '#'")
+        _require(
+            self.step_uid == f"{self.doc_id}#{self.step_id}",
+            f"KBRunbookStep.step_uid must equal '{self.doc_id}#{self.step_id}'",
+        )
         _require(bool(self.heading_path), "KBRunbookStep.heading_path is required")
         _require(bool(self.command_body.strip()), "KBRunbookStep.command_body is required")
         _require(bool(self.tenant_id), "KBRunbookStep.tenant_id is required")

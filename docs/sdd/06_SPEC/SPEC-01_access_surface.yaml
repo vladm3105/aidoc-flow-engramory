@@ -15,9 +15,9 @@ title: "Access Surface & Authorization"
 
 document_control:
   status: Approved
-  version: "1.1"
+  version: "1.4"
   date_created: "2026-06-22T00:00:00"
-  last_updated: "2026-11-13T00:00:00"
+  last_updated: "2026-11-22T00:00:00"
   author: "Engramory team"
   component: "AccessSurface"
   tdd_ready_score: "98/100"
@@ -31,10 +31,12 @@ component_overview:
     audited, and fails closed on uncertainty inside AccessSurface itself. Implements
     the governed-write gate for SDD-artifact writes.
     TRUST (ADR-10 dev-tier carve-out): in production, ActorContext is constructed
-    exclusively from OIDC claims verified by the gateway; the one fenced exception is
-    the dev tier, where the CLI (arrives with PLAN-002 Phase 2) builds ActorContext
-    from local config — permitted only under ENGRAMORY_PROFILE=dev (single-tenant,
-    local store; the factory's require_dev_profile fence lands with the CLI).
+    exclusively from OIDC claims verified by the gateway (HTTPS/loopback/mesh JWKS,
+    fail-closed async/sync revocation cache, strict string-claim validation, no ?token=
+    query auth, and pre-body HTTP authentication over FastAPI/Uvicorn); the one fenced
+    exception is the dev tier, where the CLI builds ActorContext from local config —
+    permitted only on loopback hosts when --auth is disabled under ENGRAMORY_PROFILE=dev
+    (stdio with --auth is refused).
   architecture_decision: "@adr: ADR-02"
   diagram:
     tags: ["@diagram: c4-l3", "@diagram: dfd-l3"]
@@ -64,7 +66,7 @@ interfaces:
     - name: "memory_feedback"
       type: "async function"
       signature: "async def memory_feedback(ctx: ActorContext, retrieval_id: RetrievalId, outcome: str) -> None"
-      description: "Record a retrieval outcome (useful | not_useful | harmful); drives the SPEC-04 confidence-update rule via the memory_retrievals log (migration 0003)."
+      description: "Record a retrieval outcome (useful | not_useful | harmful); enforces retrieval ownership (tenant/agent/scope), reverses prior applied_delta on revision, requires >= 2 distinct agent_id harmful votes for shared scopes, and audits denials."
       errors: ["AuthzError"]
     - name: "memory_forget"
       type: "async function"
@@ -118,14 +120,29 @@ interfaces:
       errors: ["AuthzError", "StoreUnavailable"]
     - name: "knowledge_ingest"
       type: "async function"
-      signature: "async def knowledge_ingest(ctx: ActorContext, entry: KBEntryIn, evidence_ref: str | None) -> EntryId"
-      description: "Create/update an SDD-artifact KB entry; requires evidence_ref (governed write)."
+      signature: "async def knowledge_ingest(ctx: ActorContext, entry: KBEntryIn, evidence_ref: str | None, *, domain_id: str | None = None) -> EntryId"
+      description: "Create/update SDD KB entry with domain check and evidence_ref."
       errors: ["GovernedWriteRejected: missing/invalid evidence_ref", "AuthzError"]
+    - name: "knowledge_ingest_files"
+      type: "async function"
+      signature: "async def knowledge_ingest_files(ctx: ActorContext, *, paths: Sequence[Path | str], evidence_ref: str | None, scope: str = 'project', domain_id: str | None = None, embed: bool = True, project_graph: bool = False, allowed_root: Path | None = None) -> dict[str, list[str]]"
+      description: "Governed file/dir knowledge ingest with poisoning screen and path confinement."
+      errors: ["GovernedWriteRejected", "AuthzError", "ValidationError", "StoreUnavailable"]
+    - name: "knowledge_sync_git"
+      type: "async function"
+      signature: "async def knowledge_sync_git(ctx: ActorContext, *, repo_path: Path | str, evidence_ref: str | None, base_sha: str | None = None, head_sha: str | None = None, scope: str = 'project', domain_id: str | None = None) -> dict[str, Any]"
+      description: "Governed git-diff sync into kb_sections and graph with evidence_ref."
+      errors: ["GovernedWriteRejected", "AuthzError", "ValidationError", "StoreUnavailable"]
+    - name: "sdd_ingest"
+      type: "async function"
+      signature: "async def sdd_ingest(ctx: ActorContext, *, sdd_root: Path | str, evidence_ref: str | None, scope: str = 'project', project_id: str | None = None, reconcile: bool = True, project_graph: bool = True) -> dict[str, Any]"
+      description: "Governed SDD YAML graph ingest with evidence_ref, scope check, and symlink confinement."
+      errors: ["GovernedWriteRejected", "AuthzError", "ValidationError", "StoreUnavailable"]
     - name: "knowledge_ingest_media"
       type: "async function"
-      signature: "async def knowledge_ingest_media(ctx: ActorContext, *, file_path: Path, evidence_ref: str | None, scope: str = 'project', embed: bool = True, project_graph: bool = True) -> dict[str, Any]"
-      description: "Governed multimodal ingestion (image, audio, 20 GB+ video, PDF/Office) streaming raw bytes into PostgreSQL 18 Chunked Blob CAS (Rule D14b) and indexing time/region-coded KBSection rows + Neo4j/PG graph projections."
-      errors: ["GovernedWriteRejected", "AuthzError", "BlobTooLargeError", "StoreUnavailable"]
+      signature: "async def knowledge_ingest_media(ctx: ActorContext, *, file_path: Path, evidence_ref: str | None, scope: str = 'project', domain_id: str | None = None, embed: bool = True, project_graph: bool = True) -> dict[str, Any]"
+      description: "Governed media ingest (binary/media only: image, audio, video, PDF/Office) to Chunked Blob CAS and graph."
+      errors: ["GovernedWriteRejected", "AuthzError", "ValidationError", "BlobTooLargeError", "StoreUnavailable"]
     - name: "blob_put"
       type: "async function"
       signature: "async def blob_put(ctx: ActorContext, *, file_path: Path | None = None, data: bytes | None = None, content_type: str = 'application/octet-stream', scope: str = 'project', metadata: Mapping[str, Any] | None = None) -> dict[str, Any]"
@@ -138,18 +155,18 @@ interfaces:
       errors: ["AuthzError", "StoreUnavailable"]
     - name: "blob_get"
       type: "async function"
-      signature: "async def blob_get(ctx: ActorContext, *, sha256: str, scope: str = 'project') -> bytes"
-      description: "Tenant-scoped content-addressable blob read (bounded bytes or streamed via StoragePort.get_stream)."
-      errors: ["AuthzError", "BlobNotFoundError", "BlobTruncatedError", "BlobIntegrityError", "StoreUnavailable"]
+      signature: "async def blob_get(ctx: ActorContext, *, sha256: str, scope: str = 'project', max_bytes: int | None = None) -> bytes"
+      description: "Project/tenant CAS blob read bounded by max_bytes."
+      errors: ["AuthzError", "BlobNotFoundError", "BlobTruncatedError", "BlobIntegrityError", "BlobTooLargeError", "StoreUnavailable"]
     - name: "memory_ingest_event"
       type: "async function"
-      signature: "async def memory_ingest_event(ctx: ActorContext, event_data: Mapping[str, Any] | ExperienceEvent) -> dict[str, Any]"
-      description: "Validate, screen, and persist a structured ExperienceEvent into L1 episodes."
+      signature: "async def memory_ingest_event(ctx: ActorContext, event_data: Mapping[str, Any] | ExperienceEvent, *, scope: str = 'project') -> dict[str, Any]"
+      description: "Validate, screen, and persist ExperienceEvent to episodes; checks producer == ctx.agent_id across all non-space scopes."
       errors: ["ValidationError", "MemoryPoisoningError", "AuthzError", "StoreUnavailable"]
     - name: "memory_learning_health"
       type: "async function"
-      signature: "async def memory_learning_health(ctx: ActorContext, *, project_id: str | None = None, limit: int = 500) -> dict[str, Any]"
-      description: "Compute closed-loop learning effectiveness metrics over recent tenant episodes."
+      signature: "async def memory_learning_health(ctx: ActorContext, *, project_id: str | None = None, limit: int = 500, scope: str = 'project') -> dict[str, Any]"
+      description: "Compute learning metrics over recent episodes, filtered by agent_id when scope='agent'."
       errors: ["AuthzError", "StoreUnavailable"]
     - name: "authorize"
       type: "function"
@@ -183,7 +200,11 @@ data_models:
 behavior:
   validation_rules:
     - { rule: "Every read/write is authorized and scoped by agent/project/tenant before execution", source: "@ears: EARS.01.03.e020" }
-    - { rule: "SDD-artifact writes require a valid approved-evidence reference", source: "@ears: EARS.01.03.a700" }
+    - { rule: "SDD-artifact writes require a valid approved-evidence reference (enforced on sdd_ingest and memory/docs ingest)", source: "@ears: EARS.01.03.a700" }
+    - { rule: "Agent offboarding (agent_space_offboard) enforces same-agent/explicit-admin authz, audits denials, and never soft-deletes space-scoped shared memories", source: "@ears: EARS.01.03.e020" }
+    - { rule: "Documentation smoke runners execute only strict shlex-allowlisted non-shell commands with scrubbed env and symlink-free workspace confinement", source: "@ears: EARS.01.04.c300" }
+    - { rule: "MCP Brain Passport import hard-enforces verify_integrity=True, allow_type_override=False, single-transaction dedup, and schema_version; department_focus and docs_ingest_runbook enforce _enforce_domain_boundary", source: "@ears: EARS.01.03.e020" }
+    - { rule: "MCP gateway supports ping/notifications, thread-offloaded blocking tools, cross-platform stdio, blob_put/blob_get, accurate readOnlyHint, and bounded dependency readiness probes on /health and /ready (503 when canonical store is unreachable)", source: "@ears: EARS.01.03.e020" }
   state_transitions:
     - { from: "Received", to: "Denied", trigger: "scope check fails OR missing evidence", source: "@bdd: BDD.01.03.e500" }
     - { from: "Received", to: "Executed", trigger: "authorized", source: "@bdd: BDD.01.03.a100" }

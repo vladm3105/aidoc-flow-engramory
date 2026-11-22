@@ -5,8 +5,8 @@ metadata:
   schema_version: "1.0"
   document_type: "iplan-registry"
   layer: 8
-  total_plans: 9
-  last_updated: "2026-11-13"
+  total_plans: 12
+  last_updated: "2026-11-22"
 
 registry:
   plans:
@@ -127,7 +127,46 @@ registry:
       files_done: 19
       skipped: []
       depends_on: ["IPLAN-01", "IPLAN-02", "IPLAN-03", "IPLAN-04", "IPLAN-07"]
+    - id: "IPLAN-10"
+      title: "Wave P0 Audit Remediation (C1-C8, H9)"
+      source_spec: "@spec: SPEC-01"
+      scope: "Postgres RLS (14 tables + non-owner roles), C1/C2/C3/C4/C5/H9 scope & graph isolation, C6 smoke sandboxing, C7 FastAPI/Starlette MCP & OIDC hardening, C8 symlink & poisoning-guard fixes"
+      status: "Completed"
+      status_date: "2026-11-21"
+      complexity: 5
+      session_count: 1
+      sessions_completed: 1
+      files_declared: 68
+      files_done: 68
+      skipped: []
+      depends_on: ["IPLAN-01", "IPLAN-02", "IPLAN-03", "IPLAN-04", "IPLAN-06", "IPLAN-07", "IPLAN-08", "IPLAN-09"]
+    - id: "IPLAN-11"
+      title: "Wave P1 Audit Remediation (C9-C10, H1-H8, H10-H12, H15)"
+      source_spec: "@spec: SPEC-01"
+      scope: "CAS locking & kb_blob_projects RLS (0012), idempotent GitSync, NATS JetStream, LLM distillation/consolidation, Brain Passport & ExperienceEvent hardening, CLI AccessSurface parity, MCP async/stdio/schema fixes, Extraction/Neo4j/ContextTools fixes"
+      status: "Completed"
+      status_date: "2026-11-21"
+      complexity: 5
+      session_count: 1
+      sessions_completed: 1
+      files_declared: 59
+      files_done: 59
+      skipped: []
+      depends_on: ["IPLAN-10"]
+    - id: "IPLAN-12"
+      title: "Wave P2 Audit Remediation (C11, H13-H14, M3, M6-M7, L2, L5)"
+      source_spec: "@spec: SPEC-01"
+      scope: "Hardened PG18 compose/Dockerfile, OpenBao /dev/shm contracts, stack-policy & pypdf unification, authentic harness.lock.json, Astro Starlight portal on :4321, and pinned split-forge CI gates"
+      status: "Completed"
+      status_date: "2026-11-22"
+      complexity: 5
+      session_count: 1
+      sessions_completed: 1
+      files_declared: 82
+      files_done: 82
+      skipped: []
+      depends_on: ["IPLAN-11"]
 
 # Build order (topological): IPLAN-06 (ports) → IPLAN-02 (store) →
-# IPLAN-03/04 (retrieval/distillation) → IPLAN-01 (access) → IPLAN-05/07/08/09 (KB compat, CLI, Multimodal CAS, Virtual Employee Brain).
-build_order: ["IPLAN-06", "IPLAN-02", "IPLAN-03", "IPLAN-04", "IPLAN-01", "IPLAN-05", "IPLAN-07", "IPLAN-08", "IPLAN-09"]
+# IPLAN-03/04 (retrieval/distillation) → IPLAN-01 (access) → IPLAN-05/07/08/09 (KB compat, CLI, Multimodal CAS, Virtual Employee Brain) → IPLAN-10 (Wave P0) → IPLAN-11 (Wave P1) → IPLAN-12 (Wave P2).
+build_order: ["IPLAN-06", "IPLAN-02", "IPLAN-03", "IPLAN-04", "IPLAN-01", "IPLAN-05", "IPLAN-07", "IPLAN-08", "IPLAN-09", "IPLAN-10", "IPLAN-11", "IPLAN-12"]

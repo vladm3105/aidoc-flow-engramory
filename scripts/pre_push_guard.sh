@@ -40,10 +40,10 @@ predecessor() { # BRANCH -> previous branch in the chain, or empty
 is_promotion() { [[ -n "$2" && "$1" == "$(predecessor "$2")" ]]; }
 
 # Read standard input from git pre-push hook: <local_ref> <local_oid> <remote_ref> <remote_oid>
-has_input=0
+has_non_delete=0
 need_audit=0
 while read -r local_ref local_oid remote_ref _remote_oid; do
-  has_input=1
+  [[ "$local_oid" != "0000000000000000000000000000000000000000" ]] && has_non_delete=1
   remote_branch="${remote_ref#refs/heads/}"
   local_branch="${local_ref#refs/heads/}"
   # `git push <remote> HEAD:<branch>` reports the local side as HEAD.
@@ -86,7 +86,7 @@ if [[ $need_audit -eq 1 && -f .ci/bin/audit-trail ]]; then
   }
 fi
 
-if [[ $has_input -eq 0 ]]; then
+if [[ $has_non_delete -eq 0 ]]; then
   exit 0
 fi
 if [[ -f "scripts/secret_scan.py" ]]; then

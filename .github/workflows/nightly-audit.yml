@@ -8,6 +8,10 @@ name: nightly-audit
 permissions:
   contents: read
 
+concurrency:
+  group: nightly-audit
+  cancel-in-progress: false
+
 jobs:
   audit:
     runs-on: [self-hosted, ci, ephemeral]
@@ -19,9 +23,8 @@ jobs:
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c  # v4.3.0
       - run: task deps
       - run: task audit
-      # Opt-in verified secret scan (set the TRUFLEHOG_VERIFY repo/org variable to 'true';
-      # absent skips). Filesystem scan, verified findings only, no provisioned secret needed.
-      - if: vars.TRUFLEHOG_VERIFY == 'true'
+      # Opt-in verified secret scan (set TRUFFLEHOG_VERIFY='true' to enable).
+      - if: vars.TRUFFLEHOG_VERIFY == 'true'
         uses: trufflesecurity/trufflehog@4dd8831c5f12599465d4d45c3c447b4018a34c85  # v3.97.9
         with:
           path: ./
