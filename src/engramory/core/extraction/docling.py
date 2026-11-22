@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
+import os
+import tempfile
 import time
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +19,45 @@ from engramory.core.models import ValidationError
 logger = logging.getLogger(__name__)
 
 MAX_DOCLING_FILE_BYTES: int = 100 * 1024 * 1024  # 100 MiB guard for Docling extraction
+MAX_ZIP_ENTRIES: int = 10_000
+MAX_ZIP_UNCOMPRESSED_BYTES: int = 250 * 1024 * 1024
+MAX_ZIP_RATIO: float = 100.0
+_ZIP_CONTAINER_EXTENSIONS = frozenset({"docx", "xlsx", "pptx", "odt"})
+
+
+def _check_zip_archive_safety(file_path: Path) -> None:
+    """Reject ZIP-container office files that violate entry, size, or compression ratio bounds."""
+    ext = file_path.suffix.lstrip(".").lower()
+    if ext not in _ZIP_CONTAINER_EXTENSIONS or not zipfile.is_zipfile(file_path):
+        return
+    total_uncompressed = 0
+    total_compressed = 0
+    try:
+        with zipfile.ZipFile(file_path, "r") as zf:
+            infos = zf.infolist()
+            if len(infos) > MAX_ZIP_ENTRIES:
+                raise ValidationError(
+                    f"ZIP archive entry count {len(infos)} exceeds "
+                    f"MAX_ZIP_ENTRIES ({MAX_ZIP_ENTRIES})"
+                )
+            for info in infos:
+                total_uncompressed += max(0, int(info.file_size))
+                total_compressed += max(0, int(info.compress_size))
+                if total_uncompressed > MAX_ZIP_UNCOMPRESSED_BYTES:
+                    raise ValidationError(
+                        f"ZIP uncompressed size {total_uncompressed} exceeds "
+                        f"MAX_ZIP_UNCOMPRESSED_BYTES ({MAX_ZIP_UNCOMPRESSED_BYTES})"
+                    )
+            ratio = float(total_uncompressed) / float(max(total_compressed, 1))
+            if total_uncompressed > 0 and ratio > MAX_ZIP_RATIO:
+                raise ValidationError(
+                    f"ZIP compression ratio {ratio:.1f}x exceeds MAX_ZIP_RATIO ({MAX_ZIP_RATIO}x)"
+                )
+    except zipfile.BadZipFile as exc:
+        raise ValidationError(
+            f"Corrupt ZIP-based document archive '{file_path.name}': {exc}"
+        ) from exc
+
 
 # Dynamic import guard for IBM Docling
 try:
@@ -69,7 +112,7 @@ class DoclingExtractor:
         ext = filename.lower().split(".")[-1] if "." in filename else ""
         return self.EXTENSION_CATEGORIES.get(ext, FileCategory.UNKNOWN)
 
-    def extract(self, file_path: Path) -> DoclingExtractionResult:
+    def extract(self, file_path: Path, *, tenant_id: str | None = None) -> DoclingExtractionResult:
         """Extract text and tables from document file using Docling."""
         if not file_path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
@@ -80,13 +123,16 @@ class DoclingExtractor:
                 f"Document size {file_size} exceeds "
                 f"MAX_DOCLING_FILE_BYTES ({MAX_DOCLING_FILE_BYTES})"
             )
+        _check_zip_archive_safety(file_path)
         with file_path.open("rb") as fh:
             file_hash = hashlib.file_digest(fh, "sha256").hexdigest()
+        tenant_hash = hashlib.sha256((tenant_id or "default").encode("utf-8")).hexdigest()[:16]
+        cache_key = f"{tenant_hash}_{file_hash}"
         category = self.get_file_category(file_path.name)
 
-        # 1. Check cache
+        # 1. Check tenant-isolated cache
         if self.enable_cache:
-            cached = self._read_cache(file_hash)
+            cached = self._read_cache(cache_key)
             if cached is not None:
                 cached.cache_hit = True
                 return cached
@@ -148,12 +194,12 @@ class DoclingExtractor:
 
         # 3. Write cache
         if self.enable_cache:
-            self._write_cache(file_hash, result)
+            self._write_cache(cache_key, result)
 
         return result
 
-    def _read_cache(self, file_hash: str) -> DoclingExtractionResult | None:
-        cache_file = self.cache_dir / f"{file_hash}.json"
+    def _read_cache(self, cache_key: str) -> DoclingExtractionResult | None:
+        cache_file = self.cache_dir / f"{cache_key}.json"
         if not cache_file.exists():
             return None
         try:
@@ -176,9 +222,28 @@ class DoclingExtractor:
         except Exception:
             return None
 
-    def _write_cache(self, file_hash: str, result: DoclingExtractionResult) -> None:
-        cache_file = self.cache_dir / f"{file_hash}.json"
+    def _write_cache(self, cache_key: str, result: DoclingExtractionResult) -> None:
+        cache_file = self.cache_dir / f"{cache_key}.json"
+        tmp_path: str | None = None
         try:
-            cache_file.write_text(json.dumps(result.to_dict()), encoding="utf-8")
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                dir=self.cache_dir,
+                prefix=f".{cache_key}.",
+                suffix=".tmp",
+                mode="w",
+                encoding="utf-8",
+                delete=False,
+            ) as tf:
+                tmp_path = tf.name
+                json.dump(result.to_dict(), tf)
+                tf.flush()
+                os.fsync(tf.fileno())
+            os.replace(tmp_path, cache_file)
+            tmp_path = None
         except Exception as e:
-            logger.warning("Failed to write extraction cache for %s: %s", file_hash, e)
+            logger.warning("Failed to write extraction cache for %s: %s", cache_key, e)
+        finally:
+            if tmp_path is not None:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp_path)

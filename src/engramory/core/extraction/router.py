@@ -16,10 +16,12 @@ from engramory.core.extraction.multimodal import (
     infer_media_mime_type,
 )
 from engramory.core.extraction.types import ExtractionResult, FileCategory
+from engramory.core.models import ValidationError
 from engramory.core.parsers.detector import DocumentDetector
 from engramory.core.parsers.markdown import MarkdownParser
 
 MAX_NATIVE_TEXT_BYTES: int = 10 * 1024 * 1024  # 10 MiB guard for native text decoding
+MAX_NATIVE_PDF_BYTES: int = 50 * 1024 * 1024  # 50 MiB guard for full PDF native parsing
 
 
 class SmartExtractionRouter:
@@ -60,6 +62,8 @@ class SmartExtractionRouter:
         file_path: Path,
         prefer_docling: bool = True,
         refine_chunks: bool = True,
+        *,
+        tenant_id: str | None = None,
     ) -> ExtractionResult:
         """Extract sections and structured content from a disk file."""
         if not file_path.exists():
@@ -95,7 +99,7 @@ class SmartExtractionRouter:
                 and self.docling.is_available()
             ):
                 try:
-                    doc_res = self.docling.extract(file_path)
+                    doc_res = self.docling.extract(file_path, tenant_id=tenant_id)
                     ocr_text = doc_res.text
                 except Exception as exc:
                     warnings.append(f"Docling image OCR failed, using header extractor: {exc}")
@@ -113,7 +117,7 @@ class SmartExtractionRouter:
             and self.docling.is_available()
         ):
             try:
-                doc_res = self.docling.extract(file_path)
+                doc_res = self.docling.extract(file_path, tenant_id=tenant_id)
                 # Parse Docling markdown output into sections
                 md_parse = self.markdown_parser.parse(doc_res.text, filename=filename)
                 sections = md_parse.sections
@@ -139,10 +143,16 @@ class SmartExtractionRouter:
             except Exception as e:
                 warnings.append(f"Docling extraction failed, falling back to native: {e}")
 
-        # 2. Native parser fallback (bounded to MAX_NATIVE_TEXT_BYTES)
+        # 2. Native parser fallback (full PDF up to MAX_NATIVE_PDF_BYTES; text up to 10 MiB)
         file_size = file_path.stat().st_size
         content: str | bytes
-        if file_size > MAX_NATIVE_TEXT_BYTES:
+        if ext == "pdf" or header.startswith(b"%PDF-"):
+            if file_size > MAX_NATIVE_PDF_BYTES:
+                raise ValidationError(
+                    f"PDF size {file_size} exceeds MAX_NATIVE_PDF_BYTES ({MAX_NATIVE_PDF_BYTES})"
+                )
+            content = file_path.read_bytes()
+        elif file_size > MAX_NATIVE_TEXT_BYTES:
             with file_path.open("rb") as fh:
                 content = fh.read(65536)
         else:

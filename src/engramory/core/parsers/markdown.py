@@ -63,6 +63,15 @@ class MarkdownParser(BaseParser):
         raw_headers = self._find_headers(body, base_offset=content_offset)
 
         if not raw_headers:
+            title = doc_metadata.get("title") or filename
+            if not body.strip():
+                return ParseResult(
+                    sections=[],
+                    doc_type=self.doc_type,
+                    title=title,
+                    metadata=doc_metadata,
+                    warnings=["Empty document"],
+                )
             # Single section fallback
             sec = Section(
                 section_id="sec_1",
@@ -76,16 +85,13 @@ class MarkdownParser(BaseParser):
                 source_tag="none",
                 metadata=dict(doc_metadata),
             )
-            chunks = self._subchunk_section(sec, start_order=1) if body.strip() else [sec]
-            title = doc_metadata.get("title") or filename
+            chunks = self._subchunk_section(sec, start_order=1)
             return ParseResult(
                 sections=chunks,
                 doc_type=self.doc_type,
                 title=title,
                 metadata=doc_metadata,
-                warnings=["No headers found in markdown document"]
-                if body.strip()
-                else ["Empty document"],
+                warnings=["No headers found in markdown document"],
             )
 
         # 3. Build preliminary sections

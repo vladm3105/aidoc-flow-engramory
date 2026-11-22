@@ -85,9 +85,9 @@ Every documentation tool in the ecosystem is governed by `25-approved-tooling-in
 3. **Read-Only Safety Gate (`check_green_step_safety` & `parse_and_validate_green_command`, `INV-STEP-01`/`02`):**
    Verifies at lint time and pre-execution time that every `tier="green"` step has `mode="read-only"` and passes strict `shlex` allowlist validation (`shell=False` execution, loopback HTTP GET/HEAD only, zero shell wrappers/redirections/expansions), surfacing AST violations as failed probes in `smoke_run_green_steps`.
 4. **Code-to-Doc Drift & Staleness Engine (`check_repo_drift`):**
-   Matches `git diff` file paths against every document's `watched_paths` globs (`WATCHED_PATH_MODIFIED`) and flags documents whose `last_verified` date exceeds `review_ttl_days` (`TTL_STALE`).
+   Matches `git -c core.quotepath=false diff` file paths (`timeout=15s`, fail-closed on non-git workspaces) against every document's `watched_paths` globs (`WATCHED_PATH_MODIFIED`) and flags documents whose `last_verified` date exceeds `review_ttl_days` (`TTL_STALE`), while `parse_markdown_document` respects `trust_frontmatter_domain` and `slice_local_runbooks` excludes non-`active` documents and filters by `domain_id`.
 5. **Deterministic `/llms.txt` & `/llms-full.txt` Compiler (`export_repo_llms`):**
-   Generates structured agent indexes sorted by priority (`runbook`, `playbook`, `architecture`, `specification`) with NFKC/invisible-Unicode stripping, multiline PEM key redaction, heading sanitization (`_scrub_manifest_inline`), and symlink rejection (`has_symlink_component`).
+   Generates structured agent indexes sorted by priority (`runbook`, `playbook`, `architecture`, `specification`) with NFKC/invisible-Unicode stripping, multiline PEM key redaction, heading sanitization (`_scrub_manifest_inline`), symlink rejection (`has_symlink_component`), and accurate `readOnlyHint: False` annotations on MCP `docs_export_llms`, `docs_smoke_run`, and `docs_build_portal`.
 
 ---
 
@@ -144,10 +144,10 @@ Standard Markdown linters only validate syntax (such as list indentation or head
 
 While `docs/*.md` files are authored directly in Markdown, the ecosystem also ingests external PDFs, architectural RFCs, vendor datasheets, `.docx` files, and HTML snapshots into the `platform-engramory` L0 Knowledge Core (`src/engramory/core/extraction.py`):
 
-1. **Fast Path (`PyMuPDF` / `fitz` + `BeautifulSoup4`):**
-   Digital-native text PDFs and clean HTML documents are extracted in milliseconds using `PyMuPDF` (`pymupdf>=1.24.0`) and `BeautifulSoup4` (`beautifulsoup4>=4.12.0`).
+1. **Fast Path (`PyMuPDF` / `fitz` + `BeautifulSoup4` + `DocumentDetector`):**
+   Digital-native text PDFs (`<= 50 MiB` native buffer with `max_pages=500` and `max_total_chars=5_000_000` resource caps) and HTML documents extract via `PyMuPDF` (`fitz.open` in `try/finally`) and `BeautifulSoup4`, while `DocumentDetector` checks known filename extensions prior to heuristic `@section:` markers and empty docs emit zero sections.
 2. **Deep Layout & Table Path (`Docling`, `docling>=2.0.0`, MIT License):**
-   When `SmartExtractionRouter` detects complex multi-column layouts, embedded tables, or scanned PDF/DOCX artifacts (`[extraction,ocr]` extras in `pyproject.toml`), it routes the document through **IBM Docling** (`DocumentConverter`). Docling reconstructs tables into GitHub-Flavored Markdown tables and preserves heading hierarchies before passing the output to `chunk_markdown()`.
+   When `SmartExtractionRouter` detects complex multi-column layouts, embedded tables, or ZIP-container office files (`.docx`, `.xlsx`, `.pptx`, `.odt`), `DoclingExtractor` enforces ZIP-bomb limits (`MAX_ZIP_ENTRIES=10_000`, `MAX_ZIP_UNCOMPRESSED_BYTES=250 MiB`, `MAX_ZIP_RATIO=100.0`) and writes tenant-scoped caches atomically via temporary files and `os.replace`.
 
 ---
 

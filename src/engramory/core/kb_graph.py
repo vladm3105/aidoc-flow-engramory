@@ -242,6 +242,30 @@ def extract_adr_graph(
                 )
             )
 
+    entity_ids = {ent.id for ent in entities}
+    for rel in relations:
+        for endpoint in (rel.src_id, rel.dst_id):
+            if endpoint not in entity_ids:
+                stub_props: dict[str, Any] = {
+                    "status": "stub",
+                    "stub": True,
+                    "scope": eff_scope,
+                    "domain_id": domain_id,
+                }
+                if project_id is not None:
+                    stub_props["project_id"] = project_id
+                entities.append(
+                    GraphEntity(
+                        id=endpoint,
+                        entity_type="ADR",
+                        name=f"Stub: {endpoint}",
+                        tenant_id=tenant_id,
+                        domain_id=domain_id,
+                        properties=stub_props,
+                    )
+                )
+                entity_ids.add(endpoint)
+
     return entities, relations
 
 
@@ -468,41 +492,42 @@ def extract_sdd_graph(
                     if key not in relations_map:
                         relations_map[key] = f"lineage_tag_@{kind}"
 
-    # 3. Ensure referential integrity by auto-creating stubs for unresolved relation targets
-    for _src, dst, _rel in sorted(relations_map.keys()):
-        if dst not in entities_map:
-            unprefixed_dst = dst.split(":", 1)[-1]
-            prefix = unprefixed_dst.split("-")[0].upper() if "-" in unprefixed_dst else "SDD"
-            entity_type = (
-                prefix
-                if prefix
-                in (
-                    "BRD",
-                    "PRD",
-                    "EARS",
-                    "BDD",
-                    "ADR",
-                    "SPEC",
-                    "TDD",
-                    "IPLAN",
-                    "CHG",
-                    "EVAL",
+    # 3. Ensure referential integrity by auto-creating stubs for unresolved endpoints
+    for src, dst, _rel in sorted(relations_map.keys()):
+        for endpoint in (src, dst):
+            if endpoint not in entities_map:
+                unprefixed_ep = endpoint.split(":", 1)[-1]
+                prefix = unprefixed_ep.split("-")[0].upper() if "-" in unprefixed_ep else "SDD"
+                entity_type = (
+                    prefix
+                    if prefix
+                    in (
+                        "BRD",
+                        "PRD",
+                        "EARS",
+                        "BDD",
+                        "ADR",
+                        "SPEC",
+                        "TDD",
+                        "IPLAN",
+                        "CHG",
+                        "EVAL",
+                    )
+                    else "SDD"
                 )
-                else "SDD"
-            )
-            entities_map[dst] = GraphEntity(
-                id=dst,
-                entity_type=entity_type,
-                name=f"Stub: {unprefixed_dst}",
-                tenant_id=tenant_id,
-                domain_id=domain_id,
-                properties={
-                    "status": "stub",
-                    "stub": True,
-                    "project_id": project_id,
-                    "sdd_id": unprefixed_dst,
-                },
-            )
+                entities_map[endpoint] = GraphEntity(
+                    id=endpoint,
+                    entity_type=entity_type,
+                    name=f"Stub: {unprefixed_ep}",
+                    tenant_id=tenant_id,
+                    domain_id=domain_id,
+                    properties={
+                        "status": "stub",
+                        "stub": True,
+                        "project_id": project_id,
+                        "sdd_id": unprefixed_ep,
+                    },
+                )
 
     relations: list[GraphRelation] = [
         GraphRelation(

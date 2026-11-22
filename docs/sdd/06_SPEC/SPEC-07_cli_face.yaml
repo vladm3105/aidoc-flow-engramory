@@ -16,9 +16,9 @@ title: "CLI Face — engramory dev/CI transport"
 
 document_control:
   status: Approved
-  version: "1.1"
+  version: "1.2"
   date_created: "2026-07-11T00:00:00"
-  last_updated: "2026-11-13T00:00:00"
+  last_updated: "2026-11-21T00:00:00"
   author: "Engramory team"
   component: "engramory.cli"
   tdd_ready_score: "98/100"
@@ -51,8 +51,8 @@ interfaces:
     - { flag: "--config PATH", behavior: "Explicit config file; default .engramory/config.toml discovered upward from CWD" }
   exit_codes:  # NORMATIVE (adopted from the interlog CLI-SPEC draft; pinned here)
     - { code: 0, meaning: "success" }
-    - { code: 1, meaning: "fail-closed reject — authz deny (AuthzError), governed-write reject, invalid input (ValidationError/ValueError), unknown id (KeyError)" }
-    - { code: 2, meaning: "usage / config / environment — argparse errors, missing or malformed config, the ADR-10 dev-tier fence (PermissionError)" }
+    - { code: 1, meaning: "fail-closed reject — authz deny (AuthzError), governed-write reject, invalid input (ValidationError/ValueError), unknown id (KeyError), storage/filesystem errors (StorageError/OSError)" }
+    - { code: 2, meaning: "usage / config / environment — argparse errors, missing or malformed config, the ADR-10 dev-tier fence (DevTierFenceError subclassing PermissionError)" }
     - { code: 3, meaning: "retryable — canonical store unreachable (StoreUnavailable)" }
   commands:
     - { name: "init", maps_to: "scaffold + Repository.upsert_agent_profile (best-effort)", notes: "Writes .engramory/config.toml (actor identity + optional --domain-id + store dsn), appends .engramory/ to .gitignore. Idempotent unless --force is passed. Profile upsert is best-effort: store-down still exits 0 with profile=deferred." }
@@ -71,8 +71,11 @@ interfaces:
     - { name: "profile import-brain", maps_to: "AccessSurface.agent_brain_import", notes: "--in PATH, --evidence-ref, --domain-id, --brain-variant, --redact-term, --allow-type-override; verifies passport_sha256 and imports sanitized skills" }
     - { name: "profile compare-brains", maps_to: "AccessSurface.agent_brain_compare", notes: "--variant-a, --variant-b, --query, --domain-id, --specialization, -k; side-by-side multi-model brain comparison" }
     - { name: "profile offboard", maps_to: "AccessSurface.agent_space_offboard", notes: "--evidence-ref, --reason, --keep-episodes, --keep-memories; transactional offboarding of private agent space" }
-    - { name: "knowledge search", maps_to: "AccessSurface.knowledge_search (alias: kb search)", notes: "query, --limit, --scope, --modality, --expand-graph, --graph-depth; 3-leg hybrid RRF + GraphRAG expansion" }
-    - { name: "knowledge ingest-media", maps_to: "AccessSurface.knowledge_ingest_media (alias: kb ingest-media)", notes: "path, --evidence-ref, --scope, --no-embed, --no-graph; streams media into PostgreSQL 18 Chunked Blob CAS and indexes multimodal sections" }
+    - { name: "knowledge ingest", maps_to: "AccessSurface.knowledge_ingest / knowledge_ingest_files (alias: kb ingest)", notes: "Inline --text or file/dir path, --evidence-ref, --scope, --domain-id; governed ingestion via AccessSurface" }
+    - { name: "knowledge sync-git", maps_to: "AccessSurface.knowledge_sync_git (alias: kb sync-git)", notes: "--repo, --base, --head, --evidence-ref, --scope, --domain-id; governed git sync via AccessSurface" }
+    - { name: "knowledge search", maps_to: "AccessSurface.knowledge_search (alias: kb search)", notes: "query, --limit, --scope, --domain-id, --modality, --expand-graph, --graph-depth; 3-leg hybrid RRF + GraphRAG expansion" }
+    - { name: "sdd ingest", maps_to: "AccessSurface.sdd_ingest", notes: "--sdd-root, --project-id, --tenant-id, --evidence-ref, --scope, --no-reconcile; governed SDD graph ingestion via AccessSurface" }
+    - { name: "knowledge ingest-media", maps_to: "AccessSurface.knowledge_ingest_media (alias: kb ingest-media)", notes: "path, --evidence-ref, --scope, --domain-id, --no-embed, --no-graph; streams media into PostgreSQL 18 Chunked Blob CAS and indexes multimodal sections" }
     - { name: "knowledge blob-stat", maps_to: "AccessSurface.blob_head (alias: kb blob-stat)", notes: "sha256, --scope; inspects kb_blobs manifest and chunk completeness" }
     - { name: "knowledge blob-get", maps_to: "AccessSurface.blob_get / StoragePort.get_stream (alias: kb blob-get)", notes: "sha256, --out PATH, --scope; streams 4 MiB chunks with SHA-256 verification" }
     - { name: "status", maps_to: "Repository.count_* (OPS COMMAND)", notes: "JSON result {store, episodes, kb_sections} for the caller's tenant" }

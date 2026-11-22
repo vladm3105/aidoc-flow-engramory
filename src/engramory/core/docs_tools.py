@@ -21,6 +21,7 @@ import re
 import shlex
 import shutil
 import subprocess  # nosec B404 # reason: controlled CLI invocations for vale, git diff, and green smoke probes
+import sys
 import urllib.parse
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -371,12 +372,41 @@ class ParsedMarkdownDocument:
     body_text: str = ""
 
 
+def _ancestors_have_symlink(path: Path) -> bool:
+    skip_sys = (
+        {Path(os.sep, "tmp"), Path(os.sep, "var"), Path(os.sep, "etc")}
+        if sys.platform == "darwin"
+        else set()
+    )
+    if not path.is_absolute():
+        cur = Path()
+        for part in path.parts:
+            if part in ("", "."):
+                continue
+            cur = cur / part
+            if cur.is_symlink():
+                return True
+        abs_candidate = Path.cwd() / path
+        for parent in abs_candidate.parents:
+            if parent == Path(abs_candidate.anchor) or parent in skip_sys:
+                continue
+            if parent.is_symlink():
+                return True
+        return False
+    for node in (path, *path.parents):
+        if node == Path(path.anchor) or node in skip_sys:
+            continue
+        if node.is_symlink():
+            return True
+    return False
+
+
 def has_symlink_component(file_path: Path, root: Path | None = None) -> bool:
     """Return True if `file_path` or any component below `root` is a symlink before `.resolve()`."""
     if file_path.is_symlink():
         return True
     if root is None:
-        return False
+        return _ancestors_have_symlink(file_path)
 
     rel: Path | None = None
     base_dir: Path | None = None
@@ -393,7 +423,7 @@ def has_symlink_component(file_path: Path, root: Path | None = None) -> bool:
                 continue
 
     if rel is None or base_dir is None:
-        return False
+        return _ancestors_have_symlink(file_path)
 
     cur = base_dir
     for part in rel.parts:
@@ -917,9 +947,10 @@ def parse_markdown_document(
     project_id: str | None = None,
     domain_id: str | None = None,
     scope: str = "project",
+    trust_frontmatter_domain: bool = True,
 ) -> ParsedMarkdownDocument:
     """Parse a Markdown file's YAML frontmatter and annotated executable runbook code blocks."""
-    if file_path.is_symlink() or (
+    if has_symlink_component(file_path, repo_root) or (
         repo_root is not None and not _is_within_root(file_path, repo_root)
     ):
         raise ValidationError("Requested path is outside allowed boundary")
@@ -1092,7 +1123,8 @@ def parse_markdown_document(
             )
             review_ttl_days = 90
         git_sha = generate_evidence_ref(resolved_file)
-        eff_domain = domain_id or (str(fm_dict["domain"]) if fm_dict.get("domain") else None)
+        fm_domain = str(fm_dict["domain"]) if fm_dict.get("domain") else None
+        eff_domain = domain_id or (fm_domain if trust_frontmatter_domain else None)
 
         # Ensure JSON-serializable frontmatter copy
         serializable_fm = json.loads(json.dumps(fm_dict, default=str))
@@ -2020,27 +2052,46 @@ def check_repo_drift(
         modified = set(changed_files)
     else:
         modified = set()
-        res = subprocess.run(  # nosec B603 B607 # reason: read-only git diff inside confined repository root with validated refs
-            ["git", "diff", "--name-only", f"{safe_base}...{safe_head}", "--"],
-            cwd=str(root),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if res.returncode == 0:
+        try:
+            res = subprocess.run(  # nosec B603 B607 # reason: read-only git diff inside confined repository root with validated refs
+                [
+                    "git",
+                    "-c",
+                    "core.quotepath=false",
+                    "diff",
+                    "--name-only",
+                    f"{safe_base}...{safe_head}",
+                    "--",
+                ],
+                cwd=str(root),
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            if res.returncode != 0:
+                detail = res.stderr.strip() or f"exit {res.returncode}"
+                raise ValidationError(
+                    f"Drift check failed: git diff {safe_base}...{safe_head} failed ({detail})"
+                )
             modified.update(ln.strip() for ln in res.stdout.splitlines() if ln.strip())
-        wt_res = subprocess.run(  # nosec B603 B607 # reason: read-only git status inside confined repository root
-            ["git", "status", "--porcelain"],
-            cwd=str(root),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if wt_res.returncode == 0:
+            wt_res = subprocess.run(  # nosec B603 B607 # reason: read-only git status inside confined repository root
+                ["git", "-c", "core.quotepath=false", "status", "--porcelain"],
+                cwd=str(root),
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            if wt_res.returncode != 0:
+                detail = wt_res.stderr.strip() or f"exit {wt_res.returncode}"
+                raise ValidationError(f"Drift check failed: git status failed ({detail})")
             for ln in wt_res.stdout.splitlines():
                 if len(ln) > 3:
-                    path_str = ln[3:].strip().split(" -> ")[-1]
+                    path_str = ln[3:].strip().split(" -> ")[-1].strip('"')
                     modified.add(path_str)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ValidationError(f"Drift check git invocation failed: {exc}") from exc
 
     docs_dir = root / "docs"
     raw_files = sorted(docs_dir.rglob("*.md")) if docs_dir.is_dir() else sorted(root.glob("*.md"))
@@ -2412,11 +2463,12 @@ def slice_local_runbooks(
     doc_id: str | None = None,
     alert_id: str | None = None,
     max_tier: str | None = None,
+    domain_id: str | None = None,
     token_budget: int = 2000,
     output_format: str = "json",
 ) -> dict[str, Any]:
     """Slice executable runbook steps directly from local Markdown files (Tier-1 offline mode)."""
-    if repo_path.is_symlink():
+    if has_symlink_component(repo_path):
         raise ValidationError("Requested path is outside allowed boundary")
     root = repo_path.resolve()
     bound_root = root if root.is_dir() else root.parent
@@ -2444,7 +2496,9 @@ def slice_local_runbooks(
         if parsed.kb_document is None:
             continue
         doc = parsed.kb_document
-        if doc.status in {"deprecated", "archived"}:
+        if doc.status != "active":
+            continue
+        if domain_id is not None and doc.domain_id != domain_id:
             continue
         if doc_id and doc.doc_id != doc_id and f.stem != doc_id:
             continue

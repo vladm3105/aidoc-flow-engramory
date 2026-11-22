@@ -175,13 +175,15 @@ Both chunk tables intentionally omit foreign keys back to `kb_blobs`: PostgreSQL
 
 ```python
 # Write path (PgBlobStorageAdapter._put_known_stream):
-# 1. UPSERT kb_blobs with status='uploading', storage_tier=('unlogged' if size > 52428800 else 'logged')
-# 2. Commit metadata cleanup and re-apply SELECT set_config('app.tenant_id', tid, true)
-# 3. Stream chunks via parameterized binary INSERT ... ON CONFLICT DO UPDATE (satisfying FORCE RLS)
-# 4. Verify COUNT(*) == chunk_count, flip kb_blobs.status = 'ready', and CHECKPOINT if unlogged.
+# 1. Acquire transaction-scoped advisory lock + SELECT ... FOR UPDATE on kb_blobs
+#    and hold locks through upload (no mid-upload commit/lock release against GC)
+# 2. Clean prior chunk rows across both LOGGED and UNLOGGED tables on overwrite
+# 3. Stream chunks via parameterized binary INSERT ... ON CONFLICT DO UPDATE (FORCE RLS)
+# 4. Verify COUNT(*) == chunk_count, flip status='ready', attach kb_blob_projects /
+#    kb_blob_aliases ownership row, and CHECKPOINT if unlogged before commit
 ```
 
-For streaming reads (`get_stream`), `PgBlobStorageAdapter` first verifies `SELECT COUNT(*) FROM <chunk_table> WHERE tenant_id = $1 AND blob_sha256 = $2` equals `kb_blobs.chunk_count`, then fetches `4` chunks (`16 MiB`) per round-trip via keyset pagination (`WHERE tenant_id = $1 AND blob_sha256 = $2 AND chunk_index >= $3 ORDER BY chunk_index ASC LIMIT 4`).
+For streaming reads (`get_stream`), `PgBlobStorageAdapter` resolves project-owned keys or `pgblob://tenant/sha256` URIs via `kb_blob_projects` / `kb_blob_aliases`, verifies `SELECT COUNT(*) FROM <chunk_table> WHERE tenant_id = $1 AND blob_sha256 = $2` equals `kb_blobs.chunk_count`, and fetches `4` chunks (`16 MiB`) per round-trip via keyset pagination (`WHERE tenant_id = $1 AND blob_sha256 = $2 AND chunk_index >= $3 ORDER BY chunk_index ASC LIMIT 4`).
 
 ### 4.2 `UNLOGGED` Crash-Truncation Recovery & Backup Contract
 
@@ -235,8 +237,8 @@ Neo4j always acts as a **deterministic, rebuildable projection** of canonical Po
 
 Engramory implements the full multimodal and PostgreSQL 18 `20 GB+` Chunked Blob CAS pipeline across five modules:
 
-1. **Migrations `0010` & `0011` (`db/migrations/0010_multimodal_rag_and_blob_cas.sql`, `0011_wave_p0_isolation_and_rls.sql`):** Provisions `kb_blobs`, `kb_blob_chunks` (`LOGGED` `<= 50 MiB`), `kb_blob_chunks_large` (`UNLOGGED` `> 50 MiB` with `STORAGE EXTERNAL`), multimodal columns on `kb_sections` (`modality`, `blob_sha256`, `blob_uri`, `media_metadata`, `agent_id`), and `FORCE ROW LEVEL SECURITY` with `NULLIF(current_setting('app.tenant_id', true), '')` + `engramory_worker` sweep policies.
-2. **`StoragePort` Streaming & `PgBlobStorageAdapter` (`src/engramory/ports/storage.py`, `src/engramory/adapters/dev/storage_pg.py`):** Implements `put_stream()`, `get_stream()`, and `gc_orphan_chunks()` with `4 MiB` chunking (`O(1)` memory), end-to-end `SHA-256` verification, `BlobTruncatedError` completeness guards, `app.tenant_id` propagation, and `LocalFsStorageAdapter` (`src/engramory/adapters/dev/storage_local.py`).
-3. **Multimodal Extractors & Ingestion Router (`src/engramory/core/extraction/media.py`, `router.py`, `src/engramory/access/surface.py`):** `ImageExtractor` and `VideoAudioExtractor` perform `O(1)`-RAM header probing (`PNG`/`JPEG`/`WebP`/`GIF`/`SVG`, ISO-BMFF `MP4`/`MOV`/`M4A`, RIFF `WAV`) plus optional LiteLLM Vision/Whisper enrichment, stamping `extraction_metadata` (`extraction_model`, `embedding_model`, `rag_params`) into `kb_sections.media_metadata` via `knowledge_ingest_media`.
-4. **3-Leg Hybrid RRF & Dual-Engine GraphRAG (`src/engramory/core/repository.py`, `src/engramory/core/kb_graph.py`, `src/engramory/adapters/dev/graph_neo4j.py`):** `search_kb_sections()` enforces `allowed_scopes` and `vector(1536)` bounds across hybrid RRF, vector, and lexical legs; `extract_knowledge_and_media_graph()` marks `MEDIA_BLOB` and `CONCEPT` entities `scope='shared'` while qualifying `DOCUMENT`/`SECTION` nodes and edges by `project_id`, `domain_id`, and `scope` across Postgres recursive CTEs and Neo4j Cypher.
-5. **Verification Suite (`tests/test_multimodal_extraction_and_graphrag.py`):** Covers `4 MiB` multi-chunk streaming, `BlobTruncatedError` detection, multimodal extraction, 3-leg RRF, and fused `memory_search(include_knowledge=True, expand_graph=True)`.
+1. **Migrations `0010`, `0011` & `0012` (`db/migrations/0010_multimodal_rag_and_blob_cas.sql`, `0011_wave_p0_isolation_and_rls.sql`, `0012_wave_p1_cas_projects_and_dedup.sql`):** Provisions `kb_blobs`, `kb_blob_projects`, `kb_blob_aliases`, `kb_blob_chunks` (`LOGGED` `<= 50 MiB`), `kb_blob_chunks_large` (`UNLOGGED` `> 50 MiB`, `STORAGE EXTERNAL`), multimodal `kb_sections` columns (`modality`, `blob_sha256`, `blob_uri`, `media_metadata`, `agent_id`), rescoped `uq_episodes_event_id`, and `FORCE ROW LEVEL SECURITY` with `NULLIF(current_setting('app.tenant_id', true), '')` + `engramory_worker` policies.
+2. **`StoragePort` Streaming, `PgBlobStorageAdapter` & `LocalFsStorageAdapter` (`src/engramory/ports/storage.py`, `src/engramory/adapters/dev/storage_pg.py`, `src/engramory/adapters/dev/storage_local.py`):** Implements `put_stream()`, `get_stream()`, and `gc_orphan_chunks()` with `4 MiB` chunking, transactional advisory + `FOR UPDATE` locking, per-project CAS isolation via `kb_blob_projects`, bounded `max_bytes` reads, MCP `blob_put`/`blob_get` parity, and disk-persistent project-scoped `LocalFsStorageAdapter` with symlink rejection.
+3. **Multimodal Extractors, `GitSyncEngine` & Router (`src/engramory/core/extraction/router.py`, `docling.py`, `src/engramory/core/git_sync.py`, `src/engramory/core/knowledge.py`):** `ImageExtractor` and `VideoAudioExtractor` perform `O(1)`-RAM header probing, `SmartExtractionRouter` preserves full native PDF parsing up to `50 MiB`, `DoclingExtractor` blocks ZIP bombs and isolates tenant caches atomically, and `GitSyncEngine` / `KnowledgeCore` run `inspect_memory_write()` before persisting blobs.
+4. **3-Leg Hybrid RRF & Dual-Engine GraphRAG (`src/engramory/core/repository.py`, `src/engramory/core/kb_graph.py`, `src/engramory/adapters/dev/graph_neo4j.py`):** `search_kb_sections()` normalizes stale embeddings on text updates and enforces `allowed_scopes` + `ts_lex` + escaped `ILIKE`; `Neo4jGraphAdapter` rejects empty/colon `tenant_id` in `_node_uid`, strips reserved properties in `_sanitize_props`, and guards `project_id IS NULL` nodes unless `scope='shared'`.
+5. **Verification Suites (`tests/test_multimodal_extraction_and_graphrag.py`, `tests/test_storage_pg_blob_cas.py`, `tests/security/test_wave_p1_integrity_runtime.py`):** Covers `4 MiB` multi-chunk streaming, concurrent CAS uploads, `kb_blob_projects` RLS, `LocalFsStorageAdapter` persistence, `BlobTruncatedError` detection, ZIP-bomb blocking, and dual-engine Neo4j + PG GraphRAG isolation.

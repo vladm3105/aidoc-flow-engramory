@@ -5,7 +5,7 @@ metadata:
   schema_version: "1.0"
   document_type: "iplan-registry"
   layer: 8
-  total_plans: 10
+  total_plans: 11
   last_updated: "2026-11-21"
 
 registry:
@@ -140,7 +140,20 @@ registry:
       files_done: 68
       skipped: []
       depends_on: ["IPLAN-01", "IPLAN-02", "IPLAN-03", "IPLAN-04", "IPLAN-06", "IPLAN-07", "IPLAN-08", "IPLAN-09"]
+    - id: "IPLAN-11"
+      title: "Wave P1 Audit Remediation (C9-C10, H1-H8, H10-H12, H15)"
+      source_spec: "@spec: SPEC-01"
+      scope: "CAS locking & kb_blob_projects RLS (0012), idempotent GitSync, NATS JetStream, LLM distillation/consolidation, Brain Passport & ExperienceEvent hardening, CLI AccessSurface parity, MCP async/stdio/schema fixes, Extraction/Neo4j/ContextTools fixes"
+      status: "Completed"
+      status_date: "2026-11-21"
+      complexity: 5
+      session_count: 1
+      sessions_completed: 1
+      files_declared: 59
+      files_done: 59
+      skipped: []
+      depends_on: ["IPLAN-10"]
 
 # Build order (topological): IPLAN-06 (ports) → IPLAN-02 (store) →
-# IPLAN-03/04 (retrieval/distillation) → IPLAN-01 (access) → IPLAN-05/07/08/09 (KB compat, CLI, Multimodal CAS, Virtual Employee Brain) → IPLAN-10 (Wave P0 remediation).
-build_order: ["IPLAN-06", "IPLAN-02", "IPLAN-03", "IPLAN-04", "IPLAN-01", "IPLAN-05", "IPLAN-07", "IPLAN-08", "IPLAN-09", "IPLAN-10"]
+# IPLAN-03/04 (retrieval/distillation) → IPLAN-01 (access) → IPLAN-05/07/08/09 (KB compat, CLI, Multimodal CAS, Virtual Employee Brain) → IPLAN-10 (Wave P0) → IPLAN-11 (Wave P1).
+build_order: ["IPLAN-06", "IPLAN-02", "IPLAN-03", "IPLAN-04", "IPLAN-01", "IPLAN-05", "IPLAN-07", "IPLAN-08", "IPLAN-09", "IPLAN-10", "IPLAN-11"]

@@ -98,6 +98,12 @@ The unified access surface means **all agents (Project Executors, Operations Ass
 
 The **Knowledge core** and **Memory core** are two *bounded cores of one platform*, not two projects — they share the spine (Postgres, scope/tenant model, gateway, ports) and are separated by schema, write-governance, lifecycle, and tool namespace. See [CORES.md](CORES.md) and [ADR-08](sdd/05_ADR/ADR-08_two_bounded_cores.yaml).
 
+### Wave P1 Data Integrity & Runtime Hardening (`CHG-011`)
+
+- **CAS Ownership & Concurrency (`C10`):** Migration `0012` provisions `kb_blob_projects` and `kb_blob_aliases` under PostgreSQL RLS so content-addressed blobs deduplicate per tenant without exposing metadata or deletes across projects; `PgBlobStorageAdapter` holds transactional advisory locks (`pg_advisory_lock`) and row locks (`FOR UPDATE`) continuously across upload and GC, while `LocalFsStorageAdapter` persists blobs and aliases on disk.
+- **Durable Events & Hexagonal Memory (`H1`, `H2`):** `NatsEventsAdapter` runs NATS JetStream durable pull consumers with ACK-on-yield, NAK-on-error, CRLF header rejection, and token-exact wildcards; `MemoryCore` implements `MemoryPort`, and background workers enforce broker `_nats_subject` tenant verification with per-event DLQ isolation (`engramory.dlq.worker`).
+- **Unified Governance & Fail-Closed SDD Gates (`H6`, `H11`):** Every CLI knowledge, SDD ingest, experience-event, and learning-health command routes through `AccessSurface` (exit code `2` reserved for `DevTierFenceError`, exit code `1` for authorization/ownership denials), and `InvariantChecker` / `ContextSlicer` fail closed when git is unavailable or contract prefixes (`03_EARS`, `05_ADR`, `06_SPEC`, `db/migrations/`) change on fast paths.
+
 ---
 
 ## The portability matrix (the heart of this design)

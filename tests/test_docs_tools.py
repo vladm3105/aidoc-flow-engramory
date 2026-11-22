@@ -414,11 +414,16 @@ async def test_cli_and_mcp_docs_tools_offline(
         "docs_slice_runbook",
         "docs_validate",
         "docs_check_drift",
-        "docs_export_llms",
-        "docs_smoke_run",
     ):
         assert expected_tool in tool_names
         assert tool_names[expected_tool]["annotations"]["readOnlyHint"] is True
+    for mutating_or_exec_tool in (
+        "docs_export_llms",
+        "docs_smoke_run",
+        "docs_build_portal",
+    ):
+        assert mutating_or_exec_tool in tool_names
+        assert tool_names[mutating_or_exec_tool]["annotations"]["readOnlyHint"] is False
 
     # 6. MCP handle_call_tool dispatch with FakeRepository
     class _FakeRepo:
@@ -723,6 +728,7 @@ async def test_multiproject_isolation_and_leakage_guards(
         agent_id="agent-b",
         project_id="repo-b",
         tenant_id="default",
+        domain_id="platform-engramory",
         scopes=frozenset({"agent", "project"}),
     )
     with pytest.raises(GovernedWriteRejected, match="Cross-project doc_id collision"):
@@ -1025,7 +1031,10 @@ Body without any markdown headings at all.
             self.embedding_batches: list[tuple[list[tuple[str, list[float]]], str]] = []
             self.docs: dict[str, KBDocument] = {}
 
-        async def delete_kb_sections_for_doc(self, tenant_id: str, doc_id: str) -> int:
+        async def delete_kb_sections_for_doc(
+            self, tenant_id: str, doc_id: str, *, project_id: str | None = None
+        ) -> int:
+            del tenant_id, project_id
             self.deleted_doc_ids.append(doc_id)
             removed = len(self.sections.pop(doc_id, []))
             return removed

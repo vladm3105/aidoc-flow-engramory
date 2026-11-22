@@ -18,8 +18,10 @@ Tools:
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
+import math
 import socket
 import sys
 import threading
@@ -41,11 +43,52 @@ from engramory.access.jwt_auth import (
     claims_to_actor_context,
 )
 from engramory.access.surface import AccessSurface, AuthzError, GovernedWriteRejected
+from engramory.core.models import ValidationError
 from engramory.core.repository import StoreUnavailable
 
 logger = logging.getLogger(__name__)
 
 MCP_PROTOCOL_VERSION = "2024-11-05"
+MAX_MCP_INLINE_BLOB_BYTES = 4 * 1024 * 1024
+
+
+def _coerce_int(value: Any, default: int, *, name: str) -> int:
+    """Strictly coerce MCP integer arguments, rejecting booleans and non-integral values."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        raise ValidationError(f"Invalid integer for '{name}': boolean not allowed")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            raise ValidationError(f"Invalid integer for '{name}': {value!r}")
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError as exc:
+            raise ValidationError(f"Invalid integer for '{name}': {value!r}") from exc
+    raise ValidationError(f"Invalid integer for '{name}': expected integer")
+
+
+def _format_context_slice_digest(
+    task_id: str, ancestors: Sequence[Mapping[str, Any]], max_tokens: int
+) -> str:
+    """Render bounded compact digest text from AccessSurface context_slice ancestors."""
+    header = f"=== AIDOC SLICED CONTEXT: TASK [{task_id}] ==="
+    footer = f"<!-- Compaction: budget {max_tokens} -->\n=== END OF DIGEST ==="
+    body = format_context_slice_markdown(task_id, ancestors)
+    full = f"{header}\n\n{body}\n\n{footer}"
+    max_chars = max(64, int(max(1, max_tokens) * 3.8))
+    if len(full) <= max_chars:
+        return full
+    overhead = len(header) + len(footer) + 6
+    if overhead >= max_chars:
+        return f"{header}\n{footer}"[:max_chars]
+    keep = max(16, max_chars - overhead - 20)
+    return f"{header}\n\n{body[:keep]}\n...[truncated]\n\n{footer}"
+
 
 TOOLS_SCHEMA: list[dict[str, Any]] = [
     {
@@ -309,16 +352,6 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     "items": {"type": "string"},
                     "description": "Additional terms to scrub on import",
                 },
-                "verify_integrity": {
-                    "type": "boolean",
-                    "default": True,
-                    "description": "Verify mandatory passport_sha256 digest",
-                },
-                "allow_type_override": {
-                    "type": "boolean",
-                    "default": False,
-                    "description": "Allow cross-archetype brain import",
-                },
             },
             "required": ["passport", "evidence_ref"],
         },
@@ -500,6 +533,75 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "Visibility scope (project, domain, space)",
                     "default": "project",
+                },
+            },
+            "required": ["sha256"],
+        },
+    },
+    {
+        "name": "blob_put",
+        "description": (
+            "Governed write of a raw binary blob (<= 4 MiB base64 or workspace-confined "
+            "file_path) into PostgreSQL CAS storage."
+        ),
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Workspace-confined local file path to store",
+                },
+                "data_base64": {
+                    "type": "string",
+                    "description": "Base64-encoded payload (<= 4 MiB decoded)",
+                },
+                "content_type": {
+                    "type": "string",
+                    "default": "application/octet-stream",
+                },
+                "scope": {
+                    "type": "string",
+                    "description": "Visibility scope (project, domain, space)",
+                    "default": "project",
+                },
+                "metadata": {
+                    "type": "object",
+                    "description": "Optional governed metadata JSON object",
+                },
+            },
+        },
+    },
+    {
+        "name": "blob_get",
+        "description": "Governed bounded read of a CAS blob by SHA-256 returning base64 bytes.",
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "sha256": {
+                    "type": "string",
+                    "description": "64-character hex SHA-256 content address",
+                },
+                "scope": {
+                    "type": "string",
+                    "description": "Visibility scope (project, domain, space)",
+                    "default": "project",
+                },
+                "max_bytes": {
+                    "type": "integer",
+                    "description": "Maximum bytes to read (capped by surface limit)",
+                    "default": MAX_MCP_INLINE_BLOB_BYTES,
                 },
             },
             "required": ["sha256"],
@@ -907,9 +1009,9 @@ class McpServer:
                 hits = await self._surface.memory_search(
                     call_ctx,
                     query=arguments["query"],
-                    k=arguments.get("k", 8),
+                    k=_coerce_int(arguments.get("k"), 8, name="k"),
                     scope=arguments.get("scope", "agent"),
-                    token_budget=2000 if raw_budget is None else int(raw_budget),
+                    token_budget=_coerce_int(raw_budget, 2000, name="token_budget"),
                     **extra_mem_kwargs,
                 )
                 formatted = [
@@ -1001,7 +1103,7 @@ class McpServer:
                 health = await self._surface.memory_learning_health(
                     call_ctx,
                     project_id=req_proj,
-                    limit=int(arguments.get("limit", 500)),
+                    limit=_coerce_int(arguments.get("limit"), 500, name="limit"),
                     scope=str(arguments.get("scope", "project")),
                 )
                 return {"content": [{"type": "text", "text": json.dumps(health, indent=2)}]}
@@ -1083,15 +1185,13 @@ class McpServer:
                     "passport": dict(arguments["passport"]),
                     "evidence_ref": str(arguments["evidence_ref"]),
                     "target_domain_id": arguments.get("target_domain_id"),
+                    "verify_integrity": True,
+                    "allow_type_override": False,
                 }
                 if arguments.get("brain_variant"):
                     imp_kwargs["brain_variant"] = str(arguments["brain_variant"])
                 if imp_redact_terms:
                     imp_kwargs["redact_terms"] = imp_redact_terms
-                if "verify_integrity" in arguments:
-                    imp_kwargs["verify_integrity"] = bool(arguments["verify_integrity"])
-                if "allow_type_override" in arguments:
-                    imp_kwargs["allow_type_override"] = bool(arguments["allow_type_override"])
                 imported = await self._surface.agent_brain_import(
                     call_ctx,
                     **imp_kwargs,
@@ -1104,7 +1204,7 @@ class McpServer:
                     variant_a=str(arguments["variant_a"]),
                     variant_b=str(arguments["variant_b"]),
                     query=arguments.get("query"),
-                    k=int(arguments.get("k", 5)),
+                    k=_coerce_int(arguments.get("k"), 5, name="k"),
                     scope=str(arguments.get("scope", "agent")),
                     domain_id=arguments.get("domain_id"),
                     specialization=arguments.get("specialization"),
@@ -1129,23 +1229,26 @@ class McpServer:
                     text=arguments["text"],
                     evidence_ref=arguments["evidence_ref"],
                     scope=arguments.get("scope", "project"),
-                    version=arguments.get("version", 1),
+                    version=_coerce_int(arguments.get("version"), 1, name="version"),
                 )
                 return {"content": [{"type": "text", "text": f"Ingested section {sec_id}"}]}
 
             elif name == "knowledge_search":
+                raw_k = arguments["k"] if "k" in arguments else arguments.get("limit")
                 search_kwargs: dict[str, Any] = {
                     "query": arguments["query"],
                     "domain_id": arguments.get("domain_id"),
                     "scope": arguments.get("scope", "project"),
-                    "limit": int(arguments.get("k", arguments.get("limit", 5))),
+                    "limit": _coerce_int(raw_k, 5, name="k"),
                 }
                 if "modality" in arguments and arguments["modality"] is not None:
                     search_kwargs["modality"] = str(arguments["modality"])
                 if "expand_graph" in arguments:
                     search_kwargs["expand_graph"] = bool(arguments["expand_graph"])
                 if "graph_depth" in arguments and arguments["graph_depth"] is not None:
-                    search_kwargs["graph_depth"] = int(arguments["graph_depth"])
+                    search_kwargs["graph_depth"] = _coerce_int(
+                        arguments["graph_depth"], 1, name="graph_depth"
+                    )
 
                 sections = await self._surface.knowledge_search(
                     call_ctx,
@@ -1177,6 +1280,7 @@ class McpServer:
                     file_path=arguments["file_path"],
                     evidence_ref=arguments.get("evidence_ref"),
                     scope=arguments.get("scope", "project"),
+                    domain_id=arguments.get("domain_id"),
                     embed=bool(arguments.get("embed", True)),
                     project_graph=bool(arguments.get("project_graph", True)),
                     enforce_project_boundary=enforce_proj,
@@ -1191,12 +1295,68 @@ class McpServer:
                 )
                 return {"content": [{"type": "text", "text": json.dumps(head_res, indent=2)}]}
 
+            elif name == "blob_put":
+                enforce_proj = self._auth_enabled and ("space" not in call_ctx.scopes)
+                raw_fp = arguments.get("file_path")
+                raw_b64 = arguments.get("data_base64")
+                if raw_fp is not None and raw_b64 is not None:
+                    raise ValidationError(
+                        "blob_put accepts either 'file_path' or 'data_base64', not both"
+                    )
+                if raw_fp is None and raw_b64 is None:
+                    raise ValidationError("blob_put requires either 'file_path' or 'data_base64'")
+                decoded_data: bytes | None = None
+                if raw_b64 is not None:
+                    if not isinstance(raw_b64, str):
+                        raise ValidationError("blob_put 'data_base64' must be a base64 string")
+                    stripped_b64 = raw_b64.strip()
+                    if len(stripped_b64) > (MAX_MCP_INLINE_BLOB_BYTES * 4) // 3 + 16:
+                        raise ValidationError("blob_put 'data_base64' exceeds maximum payload size")
+                    try:
+                        decoded_data = base64.b64decode(stripped_b64, validate=True)
+                    except ValueError as exc:
+                        raise ValidationError("Invalid base64 payload for blob_put") from exc
+                    if len(decoded_data) > MAX_MCP_INLINE_BLOB_BYTES:
+                        raise ValidationError("blob_put decoded payload exceeds 4 MiB limit")
+                raw_meta = arguments.get("metadata")
+                if raw_meta is not None and not isinstance(raw_meta, Mapping):
+                    raise ValidationError("blob_put 'metadata' must be a JSON object")
+                put_res = await self._surface.blob_put(
+                    call_ctx,
+                    file_path=str(raw_fp) if raw_fp is not None else None,
+                    data=decoded_data,
+                    content_type=str(arguments.get("content_type", "application/octet-stream")),
+                    scope=str(arguments.get("scope", "project")),
+                    metadata=raw_meta,
+                    enforce_project_boundary=enforce_proj,
+                )
+                return {"content": [{"type": "text", "text": json.dumps(put_res, indent=2)}]}
+
+            elif name == "blob_get":
+                max_bytes = _coerce_int(
+                    arguments.get("max_bytes"), MAX_MCP_INLINE_BLOB_BYTES, name="max_bytes"
+                )
+                if max_bytes <= 0:
+                    raise ValidationError("blob_get 'max_bytes' must be positive")
+                raw_bytes = await self._surface.blob_get(
+                    call_ctx,
+                    sha256=str(arguments["sha256"]),
+                    scope=str(arguments.get("scope", "project")),
+                    max_bytes=max_bytes,
+                )
+                payload = {
+                    "sha256": str(arguments["sha256"]),
+                    "byte_size": len(raw_bytes),
+                    "data_base64": base64.b64encode(raw_bytes).decode("ascii"),
+                }
+                return {"content": [{"type": "text", "text": json.dumps(payload, indent=2)}]}
+
             elif name == "graph_neighbors":
                 neighbors = await self._surface.graph_neighbors(
                     call_ctx,
                     id=arguments["id"],
                     rel=arguments.get("rel"),
-                    depth=arguments.get("depth", 1),
+                    depth=_coerce_int(arguments.get("depth"), 1, name="depth"),
                     scope=arguments.get("scope", "project"),
                 )
                 return {
@@ -1209,15 +1369,17 @@ class McpServer:
                 from engramory.core.docs_tools import resolve_confined_repo_path
 
                 scope = str(arguments.get("scope", "project"))
-                depth = int(arguments.get("depth", 6))
+                depth = _coerce_int(arguments.get("depth"), 6, name="depth")
                 layers = arguments.get("layers")
-                max_tokens = int(arguments.get("max_tokens", 2000))
+                max_tokens = _coerce_int(arguments.get("max_tokens"), 2000, name="max_tokens")
                 fmt = str(arguments.get("format", "json"))
                 offline = bool(arguments.get("offline", False))
                 ws_dir = arguments.get("workspace_dir")
                 enforce_project = self._auth_enabled and ("space" not in call_ctx.scopes)
+                used_local_digest = False
+                local_digest_text = ""
 
-                if offline or fmt == "digest":
+                if offline:
                     await self._surface._decide(
                         call_ctx,
                         "context_slice",
@@ -1228,7 +1390,8 @@ class McpServer:
                         project_id=call_ctx.project_id,
                         enforce_project_boundary=enforce_project,
                     )
-                    local_res = slice_local_context(
+                    local_res = await asyncio.to_thread(
+                        slice_local_context,
                         confined_ws,
                         task_id=arguments["task_id"],
                         depth=depth,
@@ -1255,7 +1418,8 @@ class McpServer:
                             project_id=call_ctx.project_id,
                             enforce_project_boundary=enforce_project,
                         )
-                        local_res = slice_local_context(
+                        local_res = await asyncio.to_thread(
+                            slice_local_context,
                             confined_ws,
                             task_id=arguments["task_id"],
                             depth=depth,
@@ -1264,8 +1428,20 @@ class McpServer:
                             output_format=fmt,
                             allow_sibling_lookup=not enforce_project,
                         )
+                        if fmt == "digest":
+                            used_local_digest = True
+                            local_digest_text = str(local_res["digest"])
                         ancestors = local_res["ancestors"]
 
+                if fmt == "digest":
+                    digest_text = (
+                        local_digest_text
+                        if used_local_digest
+                        else _format_context_slice_digest(
+                            str(arguments["task_id"]), ancestors, max_tokens
+                        )
+                    )
+                    return {"content": [{"type": "text", "text": digest_text}]}
                 if fmt == "markdown":
                     md_text = format_context_slice_markdown(arguments["task_id"], ancestors)
                     return {"content": [{"type": "text", "text": md_text}]}
@@ -1279,7 +1455,7 @@ class McpServer:
                 from engramory.core.docs_tools import resolve_confined_repo_path
 
                 scope = str(arguments.get("scope", "project"))
-                depth = int(arguments.get("depth", 6))
+                depth = _coerce_int(arguments.get("depth"), 6, name="depth")
                 offline = bool(arguments.get("offline", False))
                 ws_dir = arguments.get("workspace_dir")
                 enforce_project = self._auth_enabled and ("space" not in call_ctx.scopes)
@@ -1295,7 +1471,8 @@ class McpServer:
                         project_id=call_ctx.project_id,
                         enforce_project_boundary=enforce_project,
                     )
-                    local_blast = local_blast_radius(
+                    local_blast = await asyncio.to_thread(
+                        local_blast_radius,
                         confined_ws,
                         doc_id=arguments["doc_id"],
                         depth=depth,
@@ -1315,7 +1492,8 @@ class McpServer:
                             project_id=call_ctx.project_id,
                             enforce_project_boundary=enforce_project,
                         )
-                        local_blast = local_blast_radius(
+                        local_blast = await asyncio.to_thread(
+                            local_blast_radius,
                             confined_ws,
                             doc_id=arguments["doc_id"],
                             depth=depth,
@@ -1392,6 +1570,11 @@ class McpServer:
 
         except (AuthzError, GovernedWriteRejected) as exc:
             return {"isError": True, "content": [{"type": "text", "text": f"Denied: {exc}"}]}
+        except ValidationError as exc:
+            return {
+                "isError": True,
+                "content": [{"type": "text", "text": f"Invalid input: {exc}"}],
+            }
         except StoreUnavailable as exc:
             return {
                 "isError": True,
@@ -1413,6 +1596,8 @@ class McpServer:
             }
         req_id = request.get("id")
         method = request.get("method")
+        if "id" not in request or (isinstance(method, str) and method.startswith("notifications/")):
+            return None
         raw_params = request.get("params")
         params = raw_params if isinstance(raw_params, Mapping) else {}
 
@@ -1426,8 +1611,8 @@ class McpServer:
                     "serverInfo": {"name": "engramory-mcp", "version": "0.3.0"},
                 },
             }
-        elif method == "notifications/initialized":
-            return None
+        elif method == "ping":
+            return {"jsonrpc": "2.0", "id": req_id, "result": {}}
         elif method == "tools/list":
             return {
                 "jsonrpc": "2.0",
@@ -1435,9 +1620,34 @@ class McpServer:
                 "result": {"tools": TOOLS_SCHEMA},
             }
         elif method == "tools/call":
-            tool_name = str(params.get("name") or "")
+            if not isinstance(raw_params, Mapping):
+                return {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "error": {"code": -32602, "message": "Invalid params: expected object"},
+                }
+            raw_name = params.get("name")
             raw_args = params.get("arguments")
-            tool_args = dict(raw_args) if isinstance(raw_args, Mapping) else {}
+            if not isinstance(raw_name, str) or not raw_name.strip():
+                return {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "error": {
+                        "code": -32602,
+                        "message": "Invalid params: tools/call requires non-empty string 'name'",
+                    },
+                }
+            if raw_args is not None and not isinstance(raw_args, Mapping):
+                return {
+                    "jsonrpc": "2.0",
+                    "id": req_id,
+                    "error": {
+                        "code": -32602,
+                        "message": "Invalid params: 'arguments' must be an object",
+                    },
+                }
+            tool_name = raw_name.strip()
+            tool_args = dict(raw_args) if raw_args is not None else {}
             call_result = await self.handle_call_tool(tool_name, tool_args, ctx=ctx)
             return {
                 "jsonrpc": "2.0",
@@ -1715,16 +1925,32 @@ class McpServer:
                 "MCP stdio transport cannot be used with --auth enabled (ADR-10); "
                 "use '--transport sse' with Bearer token verification"
             )
+        max_line_bytes = 16 * 1024 * 1024
         loop = asyncio.get_running_loop()
-        reader = asyncio.StreamReader()
-        protocol = asyncio.StreamReaderProtocol(reader)
-        await loop.connect_read_pipe(lambda: protocol, sys.stdin)
+        raw_reader = asyncio.StreamReader(limit=max_line_bytes)
+        reader: asyncio.StreamReader | None = raw_reader
+        protocol = asyncio.StreamReaderProtocol(raw_reader)
+        try:
+            await loop.connect_read_pipe(lambda: protocol, sys.stdin)
+        except (NotImplementedError, OSError, AttributeError):
+            reader = None
 
-        while not reader.at_eof():
+        async def _readline() -> bytes:
+            if reader is not None:
+                return await reader.readline()
+            raw_stream = getattr(sys.stdin, "buffer", sys.stdin)
+            line_raw = await asyncio.to_thread(raw_stream.readline)
+            if isinstance(line_raw, str):
+                return line_raw.encode("utf-8")
+            return bytes(line_raw)
+
+        while reader is None or not reader.at_eof():
             try:
-                line = await reader.readline()
+                line = await _readline()
                 if not line:
                     break
+                if len(line) > max_line_bytes:
+                    raise ValueError(f"stdio message exceeds {max_line_bytes} byte limit")
                 text = line.decode("utf-8").strip()
                 if not text:
                     continue
@@ -1789,12 +2015,19 @@ class McpServer:
                 project_id=call_ctx.project_id,
                 enforce_project_boundary=enforce_project,
             )
-            parsed = parse_markdown_document(
+            trust_fm = (
+                call_ctx.domain_id is not None
+                or "domain" in call_ctx.scopes
+                or "space" in call_ctx.scopes
+            )
+            parsed = await asyncio.to_thread(
+                parse_markdown_document,
                 target,
                 tenant_id=call_ctx.tenant_id,
                 project_id=None if scope in ("domain", "space") else call_ctx.project_id,
                 domain_id=call_ctx.domain_id,
                 scope=scope,
+                trust_frontmatter_domain=trust_fm,
             )
             if parsed.kb_document is None:
                 raise ValueError(
@@ -1814,11 +2047,12 @@ class McpServer:
             from engramory.core.docs_tools import format_runbook_slice
 
             fmt = str(arguments.get("format", "json"))
-            token_budget = int(arguments.get("token_budget", 2000))
+            token_budget = _coerce_int(arguments.get("token_budget"), 2000, name="token_budget")
             doc_id = arguments.get("doc_id")
             alert_id = arguments.get("alert_id")
             max_tier = arguments.get("max_tier")
             repo_path_arg = arguments.get("repo_path")
+            req_domain = arguments.get("domain_id")
 
             res = await self._surface.docs_slice_runbook(
                 call_ctx,
@@ -1826,6 +2060,7 @@ class McpServer:
                 alert_id=alert_id,
                 max_tier=max_tier,
                 scope=scope,
+                domain_id=req_domain,
                 include_memories=bool(arguments.get("include_memories", True)),
                 token_budget=token_budget,
                 format=fmt,
@@ -1836,11 +2071,13 @@ class McpServer:
                     project_id=call_ctx.project_id,
                     enforce_project_boundary=enforce_project,
                 )
-                local_slice = slice_local_runbooks(
+                local_slice = await asyncio.to_thread(
+                    slice_local_runbooks,
                     confined,
                     doc_id=doc_id,
                     alert_id=alert_id,
                     max_tier=max_tier,
+                    domain_id=str(req_domain) if req_domain is not None else call_ctx.domain_id,
                     token_budget=token_budget,
                     output_format="json",
                 )
@@ -1866,7 +2103,8 @@ class McpServer:
                 project_id=call_ctx.project_id,
                 enforce_project_boundary=enforce_project,
             )
-            report = lint_repo(
+            report = await asyncio.to_thread(
+                lint_repo,
                 target,
                 strict=bool(arguments.get("strict", False)),
                 require_frontmatter=bool(arguments.get("require_frontmatter", False)),
@@ -1885,7 +2123,8 @@ class McpServer:
                 project_id=call_ctx.project_id,
                 enforce_project_boundary=enforce_project,
             )
-            report = check_repo_drift(
+            report = await asyncio.to_thread(
+                check_repo_drift,
                 target,
                 base_ref=str(arguments.get("base_ref", "HEAD~1")),
                 head_ref=str(arguments.get("head_ref", "HEAD")),
@@ -1905,7 +2144,8 @@ class McpServer:
             )
             # Read-only MCP tool: block disk writes when remote auth is enabled
             allow_write = False if self._auth_enabled else bool(arguments.get("write", False))
-            report = export_repo_llms(
+            report = await asyncio.to_thread(
+                export_repo_llms,
                 target,
                 write_files=allow_write,
                 include_full=bool(arguments.get("full", False)),
@@ -1925,7 +2165,8 @@ class McpServer:
             )
             # Enforce dry_run=True when remote auth is enabled; default to True otherwise
             dry_run = True if self._auth_enabled else bool(arguments.get("dry_run", True))
-            report = smoke_run_green_steps(
+            report = await asyncio.to_thread(
+                smoke_run_green_steps,
                 target,
                 doc_id=arguments.get("doc_id"),
                 dry_run=dry_run,
@@ -1964,7 +2205,8 @@ class McpServer:
                 else None
             )
             dry_run = True if self._auth_enabled else bool(arguments.get("dry_run", True))
-            report = stage_portal_bundle(
+            report = await asyncio.to_thread(
+                stage_portal_bundle,
                 target,
                 output_dir=confined_out,
                 dry_run=dry_run,
@@ -2003,7 +2245,8 @@ class McpServer:
                 project_id=call_ctx.project_id,
                 enforce_project_boundary=enforce_project,
             )
-            report = validate_sdd_graph(
+            report = await asyncio.to_thread(
+                validate_sdd_graph,
                 target,
                 check_invariants=bool(arguments.get("invariants", False)),
                 allow_sibling_lookup=not enforce_project,
@@ -2024,7 +2267,8 @@ class McpServer:
                 project_id=call_ctx.project_id,
                 enforce_project_boundary=enforce_project,
             )
-            report = check_sdd_invariants(
+            report = await asyncio.to_thread(
+                check_sdd_invariants,
                 target,
                 base_ref=str(arguments.get("base_ref", "origin/dev")),
                 chg_type=str(arguments.get("change_type", "CODE2C")),
@@ -2057,7 +2301,8 @@ class McpServer:
                 if raw_pol
                 else None
             )
-            report = lint_stack_policy(
+            report = await asyncio.to_thread(
+                lint_stack_policy,
                 target,
                 policy_path=confined_pol,
             )
@@ -2164,7 +2409,7 @@ DOCS_TOOLS_SCHEMA: list[dict[str, Any]] = [
             "Generate deterministic, D14-scrubbed /llms.txt and /llms-full.txt manifests."
         ),
         "annotations": {
-            "readOnlyHint": True,
+            "readOnlyHint": False,
             "destructiveHint": False,
             "idempotentHint": True,
         },
@@ -2185,7 +2430,7 @@ DOCS_TOOLS_SCHEMA: list[dict[str, Any]] = [
             "(defaults to dry_run=true bash -n syntax check over MCP)."
         ),
         "annotations": {
-            "readOnlyHint": True,
+            "readOnlyHint": False,
             "destructiveHint": False,
             "idempotentHint": True,
         },
@@ -2228,7 +2473,7 @@ DOCS_TOOLS_SCHEMA: list[dict[str, Any]] = [
             "scrubbing (forces dry_run=true when remote auth is enabled)."
         ),
         "annotations": {
-            "readOnlyHint": True,
+            "readOnlyHint": False,
             "destructiveHint": False,
             "idempotentHint": True,
         },

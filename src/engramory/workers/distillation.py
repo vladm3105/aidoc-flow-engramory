@@ -6,20 +6,151 @@ Worker-plane code: uses Repository directly by design; it is NOT a SPEC-01 agent
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
-from engramory.core.models import AgentProfile, Episode, Memory
+from engramory.access.poisoning_guard import MemoryPoisoningError, inspect_memory_write
+from engramory.core.models import MEMORY_TYPES, AgentProfile, Episode, Memory
 from engramory.core.repository import Repository
 from engramory.ports import LLMPort, VectorPort
 
 logger = logging.getLogger(__name__)
 
-# Fallback when LLMPort is not supplied or fails
+# Fallback when LLMPort is not supplied or returns wrong dims
 INTERIM_EMBEDDING_MODEL = "none/interim-reflect"
 DEFAULT_EMBED_MODEL = "text-embedding-3-small"
 EXPECTED_EMBED_DIMS = 1536
+_EMBED_MAX_ATTEMPTS = 3
+
+
+@dataclass(frozen=True, slots=True)
+class ConsolidationStats:
+    """Summary counters from a tenant/agent memory consolidation pass."""
+
+    tenant_id: str
+    agent_id: str | None = None
+    merged: int = 0
+    expired: int = 0
+    run_id: str | None = None
+
+
+async def _synthesize_with_llm(
+    llm: LLMPort,
+    batch: Sequence[Episode],
+    *,
+    distiller_model: str,
+) -> dict[str, dict[str, Any]]:
+    """Invoke llm.chat() to distill batch summaries/types, or {} on mock/invalid output."""
+    chat_fn = getattr(llm, "chat", None)
+    if chat_fn is None:
+        return {}
+    prompt_items = [
+        {"episode_id": ep.id or str(idx), "kind": ep.kind, "content": ep.content_raw[:2000]}
+        for idx, ep in enumerate(batch)
+    ]
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Distill each agent experience episode into JSON array items with keys "
+                "'episode_id', 'summary', and 'type' (episodic|semantic|procedural)."
+            ),
+        },
+        {"role": "user", "content": json.dumps(prompt_items, ensure_ascii=False)},
+    ]
+    try:
+        raw = await chat_fn(messages=messages, model=distiller_model)
+    except Exception as exc:  # noqa: BLE001  # reason: graceful fallback to verbatim episode distillation when chat fails
+        logger.debug("Optional llm.chat() distillation skipped (%s)", exc)
+        return {}
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return {}
+    items = (
+        parsed
+        if isinstance(parsed, list)
+        else parsed.get("items")
+        if isinstance(parsed, dict)
+        else None
+    )
+    if not isinstance(items, list):
+        return {}
+    distilled: dict[str, dict[str, Any]] = {}
+    for entry in items:
+        if not isinstance(entry, Mapping):
+            continue
+        eid = str(entry.get("episode_id") or "").strip()
+        summary = str(entry.get("summary") or "").strip()
+        mtype = str(entry.get("type") or "episodic").strip().lower()
+        if not eid or not summary:
+            continue
+        if mtype not in MEMORY_TYPES:
+            mtype = "episodic"
+        distilled[eid] = {"summary": summary, "type": mtype}
+    return distilled
+
+
+async def _embed_with_retries(
+    llm: LLMPort,
+    *,
+    texts: Sequence[str],
+    model_name: str,
+    max_attempts: int = _EMBED_MAX_ATTEMPTS,
+) -> Sequence[Sequence[float]]:
+    last_exc: Exception | None = None
+    for attempt in range(max_attempts):
+        try:
+            return await llm.embed(texts=texts, model=model_name)
+        except Exception as exc:
+            last_exc = exc
+            if attempt + 1 < max_attempts:
+                await asyncio.sleep(0.05 * (2**attempt))
+    if last_exc is not None:
+        raise last_exc
+    return []
+
+
+async def consolidate(
+    repo: Repository,
+    *,
+    tenant_id: str,
+    agent_id: str | None = None,
+    project_id: str | None = None,
+    domain_id: str | None = None,
+    scope: str | None = None,
+    expire_below_confidence: float = 0.2,
+    min_age_days: int = 30,
+) -> ConsolidationStats:
+    """Merge duplicate memories and expire stale low-confidence memories."""
+    fn = getattr(repo, "consolidate_memories", None)
+    if fn is None or not callable(fn):
+        return ConsolidationStats(tenant_id=tenant_id, agent_id=agent_id)
+    res = await fn(
+        tenant_id=tenant_id,
+        agent_id=agent_id,
+        project_id=project_id,
+        domain_id=domain_id,
+        scope=scope,
+        expire_below_confidence=expire_below_confidence,
+        min_age_days=min_age_days,
+    )
+    if not isinstance(res, Mapping):
+        return ConsolidationStats(tenant_id=tenant_id, agent_id=agent_id)
+    raw_run = res.get("run_id")
+    return ConsolidationStats(
+        tenant_id=tenant_id,
+        agent_id=agent_id,
+        merged=int(res.get("merged", 0) or 0),
+        expired=int(res.get("expired", 0) or 0),
+        run_id=str(raw_run) if raw_run is not None else None,
+    )
 
 
 async def reflect(
@@ -86,7 +217,33 @@ async def reflect(
     # Process episodes in batches
     for i in range(0, len(episodes), batch_size):
         batch = episodes[i : i + batch_size]
-        texts = [ep.content_raw for ep in batch]
+        synth_map = (
+            await _synthesize_with_llm(llm, batch, distiller_model=eff_distiller)
+            if llm is not None
+            else {}
+        )
+        batch_drafts: list[tuple[Episode, str, str]] = []
+        for idx, ep in enumerate(batch):
+            if ep.id is None:
+                raise RuntimeError("hydrated episode missing id")
+            synth = synth_map.get(ep.id) or synth_map.get(str(idx))
+            distilled_summary = ep.content_raw
+            distilled_type = "episodic"
+            if synth is not None:
+                try:
+                    distilled_summary = inspect_memory_write(
+                        str(synth["summary"]),
+                        tenant_id=ep.tenant_id,
+                        writer_agent_id=ep.agent_id,
+                        target="distillation",
+                    )
+                    distilled_type = str(synth["type"])
+                except MemoryPoisoningError:
+                    distilled_summary = ep.content_raw
+                    distilled_type = "episodic"
+            batch_drafts.append((ep, distilled_summary, distilled_type))
+
+        texts = [summary_text for _, summary_text, _ in batch_drafts]
 
         embeddings: Sequence[Sequence[float]] | None = None
         model_name = next(
@@ -99,16 +256,14 @@ async def reflect(
         )
         if llm is not None and vector is not None:
             try:
-                embeddings = await llm.embed(texts=texts, model=model_name)
-            except Exception as exc:
+                embeddings = await _embed_with_retries(llm, texts=texts, model_name=model_name)
+            except Exception as exc:  # noqa: BLE001  # reason: degraded LLM embedding must fall back to unindexed lexical memory
                 logger.warning(
                     "Distillation embedding failed for batch (will continue unindexed): %s", exc
                 )
                 embeddings = None
 
-        for idx, episode in enumerate(batch):
-            if episode.id is None:
-                raise RuntimeError("hydrated episode missing id")
+        for idx, (episode, distilled_summary, distilled_type) in enumerate(batch_drafts):
             vec_candidate = (
                 embeddings[idx] if (embeddings is not None and idx < len(embeddings)) else None
             )
@@ -151,8 +306,8 @@ async def reflect(
             )
             memory = Memory(
                 content_raw=episode.content_raw,
-                summary=episode.content_raw,
-                type="episodic",
+                summary=distilled_summary,
+                type=distilled_type,
                 embedding_model=emb_model,
                 embedding_dims=len(vec_candidate)
                 if (has_vector and vec_candidate is not None)

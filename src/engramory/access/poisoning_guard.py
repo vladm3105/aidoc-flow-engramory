@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import re
 import unicodedata
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -83,7 +83,7 @@ _SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     (
         "secret_dsn_credentials",
         re.compile(
-            r"\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|rediss|amqp|nats)"
+            r"\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|rediss?|amqp|nats|bolt(?:\+s)?|neo4j(?:\+s)?)"
             r"://[^:\s/@]+:[^@\s]+@[^\s]+"
         ),
     ),
@@ -99,6 +99,14 @@ _PORTABLE_REDACT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("[REDACTED_SECRET]", _PRIVATE_KEY_BLOCK_RE),
     *_SECRET_PATTERNS,
     (
+        "[REDACTED_DSN]",
+        re.compile(
+            r"\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|rediss?|amqp|nats|bolt(?:\+s)?|neo4j(?:\+s)?)"
+            r"://[^\s)\"'>]+",
+            re.IGNORECASE,
+        ),
+    ),
+    (
         "[REDACTED_EMAIL]",
         re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
     ),
@@ -111,6 +119,17 @@ _PORTABLE_REDACT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
         re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?\b"),
     ),
     (
+        "[REDACTED_IP]",
+        re.compile(
+            r"(?<![A-Za-z0-9:])(?:"
+            r"\[[0-9a-fA-F:]+(?:%[A-Za-z0-9._-]+)?\](?::\d{1,5})?"
+            r"|(?:[0-9a-fA-F]{1,4}:){3,7}[0-9a-fA-F]{1,4}"
+            r"|(?:[0-9a-fA-F]{1,4}:){1,7}:(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4})*)?"
+            r"|::(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4})*)?"
+            r")(?![A-Za-z0-9:])"
+        ),
+    ),
+    (
         "[REDACTED_ID]",
         re.compile(
             r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
@@ -118,12 +137,13 @@ _PORTABLE_REDACT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ),
 ]
 
+_PORTABLE_STOP_TERMS = frozenset(
+    {"default", "dev", "prod", "stage", "agent", "project", "domain", "space"}
+)
+
 
 def sanitize_portable_text(text: str, *, redact_terms: Sequence[str] = ()) -> tuple[str, int]:
-    """Scrub secrets, emails, URLs, IPs, UUIDs, and tenant/project identifiers from portable skills.
-
-    Returns (sanitized_text, redaction_count).
-    """
+    """Scrub secrets, DSNs, emails, URLs, IPv4/IPv6, UUIDs, and tenant identifiers."""
     cleaned = _normalize_for_match(text)
     total_redactions = 0
     for replacement, pattern in _PORTABLE_REDACT_PATTERNS:
@@ -132,14 +152,19 @@ def sanitize_portable_text(text: str, *, redact_terms: Sequence[str] = ()) -> tu
         total_redactions += count
 
     sorted_terms = sorted(
-        {t.strip() for t in redact_terms if t and t.strip()},
+        {_normalize_for_match(str(t)).strip() for t in redact_terms if t and str(t).strip()},
         key=len,
         reverse=True,
     )
     for norm in sorted_terms:
-        if len(norm) < 3 or norm.lower() in {"default", "dev", "prod", "stage", "agent", "project"}:
+        if len(norm) < 2 or norm.lower() in _PORTABLE_STOP_TERMS:
             continue
-        term_re = re.compile(re.escape(norm), re.IGNORECASE)
+        escaped = re.escape(norm)
+        if len(norm) < 4 or (norm[0].isalnum() and norm[-1].isalnum()):
+            pattern_str = rf"(?<![A-Za-z0-9_-]){escaped}(?![A-Za-z0-9_-])"
+        else:
+            pattern_str = escaped
+        term_re = re.compile(pattern_str, re.IGNORECASE)
         cleaned, count = term_re.subn("[REDACTED_TENANT]", cleaned)
         total_redactions += count
 
@@ -147,7 +172,7 @@ def sanitize_portable_text(text: str, *, redact_terms: Sequence[str] = ()) -> tu
 
 
 def sanitize_portable_value(value: Any, *, redact_terms: Sequence[str] = ()) -> tuple[Any, int]:
-    """Recursively scrub strings, lists, and dicts for portable Brain Passports."""
+    """Recursively scrub strings, lists, and Mapping instances for portable Brain Passports."""
     if isinstance(value, str):
         return sanitize_portable_text(value, redact_terms=redact_terms)
     if isinstance(value, list | tuple):
@@ -158,7 +183,7 @@ def sanitize_portable_value(value: Any, *, redact_terms: Sequence[str] = ()) -> 
             out_list.append(cleaned_item)
             total += count
         return out_list, total
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         out_dict: dict[str, Any] = {}
         total = 0
         for k, v in value.items():
@@ -201,15 +226,10 @@ def detect_hard_secrets(text: str) -> list[str]:
 
 def redact_hard_secrets(text: str, *, replacement: str = "[REDACTED-BY-D14]") -> str:
     """Scrub forbidden control/bidi characters and redact multiline PEM keys and secrets."""
-    cleaned = _CTRL_AND_BIDI_RE.sub("", text)
+    cleaned = _normalize_for_match(text)
     cleaned = _PRIVATE_KEY_BLOCK_RE.sub(replacement, cleaned)
     for _sid, pattern in _SECRET_PATTERNS:
         cleaned = pattern.sub(replacement, cleaned)
-    if detect_hard_secrets(cleaned):
-        cleaned = _normalize_for_match(cleaned)
-        cleaned = _PRIVATE_KEY_BLOCK_RE.sub(replacement, cleaned)
-        for _sid, pattern in _SECRET_PATTERNS:
-            cleaned = pattern.sub(replacement, cleaned)
     return cleaned
 
 

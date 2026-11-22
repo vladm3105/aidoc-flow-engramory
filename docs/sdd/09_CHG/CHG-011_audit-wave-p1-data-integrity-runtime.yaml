@@ -1,0 +1,316 @@
+# CHG-011_audit-wave-p1-data-integrity-runtime.yaml — Wave P1 Data Integrity & Runtime Remediation (PLAN-026 TASK-2)
+
+document_control:
+  project_name: platform-engramory
+  document_id: CHG-011
+  version: '1.0'
+  status: Completed
+  author: Antigravity + Operator
+  created_date: '2026-11-21'
+  last_updated: '2026-11-21'
+  framework_version: 0.96.25
+  revision_history:
+  - version: '1.0'
+    date: '2026-11-21'
+    author: Antigravity + Operator
+    description: Wave P1 (C9-C10, H1-H8, H10-H12, H15) SDD2C change record for PLAN-026 deep-audit remediation.
+id: CHG-011
+doc_id: CHG-011
+chg_id: CHG-011
+status: Completed
+title: "Wave P1 Audit Remediation — CAS Locking, GitSync, JetStream, Passports & Runtime Safety (PLAN-026 TASK-2)"
+classification:
+  type: Type-F
+  weight: C2
+  flow: SDD2C
+metadata:
+  document_type: chg-document
+  layer: 9
+  purpose: governance
+  last_updated: '2026-11-21'
+  change_level:
+    value: C2
+  change_source:
+    value: sdd
+change_control:
+  chg_id: CHG-011
+  status: Completed
+  flow: sdd_to_code
+  flow_code: SDD2C
+  change_level: C2
+  change_source: sdd
+  entry_gate: GATE-SPEC
+  semver_impact: minor
+  version_action: bump
+  author: Antigravity + Operator
+  date_proposed: '2026-11-21T21:30:00'
+  date_approved: '2026-11-21T21:31:00'
+  date_implemented: '2026-11-21'
+  supersedes:
+  - docs/archive/CHG-011/SPEC-01_access_surface_v1.2.yaml
+  - docs/archive/CHG-011/SPEC-02_memory_store_v1.1.yaml
+  - docs/archive/CHG-011/SPEC-04_distillation_engine_v1.1.yaml
+  - docs/archive/CHG-011/SPEC-06_ports_portability_v1.1.yaml
+  - docs/archive/CHG-011/SPEC-07_cli_face_v1.1.yaml
+decision:
+  decision_id: DEC-CHG-011
+  title: "Enforce CAS Advisory Locks & kb_blob_projects RLS, Durable JetStream Pull Consumers, Unified AccessSurface CLI/Passport Governance, and Runtime Parser/Context Hardening (PLAN-026 Wave P1)"
+  status: Ratified
+  context: "AUDIT-2026-11-20_deep-review.md identified 14 Wave P1 data-integrity, async runtime, and boundary defects (C9-C10, H1-H8, H10-H12, H15): GitSyncEngine ADDED deletion crash and pre-validation CAS writes (C9); unguarded CAS concurrent overwrite race, project metadata leak, broken put(key), and unbounded blob_get (C10); Core NATS 50ms polling loss and worker tenant spoofing (H1); brain_variant duplicate loop, stubbed LLM distillation/consolidation, and worker starvation (H2); Brain Passport integrity overrides, redaction gaps, and 100-row dedup truncation (H3); ExperienceEvent producer spoofing, missing scope metadata, NaN crash, and episode index collision (H4); department_focus and runbook/media ingestion bypasses (H5); 6 CLI subcommands bypassing AccessSurface (H6); MCP blocking loop starvation, 64 KiB stdio hang, ping/notification/readOnlyHint/digest bugs (H7); 64 KiB PDF truncation, sniffing order, cross-tenant Docling cache, empty section crashes, and missing SDD/ADR stubs (H8); Neo4j $props overwrite and ':' UID collision (H10); fail-open SDD drift/invariants and dead GRAPH-CARD-001 (H11); memory_learning_health agent leak, dead ts_lex, break starvation, and stale KB vectors (H12); and unsafe ScopedContractResolver sibling default + RAM-only LocalFsStorageAdapter (H15)."
+  choice: "Execute PLAN-026 TASK-2 under SDD2C (C2): snapshot and update SPEC-01/02/04/06/07 first; add reversible migration 0012 (kb_blob_projects + kb_blob_aliases + RLS backfill and rescoped uq_episodes_event_id); harden CAS locking, LocalFsStorageAdapter disk persistence, GitSyncEngine, NatsEventsAdapter JetStream pull consumers, Distillation/Consolidation + MemoryCore, Brain Passports, ExperienceEvent, AccessSurface/CLI/MCP parity, Neo4j $props/UIDs, Extraction/Parsers, and ContextTools without touching Wave P2 protected files or adding unapproved dependencies."
+  consequences: "Closes all 14 Wave P1 data-integrity, concurrency, NATS JetStream, passport, CLI/MCP parity, extraction, and graph projection defects with full test and governed docs alignment."
+  alternatives_considered:
+  - option: Drop cross-project CAS deduplication and store duplicate blobs per project
+    rationale_rejected: Wastes storage across multi-project tenants; kb_blob_projects preserves CAS dedup safely with per-project metadata isolation under RLS.
+  - option: Defer JetStream pull consumers and CLI AccessSurface routing to Wave P3
+    rationale_rejected: Leaves 99.98% Core NATS event loss and un-audited CLI governance paths active.
+change_description:
+  what: "Remediate all 14 Wave P1 findings (C9, C10, H1, H2, H3, H4, H5, H6, H7, H8, H10, H11, H12, H15) across db/migrations/, src/engramory/, docs/, docs/sdd/, and tests/ per PLAN-026 TASK-2."
+  why: "Close CAS concurrency races, GitSync crashes, Core NATS event loss, brain variant duplication, Brain Passport integrity gaps, ExperienceEvent spoofing, CLI/MCP parity bypasses, extraction bombs, Neo4j property/UID collisions, and fail-open SDD gates."
+  trigger: "Operator continuation approval after Wave P0 (CHG-010) completion."
+impact_assessment:
+  affected_layers:
+  - layer: SPEC
+    artifacts:
+    - SPEC-01
+    - SPEC-02
+    - SPEC-04
+    - SPEC-06
+    - SPEC-07
+    impact: Updated contracts for CAS project ownership/locks (0012), JetStream pull consumers, LLM distillation/consolidation, Brain Passports, ExperienceEvent validation, CLI AccessSurface routing, and MCP tool parity.
+  - layer: IPLAN
+    artifacts:
+    - IPLAN-11
+    impact: Created executable IPLAN-SWF and SDD-GRAPH v2.0 slice (IPLAN-11 / SLICE-11) for Wave P1.
+  cascade_direction: downstream
+  risk_level: High
+justification: "Directly executes PLAN-026 TASK-2 (Wave P1) following Wave P0 (CHG-010)."
+scope:
+  in_scope:
+  - "Findings C9, C10, H1, H2, H3, H4, H5, H6, H7, H8, H10, H11, H12, H15 code remediation, docs sync, and regression tests"
+  out_of_scope:
+  - "Wave P2 (CHG-012) approval-gated infra/stack/CI files and Wave P3 (CHG-013) pooling/perf/CI services"
+  - "Remotes push or merge into dev/staging/main"
+  files_to_touch: &id001
+  - db/migrations/0012_wave_p1_cas_projects_and_dedup.sql
+  - db/migrations/down/0012_wave_p1_cas_projects_and_dedup.sql
+  - docs/ARCHITECTURE.md
+  - docs/MULTIMODAL_AND_POSTGRES_BLOB_STORAGE.md
+  - docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md
+  - docs/archive/CHG-011/SPEC-01_access_surface_v1.2.yaml
+  - docs/archive/CHG-011/SPEC-02_memory_store_v1.1.yaml
+  - docs/archive/CHG-011/SPEC-04_distillation_engine_v1.1.yaml
+  - docs/archive/CHG-011/SPEC-06_ports_portability_v1.1.yaml
+  - docs/archive/CHG-011/SPEC-07_cli_face_v1.1.yaml
+  - docs/doc-tools/00_INDEX.md
+  - docs/doc-tools/10_DOCUMENTATION_TOOLS_TECHNICAL_REFERENCE.md
+  - docs/sdd/06_SPEC/SPEC-01_access_surface.yaml
+  - docs/sdd/06_SPEC/SPEC-02_memory_store.yaml
+  - docs/sdd/06_SPEC/SPEC-04_distillation_engine.yaml
+  - docs/sdd/06_SPEC/SPEC-06_ports_portability.yaml
+  - docs/sdd/06_SPEC/SPEC-07_cli_face.yaml
+  - docs/sdd/08_IPLAN/IPLAN-00_index.yaml
+  - docs/sdd/08_IPLAN/IPLAN-11_audit-wave-p1-data-integrity-runtime.swf.yaml
+  - docs/sdd/09_CHG/CHG-011_audit-wave-p1-data-integrity-runtime.yaml
+  - docs/sdd/graph/SLICE-11_audit-wave-p1-data-integrity-runtime.graph.yaml
+  - src/engramory/access/authz.py
+  - src/engramory/access/poisoning_guard.py
+  - src/engramory/access/surface.py
+  - src/engramory/adapters/dev/events_nats.py
+  - src/engramory/adapters/dev/graph_neo4j.py
+  - src/engramory/adapters/dev/storage_local.py
+  - src/engramory/adapters/dev/storage_pg.py
+  - src/engramory/adapters/factory.py
+  - src/engramory/cli.py
+  - src/engramory/core/context_tools.py
+  - src/engramory/core/docs_tools.py
+  - src/engramory/core/experience.py
+  - src/engramory/core/extraction/docling.py
+  - src/engramory/core/extraction/multimodal.py
+  - src/engramory/core/extraction/router.py
+  - src/engramory/core/git_sync.py
+  - src/engramory/core/kb_graph.py
+  - src/engramory/core/knowledge.py
+  - src/engramory/core/memory.py
+  - src/engramory/core/parsers/detector.py
+  - src/engramory/core/parsers/html.py
+  - src/engramory/core/parsers/markdown.py
+  - src/engramory/core/parsers/pdf.py
+  - src/engramory/core/parsers/template.py
+  - src/engramory/core/repository.py
+  - src/engramory/mcp/server.py
+  - src/engramory/ports/graph.py
+  - src/engramory/ports/storage.py
+  - src/engramory/workers/distillation.py
+  - src/engramory/workers/runner.py
+  - tests/e2e/test_retrieval.py
+  - tests/security/test_wave_p1_integrity_runtime.py
+  - tests/test_docs_tools.py
+  - tests/test_knowledge_core.py
+  - tests/test_migrations.py
+  - tests/test_plan012_remediation.py
+  - tests/test_storage_pg_blob_cas.py
+  - tests/unit/test_events_nats.py
+implementation:
+  steps:
+  - step: Archive SPEC-01 v1.2 and update SPEC-01 v1.3
+    phase: sdd_lifecycle
+    artifact: SPEC-01
+    archive_path: docs/archive/CHG-011/SPEC-01_access_surface_v1.2.yaml
+    current_version: '1.2'
+    new_version: '1.3'
+    status: Completed
+  - step: Archive SPEC-02 v1.1 and update SPEC-02 v1.2
+    phase: sdd_lifecycle
+    artifact: SPEC-02
+    archive_path: docs/archive/CHG-011/SPEC-02_memory_store_v1.1.yaml
+    current_version: '1.1'
+    new_version: '1.2'
+    status: Completed
+  - step: Archive SPEC-04 v1.1 and update SPEC-04 v1.2
+    phase: sdd_lifecycle
+    artifact: SPEC-04
+    archive_path: docs/archive/CHG-011/SPEC-04_distillation_engine_v1.1.yaml
+    current_version: '1.1'
+    new_version: '1.2'
+    status: Completed
+  - step: Archive SPEC-06 v1.1 and update SPEC-06 v1.2
+    phase: sdd_lifecycle
+    artifact: SPEC-06
+    archive_path: docs/archive/CHG-011/SPEC-06_ports_portability_v1.1.yaml
+    current_version: '1.1'
+    new_version: '1.2'
+    status: Completed
+  - step: Archive SPEC-07 v1.1 and update SPEC-07 v1.2
+    phase: sdd_lifecycle
+    artifact: SPEC-07
+    archive_path: docs/archive/CHG-011/SPEC-07_cli_face_v1.1.yaml
+    current_version: '1.1'
+    new_version: '1.2'
+    status: Completed
+  - step: Create IPLAN-11 (IPLAN-11_audit-wave-p1-data-integrity-runtime.swf.yaml) and SLICE-11_audit-wave-p1-data-integrity-runtime.graph.yaml
+    phase: iplan_creation
+    artifact: IPLAN-11
+    status: Completed
+  - step: Synchronize IPLAN-00_index.yaml and watched_paths documentation with Wave P1 changes
+    phase: documentation_sync
+    artifact: IPLAN-00_index and docs/
+    status: Completed
+  artifacts_modified:
+  - id: SPEC-01
+    file: docs/sdd/06_SPEC/SPEC-01_access_surface.yaml
+    change_type: modified
+  - id: SPEC-02
+    file: docs/sdd/06_SPEC/SPEC-02_memory_store.yaml
+    change_type: modified
+  - id: SPEC-04
+    file: docs/sdd/06_SPEC/SPEC-04_distillation_engine.yaml
+    change_type: modified
+  - id: SPEC-06
+    file: docs/sdd/06_SPEC/SPEC-06_ports_portability.yaml
+    change_type: modified
+  - id: SPEC-07
+    file: docs/sdd/06_SPEC/SPEC-07_cli_face.yaml
+    change_type: modified
+  - id: IPLAN-11
+    file: docs/sdd/08_IPLAN/IPLAN-11_audit-wave-p1-data-integrity-runtime.swf.yaml
+    change_type: created
+  rollback_steps:
+  - step: Reset feature/plan-026-v030-deep-audit-remediation to ead60d0 and downgrade 0012
+    phase: rollback
+    artifact: codebase
+verification:
+  pre_implementation_validation:
+  - description: Verify CHG-011, IPLAN-11, and SLICE-11 3-way parity before code edits
+    command: uv --project ${AIOPS_HARNESS_ROOT} run aiops-harness chg verify docs/sdd/09_CHG/CHG-011_audit-wave-p1-data-integrity-runtime.yaml
+  post_implementation_validation:
+  - description: Full quality, unit, integration, conformance, security, strict docs, and task ci gates
+    command: task check && task sdd:check && task ci
+  exit_criteria:
+    all_tests_pass: true
+    no_regressions: true
+    zero_security_downgrade: true
+gate_approval:
+  gate: GATE-SPEC
+  approved: true
+  approver: Operator + Antigravity Orchestrator
+  role: Judge (C2)
+  approval_date: '2026-11-21'
+  evidence: Approved PLAN-026 Wave P1 execution following Wave P0 commit ead60d0
+  approved_scope_files: *id001
+rollback_plan:
+  strategy: branch-reset-and-migration-down
+  steps:
+  - Apply db/migrations/down/0012_wave_p1_cas_projects_and_dedup.sql if DB migrated
+  - git reset --hard ead60d0
+  estimated_effort: 5m
+emergency_change:
+  emergency_id: null
+  incident_severity: null
+  fix_deployed: null
+  post_mortem_due: null
+  post_mortem_completed: false
+  post_hoc_gate: null
+glossary:
+  terms:
+  - term: CAS Project Ownership Table
+    definition: Row-level-secured kb_blob_projects(tenant_id, project_id, sha256, metadata) join table authorizing cross-project reads of deduplicated blobs without exposing another project's metadata.
+  - term: Subject-Bound Multi-Tenant Worker
+    definition: Multi-tenant worker mode deriving verified tenant_id from NATS JetStream subject prefixes and failing closed if broker subject tenant conflicts with payload tenant_id.
+creation_checklist:
+  checks:
+  - id: 1
+    check: Read every file you reference
+    status: Pass
+  - id: 2
+    check: Verify the architectural claim
+    status: Pass
+  - id: 3
+    check: Check existing struct/type signatures
+    status: Pass
+  - id: 4
+    check: Check existing INSERT/SELECT queries
+    status: Pass
+  - id: 5
+    check: Cross-reference upstream requirements
+    status: Pass
+  - id: 6
+    check: Check for existing handlers/webhooks
+    status: Pass
+  - id: 7
+    check: Couple dependent issues
+    status: Pass
+  - id: 8
+    check: Add automated test specifications
+    status: Pass
+  - id: 9
+    check: Document rollback strategy
+    status: Pass
+  - id: 10
+    check: Verify archive paths
+    status: Pass
+  - id: 11
+    check: Verify supersedes list
+    status: Pass
+  - id: 12
+    check: Verify version bumps
+    status: Pass
+  - id: 13
+    check: SDD-first implementation order
+    status: Pass
+  - id: 14
+    check: 'CHG scope: governance, not implementation plan'
+    status: Pass
+  - id: 15
+    check: Mandatory formal decision block
+    status: Pass
+validation:
+  document_structure:
+  - id_match: Verified CHG-011 matches filename
+  decision_block:
+  - decision_present: Verified DEC-CHG-011 present
+  scope:
+  - governance_only: Verified only sdd_lifecycle, iplan_creation, and documentation_sync steps present
+diff:
+  diff_stat: "59 files across PLAN-026 TASK-2 (Wave P1)"
+  breaking_changes: false

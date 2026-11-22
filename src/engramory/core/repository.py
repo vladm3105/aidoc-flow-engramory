@@ -379,6 +379,11 @@ def vector_literal(embedding: Sequence[float]) -> str:
     return "[" + ",".join(repr(float(x)) for x in embedding) + "]"
 
 
+def _escape_ilike(val: str) -> str:
+    """Escape SQL ILIKE wildcards (`\\`, `%`, `_`) so user queries match literally."""
+    return val.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 class Repository:
     """Typed data access over the canonical Postgres schema (migrations 0001..0003)."""
 
@@ -454,8 +459,9 @@ class Repository:
                         )
                         OR (
                             %(event_id)s::text IS NOT NULL
-                            AND metadata ? 'event_id'
-                            AND metadata->>'event_id' = %(event_id)s
+                            AND agent_id = %(agent_id)s
+                            AND coalesce(project_id, '') = coalesce(%(project_id)s, '')
+                            AND NULLIF(metadata->>'event_id', '') = %(event_id)s
                         )
                       )
                     LIMIT 1
@@ -1017,7 +1023,7 @@ class Repository:
                         DELETE FROM episodes
                         WHERE tenant_id = %(tenant_id)s
                           AND agent_id = %(agent_id)s
-                          AND coalesce(metadata->>'scope', 'agent') = 'agent'
+                          AND coalesce(NULLIF(metadata->>'scope', ''), 'agent') = 'agent'
                         """,
                         {"tenant_id": tenant_id, "agent_id": agent_id},
                     )
@@ -1042,10 +1048,17 @@ class Repository:
         tenant_id: str,
         agent_id: str,
         limit: int = 500,
-        brain_variant: str = "default",
+        brain_variant: str | None = "default",
     ) -> list[Episode]:
         """Episodes not yet projected into memories for ``brain_variant``.
-        Projection linkage: memories.provenance->>'episode_id' and brain_variant."""
+
+        When ``brain_variant`` is ``None`` or ``'default'``, matches against
+        ``COALESCE(NULLIF(btrim(e.metadata->>'brain_variant'), ''), 'default')`` so
+        variant-tagged episodes coalesce cleanly instead of silently matching default.
+        Explicit non-default variants match exactly.
+        """
+        eff_variant = (brain_variant or "default").strip() or "default"
+        use_coalesce = eff_variant == "default"
         async with self._conn(tenant_id=tenant_id) as conn:
             rows = await (
                 await conn.execute(
@@ -1059,9 +1072,13 @@ class Repository:
                           WHERE m.tenant_id = e.tenant_id
                             AND m.agent_id = e.agent_id
                             AND m.provenance->>'episode_id' = e.id::text
-                            AND coalesce(
-                                m.provenance->>'brain_variant', 'default'
-                            ) = %(brain_variant)s
+                            AND coalesce(m.provenance->>'brain_variant', 'default') = CASE
+                                WHEN %(use_coalesce)s THEN coalesce(
+                                    NULLIF(btrim(e.metadata->>'brain_variant'), ''),
+                                    %(brain_variant)s
+                                )
+                                ELSE %(brain_variant)s
+                            END
                       )
                     ORDER BY ts, id
                     LIMIT %(limit)s
@@ -1070,7 +1087,8 @@ class Repository:
                         "tenant_id": tenant_id,
                         "agent_id": agent_id,
                         "limit": limit,
-                        "brain_variant": brain_variant,
+                        "brain_variant": eff_variant,
+                        "use_coalesce": use_coalesce,
                     },
                 )
             ).fetchall()
@@ -1152,7 +1170,8 @@ class Repository:
         _visibility_sql(scopes)
         levels = tuple(scopes) if scopes is not None else tuple(_SCOPE_CLAUSES)
         has_qv = query_vec is not None and len(query_vec) == 1536
-        has_q = bool(query and query.strip())
+        clean_q = query.strip() if query and query.strip() else None
+        has_q = clean_q is not None
         params: dict[str, Any] = {
             "tenant_id": tenant_id,
             "agent_id": agent_id,
@@ -1164,7 +1183,10 @@ class Repository:
             "inc_domain": "domain" in levels,
             "inc_space": "space" in levels,
             "qv": vector_literal(query_vec) if has_qv and query_vec is not None else None,
-            "q_like": f"%{query.strip()}%" if has_q and query is not None else None,
+            "has_qv": has_qv,
+            "has_q": has_q,
+            "q_text": clean_q,
+            "q_like": f"%{_escape_ilike(clean_q)}%" if clean_q is not None else None,
             "brain_variant": brain_variant,
             "specialization": specialization,
             "include_quarantined": include_quarantined,
@@ -1200,6 +1222,18 @@ class Repository:
                           ) ? %(specialization)s
                       )
                       AND (
+                          %(domain_id)s::text IS NULL
+                          OR scope = 'space'
+                          OR domain_id = %(domain_id)s
+                      )
+                      AND (
+                          NOT %(has_q)s
+                          OR %(has_qv)s
+                          OR ts_lex @@ websearch_to_tsquery('english', %(q_text)s)
+                          OR content_raw ILIKE %(q_like)s ESCAPE '\\'
+                          OR coalesce(summary, '') ILIKE %(q_like)s ESCAPE '\\'
+                      )
+                      AND (
                           (%(inc_agent)s AND scope = 'agent' AND agent_id = %(agent_id)s)
                           OR (
                               %(inc_project)s
@@ -1216,20 +1250,33 @@ class Repository:
                           OR (%(inc_space)s AND scope = 'space')
                       )
                     ORDER BY
-                      CASE
-                        WHEN %(qv)s::text IS NOT NULL AND embedding IS NOT NULL
-                          THEN embedding <=> %(qv)s::vector
-                        ELSE 2.0
-                      END ASC,
-                      CASE
-                        WHEN %(q_like)s::text IS NOT NULL
-                             AND (
-                                 content_raw ILIKE %(q_like)s
-                                 OR coalesce(summary, '') ILIKE %(q_like)s
-                             )
-                          THEN 1
-                        ELSE 0
-                      END DESC,
+                      (
+                        CASE
+                          WHEN %(qv)s::text IS NOT NULL AND embedding IS NOT NULL
+                            THEN (1.0 / (1.0 + GREATEST(0.0, (embedding <=> %(qv)s::vector))))
+                          ELSE 0.0
+                        END
+                        + CASE
+                            WHEN %(q_text)s::text IS NOT NULL THEN (
+                              LEAST(
+                                  1.0,
+                                  ts_rank_cd(
+                                      COALESCE(ts_lex, to_tsvector('english', '')),
+                                      websearch_to_tsquery('english', %(q_text)s)
+                                  )
+                              )
+                              + CASE
+                                  WHEN (
+                                      content_raw ILIKE %(q_like)s ESCAPE '\\'
+                                      OR coalesce(summary, '') ILIKE %(q_like)s ESCAPE '\\'
+                                  )
+                                    THEN 0.25
+                                  ELSE 0.0
+                                END
+                            )
+                            ELSE 0.0
+                          END
+                      ) DESC,
                       valid_from DESC
                     LIMIT %(k)s
                     """,
@@ -1402,6 +1449,18 @@ class Repository:
                                 scope = EXCLUDED.scope,
                                 agent_id = EXCLUDED.agent_id,
                                 text = EXCLUDED.text,
+                                embedding = CASE
+                                    WHEN kb_sections.text IS DISTINCT FROM EXCLUDED.text THEN NULL
+                                    ELSE kb_sections.embedding
+                                END,
+                                embedding_model = CASE
+                                    WHEN kb_sections.text IS DISTINCT FROM EXCLUDED.text THEN NULL
+                                    ELSE kb_sections.embedding_model
+                                END,
+                                embedding_dims = CASE
+                                    WHEN kb_sections.text IS DISTINCT FROM EXCLUDED.text THEN NULL
+                                    ELSE kb_sections.embedding_dims
+                                END,
                                 modality = EXCLUDED.modality,
                                 blob_sha256 = COALESCE(
                                     EXCLUDED.blob_sha256, kb_sections.blob_sha256
@@ -1542,6 +1601,21 @@ class Repository:
                                         scope = EXCLUDED.scope,
                                         agent_id = EXCLUDED.agent_id,
                                         text = EXCLUDED.text,
+                                        embedding = CASE
+                                            WHEN kb_sections.text IS DISTINCT FROM EXCLUDED.text
+                                                THEN NULL
+                                            ELSE kb_sections.embedding
+                                        END,
+                                        embedding_model = CASE
+                                            WHEN kb_sections.text IS DISTINCT FROM EXCLUDED.text
+                                                THEN NULL
+                                            ELSE kb_sections.embedding_model
+                                        END,
+                                        embedding_dims = CASE
+                                            WHEN kb_sections.text IS DISTINCT FROM EXCLUDED.text
+                                                THEN NULL
+                                            ELSE kb_sections.embedding_dims
+                                        END,
                                         modality = EXCLUDED.modality,
                                         blob_sha256 = COALESCE(
                                             EXCLUDED.blob_sha256, kb_sections.blob_sha256
@@ -2913,6 +2987,7 @@ class Repository:
         *,
         tenant_id: str,
         project_id: str | None = None,
+        agent_id: str | None = None,
         limit: int = 500,
     ) -> dict[str, Any]:
         """Compute closed-loop learning health metrics over recent episodes for tenant_id."""
@@ -2931,6 +3006,7 @@ class Repository:
                         FROM episodes
                         WHERE tenant_id = %(tenant_id)s
                           AND (%(project_id)s::text IS NULL OR project_id = %(project_id)s::text)
+                          AND (%(agent_id)s::text IS NULL OR agent_id = %(agent_id)s::text)
                         ORDER BY ts DESC, id DESC
                         LIMIT %(limit)s
                     ) recent_ep
@@ -2939,6 +3015,7 @@ class Repository:
                     {
                         "tenant_id": tenant_id,
                         "project_id": project_id,
+                        "agent_id": agent_id,
                         "limit": safe_limit,
                     },
                 )
@@ -2958,11 +3035,227 @@ class Repository:
             ]
             return compute_learning_health_metrics(episodes)
 
+    async def log_consolidation_run(
+        self,
+        *,
+        tenant_id: str,
+        agent_id: str | None = None,
+        stats: Mapping[str, Any] | None = None,
+    ) -> str:
+        """Persist a completed consolidation_runs audit entry scoped by tenant_id."""
+        async with self._conn(tenant_id=tenant_id) as conn:
+            row = await (
+                await conn.execute(
+                    """
+                    INSERT INTO consolidation_runs (
+                        tenant_id, agent_id, started_at, finished_at, stats
+                    )
+                    VALUES (%(tenant_id)s, %(agent_id)s, now(), now(), %(stats)s::jsonb)
+                    RETURNING id
+                    """,
+                    {
+                        "tenant_id": tenant_id,
+                        "agent_id": agent_id,
+                        "stats": json.dumps(dict(stats or {})),
+                    },
+                )
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("INSERT INTO consolidation_runs did not return id")
+            return str(row["id"])
+
+    async def consolidate_memories(
+        self,
+        *,
+        tenant_id: str,
+        agent_id: str | None = None,
+        project_id: str | None = None,
+        domain_id: str | None = None,
+        scope: str | None = None,
+        expire_below_confidence: float = 0.2,
+        min_age_days: int = 30,
+    ) -> dict[str, Any]:
+        """Soft-merge duplicate memories and expire stale low-confidence rows in one transaction."""
+        async with self._conn(tenant_id=tenant_id) as conn:
+            async with conn.transaction():
+                cur_merge = await conn.execute(
+                    """
+                    WITH ranked AS (
+                        SELECT id,
+                               FIRST_VALUE(id) OVER (
+                                   PARTITION BY scope, coalesce(agent_id, ''),
+                                                coalesce(project_id, ''), coalesce(domain_id, ''),
+                                                lower(btrim(coalesce(summary, content_raw)))
+                                   ORDER BY confidence DESC, valid_from DESC, id DESC
+                               ) AS winner_id,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY scope, coalesce(agent_id, ''),
+                                                coalesce(project_id, ''), coalesce(domain_id, ''),
+                                                lower(btrim(coalesce(summary, content_raw)))
+                                   ORDER BY confidence DESC, valid_from DESC, id DESC
+                               ) AS rn
+                        FROM memories
+                        WHERE tenant_id = %(tenant_id)s
+                          AND valid_to IS NULL
+                          AND status = 'active'
+                          AND (%(agent_id)s::text IS NULL OR agent_id = %(agent_id)s)
+                          AND (%(project_id)s::text IS NULL OR project_id = %(project_id)s)
+                          AND (%(domain_id)s::text IS NULL OR domain_id = %(domain_id)s)
+                          AND (%(scope)s::text IS NULL OR scope = %(scope)s)
+                    )
+                    UPDATE memories m
+                    SET valid_to = now(),
+                        status = 'superseded',
+                        supersedes = COALESCE(m.supersedes, r.winner_id)
+                    FROM ranked r
+                    WHERE m.id = r.id
+                      AND m.tenant_id = %(tenant_id)s
+                      AND r.rn > 1
+                      AND m.valid_to IS NULL
+                    """,
+                    {
+                        "tenant_id": tenant_id,
+                        "agent_id": agent_id,
+                        "project_id": project_id,
+                        "domain_id": domain_id,
+                        "scope": scope,
+                    },
+                )
+                merged = int(cur_merge.rowcount or 0)
+
+                cur_exp = await conn.execute(
+                    """
+                    UPDATE memories
+                    SET valid_to = now(),
+                        status = 'superseded'
+                    WHERE tenant_id = %(tenant_id)s
+                      AND valid_to IS NULL
+                      AND (status = 'advisory' OR confidence < %(min_conf)s)
+                      AND valid_from < now() - make_interval(days => %(min_age_days)s)
+                      AND (%(agent_id)s::text IS NULL OR agent_id = %(agent_id)s)
+                      AND (%(project_id)s::text IS NULL OR project_id = %(project_id)s)
+                      AND (%(domain_id)s::text IS NULL OR domain_id = %(domain_id)s)
+                      AND (%(scope)s::text IS NULL OR scope = %(scope)s)
+                    """,
+                    {
+                        "tenant_id": tenant_id,
+                        "agent_id": agent_id,
+                        "project_id": project_id,
+                        "domain_id": domain_id,
+                        "scope": scope,
+                        "min_conf": float(expire_below_confidence),
+                        "min_age_days": max(0, int(min_age_days)),
+                    },
+                )
+                expired = int(cur_exp.rowcount or 0)
+
+                stats_payload = {
+                    "merged": merged,
+                    "expired": expired,
+                    "scope": scope,
+                }
+                run_row = await (
+                    await conn.execute(
+                        """
+                        INSERT INTO consolidation_runs
+                            (tenant_id, agent_id, started_at, finished_at, stats)
+                        VALUES (%(tenant_id)s, %(agent_id)s, now(), now(), %(stats)s::jsonb)
+                        RETURNING id
+                        """,
+                        {
+                            "tenant_id": tenant_id,
+                            "agent_id": agent_id,
+                            "stats": json.dumps(stats_payload),
+                        },
+                    )
+                ).fetchone()
+                run_id = str(run_row["id"]) if run_row else None
+                return {"merged": merged, "expired": expired, "run_id": run_id}
+
+    async def import_agent_brain(
+        self,
+        *,
+        tenant_id: str,
+        profile: AgentProfile | None = None,
+        memories: Sequence[tuple[Memory, Sequence[float] | None]] = (),
+    ) -> list[str]:
+        """Atomically persist agent profile and imported brain memories in a single transaction."""
+        created_ids: list[str] = []
+        async with self._conn(tenant_id=tenant_id) as conn:
+            async with conn.transaction():
+                if profile is not None:
+                    await conn.execute(
+                        """
+                        INSERT INTO agent_profiles
+                            (tenant_id, agent_id, display_name, standing_preferences)
+                        VALUES (%(tenant_id)s, %(agent_id)s, %(display_name)s,
+                                %(standing_preferences)s)
+                        ON CONFLICT (tenant_id, agent_id) DO UPDATE
+                            SET display_name = EXCLUDED.display_name,
+                                standing_preferences = EXCLUDED.standing_preferences
+                        """,
+                        {
+                            "tenant_id": profile.tenant_id,
+                            "agent_id": profile.agent_id,
+                            "display_name": profile.display_name,
+                            "standing_preferences": json.dumps(dict(profile.standing_preferences)),
+                        },
+                    )
+                for memory, embedding in memories:
+                    params = _memory_params(memory)
+                    params["embedding"] = (
+                        vector_literal(embedding)
+                        if embedding is not None and len(embedding) == 1536
+                        else None
+                    )
+                    row = await (
+                        await conn.execute(
+                            """
+                            INSERT INTO memories
+                                (agent_id, project_id, domain_id, tenant_id, scope, type,
+                                 content_raw, summary, embedding_model, embedding_dims,
+                                 embedding, provenance, confidence, status, source_trust,
+                                 supersedes)
+                            VALUES (%(agent_id)s, %(project_id)s, %(domain_id)s, %(tenant_id)s,
+                                    %(scope)s, %(type)s, %(content_raw)s, %(summary)s,
+                                    %(embedding_model)s, %(embedding_dims)s,
+                                    CASE
+                                        WHEN %(embedding)s::text IS NOT NULL
+                                            THEN %(embedding)s::vector
+                                        ELSE NULL
+                                    END,
+                                    %(provenance)s, %(confidence)s, %(status)s,
+                                    %(source_trust)s, %(supersedes)s)
+                            RETURNING id
+                            """,
+                            params,
+                        )
+                    ).fetchone()
+                    if row is None:
+                        raise RuntimeError("INSERT INTO memories did not return id")
+                    mem_id = str(row["id"])
+                    if memory.supersedes is not None:
+                        await conn.execute(
+                            """
+                            UPDATE memories
+                            SET valid_to = now(), status = 'superseded'
+                            WHERE id = %(id)s AND tenant_id = %(tenant_id)s AND valid_to IS NULL
+                            """,
+                            {"id": memory.supersedes, "tenant_id": memory.tenant_id},
+                        )
+                    created_ids.append(mem_id)
+        return created_ids
+
 
 def _episode_params(episode: Episode) -> dict[str, Any]:
-    event_id_val = (
-        episode.metadata.get("event_id") if isinstance(episode.metadata, Mapping) else None
-    )
+    raw_eid = episode.metadata.get("event_id") if isinstance(episode.metadata, Mapping) else None
+    if raw_eid is None:
+        event_id_val: str | None = None
+    elif isinstance(raw_eid, bool):
+        event_id_val = "true" if raw_eid else "false"
+    else:
+        cleaned_eid = str(raw_eid).strip()
+        event_id_val = cleaned_eid if cleaned_eid else None
     return {
         "agent_id": episode.agent_id,
         "project_id": episode.project_id,
@@ -2972,7 +3265,7 @@ def _episode_params(episode: Episode) -> dict[str, Any]:
         "content_raw": episode.content_raw,
         "content_hash": episode.content_hash,
         "metadata": json.dumps(dict(episode.metadata)),
-        "event_id": str(event_id_val) if event_id_val else None,
+        "event_id": event_id_val,
     }
 
 

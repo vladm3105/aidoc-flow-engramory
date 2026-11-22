@@ -1,0 +1,335 @@
+# SLICE-11_audit-wave-p1-data-integrity-runtime.graph.yaml — Layer 08 Graph Slice
+
+schema_version: 2.0-graph
+slice_id: IPLAN-11_audit-wave-p1-data-integrity-runtime
+initiative_ref: INIT-11_audit-wave-p1-data-integrity-runtime
+metadata:
+  author: Antigravity + Operator
+  created_date: '2026-11-21'
+  last_updated: '2026-11-21'
+  status: Completed
+  framework_version: 0.96.25
+  description: Machine-executable DAG and SAGA rollback for PLAN-026 Wave P1 (CHG-011, C9-C10 + H1-H8 + H10-H12 + H15)
+  layer: 08_IPLAN
+  flow: sdd_to_code
+  flow_code: SDD2C
+  tdd_consistency:
+    status: complete
+    coverage_percentage: 100
+nodes:
+- id: CHG-011
+  type: change_request
+  title: "Wave P1 Audit Remediation — CAS Locking, GitSync, JetStream, Passports & Runtime Safety (PLAN-026 TASK-2)"
+  properties:
+    change_level: C2
+    flow_code: SDD2C
+    status: Completed
+    execution_status: DONE
+    files_to_touch:
+    - db/migrations/0012_wave_p1_cas_projects_and_dedup.sql
+    - db/migrations/down/0012_wave_p1_cas_projects_and_dedup.sql
+    - docs/ARCHITECTURE.md
+    - docs/MULTIMODAL_AND_POSTGRES_BLOB_STORAGE.md
+    - docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md
+    - docs/archive/CHG-011/SPEC-01_access_surface_v1.2.yaml
+    - docs/archive/CHG-011/SPEC-02_memory_store_v1.1.yaml
+    - docs/archive/CHG-011/SPEC-04_distillation_engine_v1.1.yaml
+    - docs/archive/CHG-011/SPEC-06_ports_portability_v1.1.yaml
+    - docs/archive/CHG-011/SPEC-07_cli_face_v1.1.yaml
+    - docs/doc-tools/00_INDEX.md
+    - docs/doc-tools/10_DOCUMENTATION_TOOLS_TECHNICAL_REFERENCE.md
+    - docs/sdd/06_SPEC/SPEC-01_access_surface.yaml
+    - docs/sdd/06_SPEC/SPEC-02_memory_store.yaml
+    - docs/sdd/06_SPEC/SPEC-04_distillation_engine.yaml
+    - docs/sdd/06_SPEC/SPEC-06_ports_portability.yaml
+    - docs/sdd/06_SPEC/SPEC-07_cli_face.yaml
+    - docs/sdd/08_IPLAN/IPLAN-00_index.yaml
+    - docs/sdd/08_IPLAN/IPLAN-11_audit-wave-p1-data-integrity-runtime.swf.yaml
+    - docs/sdd/09_CHG/CHG-011_audit-wave-p1-data-integrity-runtime.yaml
+    - docs/sdd/graph/SLICE-11_audit-wave-p1-data-integrity-runtime.graph.yaml
+    - src/engramory/access/authz.py
+    - src/engramory/access/poisoning_guard.py
+    - src/engramory/access/surface.py
+    - src/engramory/adapters/dev/events_nats.py
+    - src/engramory/adapters/dev/graph_neo4j.py
+    - src/engramory/adapters/dev/storage_local.py
+    - src/engramory/adapters/dev/storage_pg.py
+    - src/engramory/adapters/factory.py
+    - src/engramory/cli.py
+    - src/engramory/core/context_tools.py
+    - src/engramory/core/docs_tools.py
+    - src/engramory/core/experience.py
+    - src/engramory/core/extraction/docling.py
+    - src/engramory/core/extraction/multimodal.py
+    - src/engramory/core/extraction/router.py
+    - src/engramory/core/git_sync.py
+    - src/engramory/core/kb_graph.py
+    - src/engramory/core/knowledge.py
+    - src/engramory/core/memory.py
+    - src/engramory/core/parsers/detector.py
+    - src/engramory/core/parsers/html.py
+    - src/engramory/core/parsers/markdown.py
+    - src/engramory/core/parsers/pdf.py
+    - src/engramory/core/parsers/template.py
+    - src/engramory/core/repository.py
+    - src/engramory/mcp/server.py
+    - src/engramory/ports/graph.py
+    - src/engramory/ports/storage.py
+    - src/engramory/workers/distillation.py
+    - src/engramory/workers/runner.py
+    - tests/e2e/test_retrieval.py
+    - tests/security/test_wave_p1_integrity_runtime.py
+    - tests/test_docs_tools.py
+    - tests/test_knowledge_core.py
+    - tests/test_migrations.py
+    - tests/test_plan012_remediation.py
+    - tests/test_storage_pg_blob_cas.py
+    - tests/unit/test_events_nats.py
+- id: TDD.04.04.c200
+  type: test_fixture
+  title: Wave P1 Data Integrity & Runtime Safety Regression Suite
+  properties:
+    test_file: tests/security/test_wave_p1_integrity_runtime.py
+- id: TASK.08.11.a001
+  type: task_action
+  title: "Phase 0: SDD2C Baseline (SPEC-01/02/04/06/07, CHG-011, IPLAN-11, SLICE-11)"
+  action: apply_patch
+  target_file: docs/sdd/08_IPLAN/IPLAN-11_audit-wave-p1-data-integrity-runtime.swf.yaml
+  target_files: &id001
+  - docs/archive/CHG-011/SPEC-01_access_surface_v1.2.yaml
+  - docs/archive/CHG-011/SPEC-02_memory_store_v1.1.yaml
+  - docs/archive/CHG-011/SPEC-04_distillation_engine_v1.1.yaml
+  - docs/archive/CHG-011/SPEC-06_ports_portability_v1.1.yaml
+  - docs/archive/CHG-011/SPEC-07_cli_face_v1.1.yaml
+  - docs/sdd/06_SPEC/SPEC-01_access_surface.yaml
+  - docs/sdd/06_SPEC/SPEC-02_memory_store.yaml
+  - docs/sdd/06_SPEC/SPEC-04_distillation_engine.yaml
+  - docs/sdd/06_SPEC/SPEC-06_ports_portability.yaml
+  - docs/sdd/06_SPEC/SPEC-07_cli_face.yaml
+  - docs/sdd/08_IPLAN/IPLAN-00_index.yaml
+  - docs/sdd/08_IPLAN/IPLAN-11_audit-wave-p1-data-integrity-runtime.swf.yaml
+  - docs/sdd/09_CHG/CHG-011_audit-wave-p1-data-integrity-runtime.yaml
+  - docs/sdd/graph/SLICE-11_audit-wave-p1-data-integrity-runtime.graph.yaml
+  command: uv --project ${AIOPS_HARNESS_ROOT} run aiops-harness chg verify docs/sdd/09_CHG/CHG-011_audit-wave-p1-data-integrity-runtime.yaml
+  compensation: git checkout ead60d0 -- docs/sdd/ docs/archive/
+  properties:
+    session: 1
+    execution_status: DONE
+    target_files: *id001
+- id: TASK.08.11.a001_rollback
+  type: task_action
+  title: Rollback Phase 0 SDD Baseline
+  action: run_script
+  target_file: docs/sdd/08_IPLAN/IPLAN-11_audit-wave-p1-data-integrity-runtime.swf.yaml
+  target_files: *id001
+  command: git checkout ead60d0 -- docs/sdd/ docs/archive/
+  properties:
+    saga_step: compensate_task_a001
+- id: TASK.08.11.a002
+  type: task_action
+  title: "Phase 1: Migration 0012 (kb_blob_projects + kb_blob_aliases + uq_episodes_event_id)"
+  action: apply_patch
+  target_file: db/migrations/0012_wave_p1_cas_projects_and_dedup.sql
+  target_files: &id002
+  - db/migrations/0012_wave_p1_cas_projects_and_dedup.sql
+  - db/migrations/down/0012_wave_p1_cas_projects_and_dedup.sql
+  depends_on:
+  - TASK.08.11.a001
+  command: uv run --extra dev pytest -q tests/test_migrations.py
+  compensation: rm -f db/migrations/0012_wave_p1_cas_projects_and_dedup.sql db/migrations/down/0012_wave_p1_cas_projects_and_dedup.sql
+  properties:
+    session: 1
+    execution_status: DONE
+    target_files: *id002
+- id: TASK.08.11.a002_rollback
+  type: task_action
+  title: Rollback Phase 1 Migration 0012
+  action: run_script
+  target_file: db/migrations/0012_wave_p1_cas_projects_and_dedup.sql
+  target_files: *id002
+  command: rm -f db/migrations/0012_wave_p1_cas_projects_and_dedup.sql db/migrations/down/0012_wave_p1_cas_projects_and_dedup.sql
+  properties:
+    saga_step: compensate_task_a002
+- id: TASK.08.11.a003
+  type: task_action
+  title: "Phase 2-3: Storage, CAS, GitSync, NATS JetStream, Neo4j, Workers & Repository"
+  action: apply_patch
+  target_file: src/engramory/adapters/dev/storage_pg.py
+  target_files: &id003
+  - src/engramory/adapters/dev/events_nats.py
+  - src/engramory/adapters/dev/graph_neo4j.py
+  - src/engramory/adapters/dev/storage_local.py
+  - src/engramory/adapters/dev/storage_pg.py
+  - src/engramory/adapters/factory.py
+  - src/engramory/core/git_sync.py
+  - src/engramory/core/knowledge.py
+  - src/engramory/core/memory.py
+  - src/engramory/core/repository.py
+  - src/engramory/ports/graph.py
+  - src/engramory/ports/storage.py
+  - src/engramory/workers/distillation.py
+  - src/engramory/workers/runner.py
+  depends_on:
+  - TASK.08.11.a002
+  command: uv run --extra dev ruff check src tests
+  compensation: git checkout ead60d0 -- src/engramory/
+  properties:
+    session: 1
+    execution_status: DONE
+    target_files: *id003
+- id: TASK.08.11.a003_rollback
+  type: task_action
+  title: Rollback Phase 2-3 Storage, NATS, Worker & Repository
+  action: run_script
+  target_file: src/engramory/adapters/dev/storage_pg.py
+  target_files: *id003
+  command: git checkout ead60d0 -- src/engramory/
+  properties:
+    saga_step: compensate_task_a003
+- id: TASK.08.11.a004
+  type: task_action
+  title: "Phase 4-5: AccessSurface, Passports, CLI, MCP, Extraction/Parsers & ContextTools"
+  action: apply_patch
+  target_file: src/engramory/access/surface.py
+  target_files: &id004
+  - src/engramory/access/authz.py
+  - src/engramory/access/poisoning_guard.py
+  - src/engramory/access/surface.py
+  - src/engramory/cli.py
+  - src/engramory/core/context_tools.py
+  - src/engramory/core/docs_tools.py
+  - src/engramory/core/experience.py
+  - src/engramory/core/extraction/docling.py
+  - src/engramory/core/extraction/multimodal.py
+  - src/engramory/core/extraction/router.py
+  - src/engramory/core/kb_graph.py
+  - src/engramory/core/parsers/detector.py
+  - src/engramory/core/parsers/html.py
+  - src/engramory/core/parsers/markdown.py
+  - src/engramory/core/parsers/pdf.py
+  - src/engramory/core/parsers/template.py
+  - src/engramory/mcp/server.py
+  depends_on:
+  - TASK.08.11.a003
+  command: uv run --extra dev mypy src
+  compensation: git checkout ead60d0 -- src/engramory/
+  properties:
+    session: 1
+    execution_status: DONE
+    target_files: *id004
+- id: TASK.08.11.a004_rollback
+  type: task_action
+  title: Rollback Phase 4-5 Surface, CLI, MCP & Parsers
+  action: run_script
+  target_file: src/engramory/access/surface.py
+  target_files: *id004
+  command: git checkout ead60d0 -- src/engramory/
+  properties:
+    saga_step: compensate_task_a004
+- id: TASK.08.11.a005
+  type: task_action
+  title: "Phase 6: Docs Sync, Security Suite & Full Wave P1 Verification"
+  action: apply_patch
+  target_file: tests/security/test_wave_p1_integrity_runtime.py
+  target_files: &id005
+  - docs/ARCHITECTURE.md
+  - docs/MULTIMODAL_AND_POSTGRES_BLOB_STORAGE.md
+  - docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md
+  - docs/doc-tools/00_INDEX.md
+  - docs/doc-tools/10_DOCUMENTATION_TOOLS_TECHNICAL_REFERENCE.md
+  - tests/e2e/test_retrieval.py
+  - tests/security/test_wave_p1_integrity_runtime.py
+  - tests/test_docs_tools.py
+  - tests/test_knowledge_core.py
+  - tests/test_migrations.py
+  - tests/test_plan012_remediation.py
+  - tests/test_storage_pg_blob_cas.py
+  - tests/unit/test_events_nats.py
+  depends_on:
+  - TASK.08.11.a004
+  command: uv run --extra dev pytest -q tests/security/test_wave_p1_integrity_runtime.py
+  compensation: git checkout ead60d0 -- docs/ tests/
+  properties:
+    session: 1
+    execution_status: DONE
+    target_files: *id005
+- id: TASK.08.11.a005_rollback
+  type: task_action
+  title: Rollback Phase 6 Docs & Tests
+  action: run_script
+  target_file: tests/security/test_wave_p1_integrity_runtime.py
+  target_files: *id005
+  command: git checkout ead60d0 -- docs/ tests/
+  properties:
+    saga_step: compensate_task_a005
+edges:
+- from: CHG-011
+  to: TASK.08.11.a001
+  relation: authorized_by
+  notes: CHG-011 authorizes Phase 0 SDD baseline
+- from: CHG-011
+  to: TASK.08.11.a002
+  relation: authorized_by
+  notes: CHG-011 authorizes Phase 1 migration 0012
+- from: CHG-011
+  to: TASK.08.11.a003
+  relation: authorized_by
+  notes: CHG-011 authorizes Phase 2-3 storage, NATS, Neo4j, worker & repo fixes
+- from: CHG-011
+  to: TASK.08.11.a004
+  relation: authorized_by
+  notes: CHG-011 authorizes Phase 4-5 surface, CLI, MCP, extraction & context tools fixes
+- from: CHG-011
+  to: TASK.08.11.a005
+  relation: authorized_by
+  notes: CHG-011 authorizes Phase 6 docs sync and Wave P1 tests
+- from: TASK.08.11.a002
+  to: TASK.08.11.a001
+  relation: verifies
+  properties:
+    verification_type: preflight_attestation
+- from: TASK.08.11.a003
+  to: TASK.08.11.a002
+  relation: verifies
+  properties:
+    verification_type: preflight_attestation
+- from: TASK.08.11.a004
+  to: TASK.08.11.a003
+  relation: verifies
+  properties:
+    verification_type: preflight_attestation
+- from: TASK.08.11.a005
+  to: TASK.08.11.a004
+  relation: verifies
+  properties:
+    verification_type: preflight_attestation
+- from: TASK.08.11.a001
+  to: TDD.04.04.c200
+  relation: implements
+- from: TASK.08.11.a002
+  to: TDD.04.04.c200
+  relation: implements
+- from: TASK.08.11.a003
+  to: TDD.04.04.c200
+  relation: implements
+- from: TASK.08.11.a004
+  to: TDD.04.04.c200
+  relation: implements
+- from: TASK.08.11.a005
+  to: TDD.04.04.c200
+  relation: implements
+- from: TASK.08.11.a001
+  to: TASK.08.11.a001_rollback
+  relation: compensated_by
+- from: TASK.08.11.a002
+  to: TASK.08.11.a002_rollback
+  relation: compensated_by
+- from: TASK.08.11.a003
+  to: TASK.08.11.a003_rollback
+  relation: compensated_by
+- from: TASK.08.11.a004
+  to: TASK.08.11.a004_rollback
+  relation: compensated_by
+- from: TASK.08.11.a005
+  to: TASK.08.11.a005_rollback
+  relation: compensated_by

@@ -62,13 +62,17 @@ def adapters_for_profile(profile: str | None = None, *, dsn: str) -> AdapterSet:
     raise ValueError(f"unknown ENGRAMORY_PROFILE: {resolved!r} (expected one of {PROFILES})")
 
 
+class DevTierFenceError(PermissionError):
+    """Raised when a dev-only face is invoked under non-dev ENGRAMORY_PROFILE (ADR-10)."""
+
+
 def require_dev_profile(face: str, profile: str | None = None) -> str:
     """ADR-10 dev-tier fence: faces that construct ActorContext from
     client-supplied config (the CLI) are refused outside profile=dev —
     production identity is gateway-only (OIDC-verified claims)."""
     resolved = profile or os.environ.get("ENGRAMORY_PROFILE", "dev")
     if resolved != "dev":
-        raise PermissionError(
+        raise DevTierFenceError(
             f"{face}: client-constructed ActorContext is dev-tier only (ADR-10); "
             f"ENGRAMORY_PROFILE={resolved!r} — use the MCP gateway"
         )

@@ -65,12 +65,20 @@ class GraphPort(Protocol):
         """Return downstream descendant nodes reachable from `id` along directed in-edges."""
         ...
 
-    async def delete_node(self, *, id: str, tenant_id: str = "default") -> None:
+    async def delete_node(
+        self, *, id: str, tenant_id: str = "default", project_id: str | None = None
+    ) -> None:
         """Delete a node and its attached relationships."""
         ...
 
     async def delete_edge(
-        self, *, src: str, dst: str, rel: str | None = None, tenant_id: str = "default"
+        self,
+        *,
+        src: str,
+        dst: str,
+        rel: str | None = None,
+        tenant_id: str = "default",
+        project_id: str | None = None,
     ) -> None:
         """Delete relationship(s) between src and dst."""
         ...
