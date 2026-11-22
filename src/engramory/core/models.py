@@ -37,7 +37,7 @@ KB_SECTION_MODALITIES = frozenset(
 __all__ = [
     "AUTONOMY_TIERS",
     "DOC_STATUSES",
-    " KB_SECTION_MODALITIES".strip(),
+    "KB_SECTION_MODALITIES",
     "MEMORY_STATUSES",
     "MEMORY_TYPES",
     "RUNBOOK_MODES",
@@ -54,6 +54,8 @@ __all__ = [
     "Memory",
     "ValidationError",
     "content_hash",
+    "thaw_mapping",
+    "thaw_value",
 ]
 # The schema deliberately has no CHECK on scope (extended additively, see 0002);
 # the model enforces the current ADR-07 ladder — extend this set with the schema.
@@ -73,8 +75,37 @@ def _require(condition: bool, message: str) -> None:
         raise ValidationError(message)
 
 
+def _freeze_value(value: Any) -> Any:
+    """Recursively convert mutable containers into read-only immutable views."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({k: _freeze_value(v) for k, v in value.items()})
+    if isinstance(value, list | tuple):
+        return tuple(_freeze_value(item) for item in value)
+    if isinstance(value, set | frozenset):
+        return frozenset(_freeze_value(item) for item in value)
+    return value
+
+
 def _frozen_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
-    return MappingProxyType(dict(value))
+    return MappingProxyType({k: _freeze_value(v) for k, v in value.items()})
+
+
+def thaw_value(value: Any) -> Any:
+    """Recursively convert MappingProxyType and frozen sequences into plain JSON-safe types."""
+    if isinstance(value, Mapping):
+        return {k: thaw_value(v) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return [thaw_value(item) for item in value]
+    if isinstance(value, set | frozenset):
+        return [thaw_value(item) for item in value]
+    return value
+
+
+def thaw_mapping(value: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Convert any nested immutable Mapping into a plain mutable dict."""
+    if not value:
+        return {}
+    return {k: thaw_value(v) for k, v in value.items()}
 
 
 @dataclass(frozen=True, slots=True)
@@ -276,7 +307,7 @@ class KBDocument:
     frontmatter: Mapping[str, Any] = field(default_factory=dict)
     watched_paths: tuple[str, ...] = ()
     trigger_alerts: tuple[str, ...] = ()
-    last_verified: str = "2026-11-06"
+    last_verified: str = field(default_factory=lambda: date.today().isoformat())
     review_ttl_days: int = 90
     git_commit_sha: str = "local-head"
     project_id: str | None = None

@@ -23,6 +23,7 @@ def test_migrations_exist_and_ordered() -> None:
         "0010_multimodal_rag_and_blob_cas.sql",
         "0011_wave_p0_isolation_and_rls.sql",
         "0012_wave_p1_cas_projects_and_dedup.sql",
+        "0013_wave_p3_indexes_and_hygiene.sql",
     ]
 
 
@@ -177,3 +178,29 @@ def test_migration_0012_wave_p1_cas_projects_and_dedup() -> None:
     assert "DROP TABLE IF EXISTS public.kb_blob_projects" in down_sql
     assert "DROP TABLE IF EXISTS public.kb_blob_aliases" in down_sql
     assert "CREATE UNIQUE INDEX IF NOT EXISTS uq_episodes_event_id" in down_sql
+
+
+def test_migration_0013_wave_p3_indexes_and_hygiene() -> None:
+    """0013 adds hot-path indexes, kb_blobs trigger, nullable embedding_model, and blob FK."""
+    sql = (MIGRATIONS / "0013_wave_p3_indexes_and_hygiene.sql").read_text()
+    down_sql = (MIGRATIONS / "down" / "0013_wave_p3_indexes_and_hygiene.sql").read_text()
+    assert "BEGIN;" in sql and "SET LOCAL lock_timeout = '5s';" in sql and "COMMIT;" in sql
+    assert "BEGIN;" in down_sql and "SET LOCAL lock_timeout = '5s';" in down_sql
+    for idx_name in (
+        "idx_memories_tenant_domain_live",
+        "idx_memories_tenant_variant_live",
+        "idx_kb_sections_tenant_doc_ver",
+        "idx_memory_retrievals_tenant_mem",
+        "idx_audit_records_tenant_ts",
+        "idx_kb_blobs_status_updated",
+    ):
+        assert idx_name in sql
+        assert f"DROP INDEX IF EXISTS {idx_name}" in down_sql
+    assert "set_kb_blobs_updated_at" in sql
+    assert "DROP TRIGGER IF EXISTS trg_kb_blobs_updated_at ON kb_blobs" in sql
+    assert "ALTER TABLE memories ALTER COLUMN embedding_model DROP NOT NULL" in sql
+    assert "fk_kb_sections_blob" in sql
+    assert "ON DELETE SET NULL (blob_sha256)" in sql
+    assert "DROP CONSTRAINT IF EXISTS fk_kb_sections_blob" in down_sql
+    assert "DROP FUNCTION IF EXISTS set_kb_blobs_updated_at()" in down_sql
+    assert "ALTER TABLE memories ALTER COLUMN embedding_model SET NOT NULL" in down_sql

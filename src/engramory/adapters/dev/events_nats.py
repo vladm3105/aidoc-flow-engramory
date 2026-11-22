@@ -19,7 +19,7 @@ from collections import deque
 from collections.abc import AsyncIterator, Mapping
 from typing import Any
 
-from engramory.access.poisoning_guard import has_dangerous_unicode
+from engramory.core.poisoning_guard import has_dangerous_unicode
 
 logger = logging.getLogger(__name__)
 

@@ -316,7 +316,7 @@ def test_m3_harness_lockfile_portal_and_uts_config(tmp_path: Path) -> None:
     assert "smoke" in uts["layers"]
     assert "smoke" in uts["gates"]["all"]["layers"]
     assert uts["stack"]["compose"] == "docker-compose.yml"
-    assert uts["coverage"]["unit"]["minPercent"] == 80
+    assert uts["coverage"]["unit"]["minPercent"] == 85
 
     # Verify stage_portal_bundle title synthesis & stale markdown pruning
     repo_dir = tmp_path / "repo"

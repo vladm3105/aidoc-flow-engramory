@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 from engramory.access.surface import AccessSurface
-from engramory.adapters.factory import dev_adapters
+from engramory.adapters.factory import adapters_for_profile
 from engramory.cli import _close_adapters, _load_config
 from engramory.core.chunking import ingest_file
 from engramory.core.kb_graph import _resolve_sdd_root
@@ -38,7 +38,7 @@ async def main_async() -> int:
     config = _load_config(args.config)
     repo = Repository(config.dsn)
     surface = AccessSurface(repo)
-    adapters = dev_adapters(config.dsn)
+    adapters = adapters_for_profile(dsn=config.dsn)
     try:
         target_files: list[Path] = []
         if args.file:
@@ -73,7 +73,7 @@ async def main_async() -> int:
         print(f"Done: {total_sections} total sections ingested into kb_sections (errors={errors}).")
         return 1 if errors > 0 else 0
     finally:
-        await _close_adapters(adapters)
+        await _close_adapters(adapters, repo=repo)
 
 
 def main() -> None:

@@ -32,7 +32,7 @@ from engramory.core.extraction.multimodal import (
 )
 from engramory.core.extraction.router import MAX_NATIVE_TEXT_BYTES, SmartExtractionRouter
 from engramory.core.kb_graph import entity_labels_for, extract_knowledge_and_media_graph
-from engramory.core.models import KB_SECTION_MODALITIES, KBBlob, KBSection
+from engramory.core.models import KB_SECTION_MODALITIES, KBBlob, KBSection, thaw_mapping
 from engramory.core.repository import Repository
 from engramory.ports.graph import GraphPort
 from engramory.ports.llm import LLMPort
@@ -178,9 +178,9 @@ class KnowledgeCore:
         repo_root: Path | None = None,
     ) -> dict[str, list[str]]:
         """Ingest multiple documents into kb_sections with batch upsert and batch embedding."""
-        from engramory.access.poisoning_guard import MemoryPoisoningError, inspect_memory_write
         from engramory.core.docs_tools import _is_within_root, has_symlink_component
         from engramory.core.models import ValidationError
+        from engramory.core.poisoning_guard import MemoryPoisoningError, inspect_memory_write
 
         eff_project_id = None if scope in ("domain", "space") else project_id
         all_sections: list[KBSection] = []
@@ -411,19 +411,15 @@ class KnowledgeCore:
                 else:
                     sec_modality = "text"
 
-                sec_sha = (
-                    str(sec.metadata["sha256"])
-                    if sec.metadata
-                    and sec.metadata.get("sha256")
-                    and sec_modality in {"image", "audio", "video"}
-                    else None
-                )
-                sec_uri = f"pgblob://{tenant_id}/{sec_sha}" if sec_sha else None
+                # Defer blob_sha256/blob_uri until storage.put_file() persists the kb_blobs row
+                sec_sha = None
+                sec_uri = None
+                has_media_sha = bool(sec.metadata and sec.metadata.get("sha256"))
                 sec_media_meta = (
                     {k: v for k, v in (sec.metadata or {}).items() if k != "domain"}
                     if (
                         sec_modality in {"image", "audio", "video", "pdf", "document"}
-                        or sec_sha
+                        or has_media_sha
                         or will_store_blob
                     )
                     else {}
@@ -451,7 +447,7 @@ class KnowledgeCore:
                 )
                 if kb_sec.media_metadata:
                     inspect_memory_write(
-                        json.dumps(dict(kb_sec.media_metadata), sort_keys=True),
+                        json.dumps(thaw_mapping(kb_sec.media_metadata), sort_keys=True),
                         tenant_id=tenant_id,
                         writer_agent_id=agent_id,
                         target=kb_sec.doc_id,
@@ -636,7 +632,7 @@ class KnowledgeCore:
                             id=ent.id,
                             labels=entity_labels_for(ent),
                             props={
-                                **ent.properties,
+                                **thaw_mapping(ent.properties),
                                 "name": ent.name,
                                 "domain_id": ent.domain_id,
                                 "tenant_id": ent.tenant_id,
@@ -648,7 +644,7 @@ class KnowledgeCore:
                             dst=rel.dst_id,
                             rel=rel.rel_type,
                             props={
-                                **rel.properties,
+                                **thaw_mapping(rel.properties),
                                 "tenant_id": rel.tenant_id,
                             },
                         )

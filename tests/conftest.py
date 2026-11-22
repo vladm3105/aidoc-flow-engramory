@@ -1,9 +1,9 @@
-"""Shared ephemeral-Postgres fixture (integration + conformance suites).
+"""Shared ephemeral PG18 + Neo4j test fixtures (integration + conformance suites).
 
 Resolution order:
 1. ``ENGRAMORY_TEST_DSN`` env var — use an existing database (migrations are
    applied to it; use a throwaway DB).
-2. Ephemeral ``pgvector/pgvector:pg16`` container on a free localhost port
+2. Ephemeral ``pgvector/pgvector:pg18`` container on a free localhost port
    (docker required; auto-removed on teardown).
 3. Neither available -> the whole integration suite skips.
 
@@ -20,11 +20,15 @@ import subprocess
 import time
 import urllib.parse
 import uuid
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
+import pytest_asyncio
+
+PG_IMAGE = "pgvector/pgvector:pg18"
+NEO4J_IMAGE = "neo4j:5.26-community"
 
 MIGRATIONS = Path(__file__).resolve().parents[1] / "db" / "migrations"
 
@@ -108,12 +112,6 @@ def pg_dsn() -> Iterator[str]:
         yield env_dsn
         return
 
-    if os.environ.get("GITHUB_ACTIONS"):
-        # CI runs must not depend on a Docker Hub pull per run (rate limits /
-        # outages would fail, not skip). Enable in CI by adding a `services:`
-        # postgres container to ci.yml and exporting ENGRAMORY_TEST_DSN.
-        pytest.skip("integration: CI without ENGRAMORY_TEST_DSN — reason: see conftest note")
-
     if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
         pytest.skip("integration: docker unavailable — reason: requires running docker daemon")
 
@@ -135,7 +133,7 @@ def pg_dsn() -> Iterator[str]:
                 "POSTGRES_DB=it",
                 "-p",
                 f"127.0.0.1:{port}:5432",
-                "pgvector/pgvector:pg16",
+                PG_IMAGE,
             ],
             check=True,
             capture_output=True,
@@ -198,26 +196,98 @@ def _neo4j_reachable(host: str = "127.0.0.1", port: int = 7687) -> bool:
         return False
 
 
-@pytest.fixture
-def neo4j_adapter() -> Iterator[Any]:
+def _wait_neo4j_bolt(uri: str, auth: tuple[str, str], timeout_sec: float = 5.0) -> bool:
+    from neo4j import GraphDatabase
+
+    deadline = time.monotonic() + timeout_sec
+    while time.monotonic() < deadline:
+        driver = None
+        try:
+            driver = GraphDatabase.driver(uri, auth=auth)
+            driver.verify_connectivity()
+            return True
+        except Exception:  # noqa: BLE001  # reason: retry while ephemeral neo4j initializes Bolt listener
+            time.sleep(0.5)
+        finally:
+            if driver is not None:
+                driver.close()
+    return False
+
+
+@pytest.fixture(scope="session")
+def _neo4j_endpoint() -> Iterator[tuple[str, tuple[str, str]]]:
+    explicit_uri = os.getenv("NEO4J_URI")
+    if explicit_uri:
+        auth = (os.getenv("NEO4J_USER", "neo4j"), os.getenv("NEO4J_PASSWORD", "change_me"))
+        parsed = urllib.parse.urlparse(explicit_uri)
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or 7687
+        if not _neo4j_reachable(host, port):
+            pytest.skip(f"neo4j offline ({explicit_uri}) — reason: unreachable")
+        yield explicit_uri, auth
+        return
+
+    if os.getenv("NEO4J_PASSWORD") is not None and _neo4j_reachable("127.0.0.1", 7687):
+        auth = (os.getenv("NEO4J_USER", "neo4j"), os.getenv("NEO4J_PASSWORD", "change_me"))
+        yield "bolt://127.0.0.1:7687", auth
+        return
+
+    if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
+        pytest.skip("neo4j/docker unavailable — reason: requires neo4j or docker")
+
+    port = _free_port()
+    name = f"engramory-neo4j-it-{uuid.uuid4().hex[:8]}"
+    auth = ("neo4j", "test_password_engramory")
+    uri = f"bolt://127.0.0.1:{port}"
+    try:
+        subprocess.run(
+            [
+                "docker",
+                "run",
+                "-d",
+                "--name",
+                name,
+                "-e",
+                f"NEO4J_AUTH={auth[0]}/{auth[1]}",
+                "-p",
+                f"127.0.0.1:{port}:7687",
+                NEO4J_IMAGE,
+            ],
+            check=True,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            f"neo4j docker run failed (rc={exc.returncode}): {exc.stderr.decode(errors='replace')}"
+        ) from exc
+
+    try:
+        deadline = time.monotonic() + 90
+        while not _wait_neo4j_bolt(uri, auth, timeout_sec=5.0):
+            if not _container_running(name) or time.monotonic() > deadline:
+                raise RuntimeError(f"neo4j container not ready; logs:\n{_container_logs(name)}")
+        yield uri, auth
+    finally:
+        rm = subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+        if rm.returncode != 0:
+            import warnings
+
+            warnings.warn(
+                f"leaked container {name}: {rm.stderr.decode(errors='replace')}",
+                stacklevel=1,
+            )
+
+
+@pytest_asyncio.fixture
+async def neo4j_adapter(_neo4j_endpoint: tuple[str, tuple[str, str]]) -> AsyncIterator[Any]:
     from engramory.adapters.dev.graph_neo4j import Neo4jGraphAdapter
 
-    uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-    auth = (os.getenv("NEO4J_USER", "neo4j"), os.getenv("NEO4J_PASSWORD", "change_me"))
-    host = "127.0.0.1"
-    port = 7687
-    if "://" in uri:
-        netloc = uri.split("://", 1)[1]
-        if ":" in netloc:
-            parts = netloc.split(":")
-            host = parts[0] or "127.0.0.1"
-            port = int(parts[1].split("/")[0])
-    if not _neo4j_reachable(host, port):
-        pytest.skip(  # reason: neo4j unavailable in offline integration test
-            "integration: neo4j unavailable — reason: requires running neo4j container on bolt://localhost:7687"
-        )
+    uri, auth = _neo4j_endpoint
     adapter = Neo4jGraphAdapter(uri=uri, auth=auth)
-    yield adapter
+    try:
+        yield adapter
+    finally:
+        await adapter.close()
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:

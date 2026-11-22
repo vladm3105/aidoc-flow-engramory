@@ -10,35 +10,35 @@ document_control:
   subtype: code_build
   source_spec: "@spec: SPEC-02"
   authorizing_chg: "@chg: CHG-008"
-  status: In Progress
+  status: Completed
   version: "1.0"
   date_created: "2026-11-12T00:00:00"
-  last_updated: "2026-11-12T00:00:00"
+  last_updated: "2026-11-22T00:00:00"
   author: "Engramory team"
   complexity: 4
-  estimated_files: 20
+  estimated_files: 18
   session_count: 1
 
 file_manifest:
   files:
-    - { path: "db/migrations/0010_multimodal_rag_and_blob_cas.sql", order: 1, status: IN_PROGRESS, session: 1, verified: true }
-    - { path: "src/engramory/ports/storage.py", order: 2, status: IN_PROGRESS, session: 1, verified: true }
-    - { path: "src/engramory/ports/llm.py", order: 3, status: IN_PROGRESS, session: 1, verified: true }
-    - { path: "src/engramory/core/models.py", order: 4, status: IN_PROGRESS, session: 1, verified: true }
-    - { path: "src/engramory/adapters/dev/storage_local.py", order: 5, status: IN_PROGRESS, session: 1, verified: true }
-    - { path: "src/engramory/adapters/dev/storage_pg.py", order: 6, status: IN_PROGRESS, session: 1, verified: true }
-    - { path: "src/engramory/adapters/dev/llm_litellm.py", order: 7, status: IN_PROGRESS, session: 1, verified: true }
-    - { path: "src/engramory/adapters/factory.py", order: 8, status: IN_PROGRESS, session: 1, verified: true }
-    - { path: "src/engramory/core/extraction/multimodal.py", order: 9, status: IN_PROGRESS, session: 1, verified: true }
-    - { path: "src/engramory/core/extraction/router.py", order: 10, status: IN_PROGRESS, session: 1, verified: true }
-    - { path: "src/engramory/core/repository.py", order: 11, status: IN_PROGRESS, session: 1, verified: true }
-    - { path: "src/engramory/core/kb_graph.py", order: 12, status: IN_PROGRESS, session: 1, verified: true }
-    - { path: "src/engramory/core/knowledge.py", order: 13, status: IN_PROGRESS, session: 1, verified: true }
-    - { path: "src/engramory/access/surface.py", order: 14, status: IN_PROGRESS, session: 1, verified: true }
-    - { path: "src/engramory/mcp/server.py", order: 15, status: IN_PROGRESS, session: 1, verified: true }
-    - { path: "src/engramory/cli.py", order: 16, status: IN_PROGRESS, session: 1, verified: true }
-    - { path: "tests/test_storage_pg_blob_cas.py", order: 17, status: IN_PROGRESS, session: 1, verified: true }
-    - { path: "tests/test_multimodal_extraction_and_graphrag.py", order: 18, status: IN_PROGRESS, session: 1, verified: true }
+    - { path: "db/migrations/0010_multimodal_rag_and_blob_cas.sql", order: 1, status: DONE, session: 1, verified: true }
+    - { path: "src/engramory/ports/storage.py", order: 2, status: DONE, session: 1, verified: true }
+    - { path: "src/engramory/ports/llm.py", order: 3, status: DONE, session: 1, verified: true }
+    - { path: "src/engramory/core/models.py", order: 4, status: DONE, session: 1, verified: true }
+    - { path: "src/engramory/adapters/dev/storage_local.py", order: 5, status: DONE, session: 1, verified: true }
+    - { path: "src/engramory/adapters/dev/storage_pg.py", order: 6, status: DONE, session: 1, verified: true }
+    - { path: "src/engramory/adapters/dev/llm_litellm.py", order: 7, status: DONE, session: 1, verified: true }
+    - { path: "src/engramory/adapters/factory.py", order: 8, status: DONE, session: 1, verified: true }
+    - { path: "src/engramory/core/extraction/multimodal.py", order: 9, status: DONE, session: 1, verified: true }
+    - { path: "src/engramory/core/extraction/router.py", order: 10, status: DONE, session: 1, verified: true }
+    - { path: "src/engramory/core/repository.py", order: 11, status: DONE, session: 1, verified: true }
+    - { path: "src/engramory/core/kb_graph.py", order: 12, status: DONE, session: 1, verified: true }
+    - { path: "src/engramory/core/knowledge.py", order: 13, status: DONE, session: 1, verified: true }
+    - { path: "src/engramory/access/surface.py", order: 14, status: DONE, session: 1, verified: true }
+    - { path: "src/engramory/mcp/server.py", order: 15, status: DONE, session: 1, verified: true }
+    - { path: "src/engramory/cli.py", order: 16, status: DONE, session: 1, verified: true }
+    - { path: "tests/test_storage_pg_blob_cas.py", order: 17, status: DONE, session: 1, verified: true }
+    - { path: "tests/test_multimodal_extraction_and_graphrag.py", order: 18, status: DONE, session: 1, verified: true }
 
 execution_commands:
   setup: ["uv sync"]
@@ -77,7 +77,25 @@ traceability:
     code_paths: ["@code: src/engramory/adapters/dev/storage_pg.py", "@code: src/engramory/core/extraction/multimodal.py"]
     test_paths: ["@tests: tests/test_storage_pg_blob_cas.py", "@tests: tests/test_multimodal_extraction_and_graphrag.py"]
   code_inventory:
-    files: []
+    files:
+      - { path: "db/migrations/0010_multimodal_rag_and_blob_cas.sql", status: completed, session: "1", verified: true }
+      - { path: "src/engramory/ports/storage.py", status: completed, session: "1", verified: true }
+      - { path: "src/engramory/ports/llm.py", status: completed, session: "1", verified: true }
+      - { path: "src/engramory/core/models.py", status: completed, session: "1", verified: true }
+      - { path: "src/engramory/adapters/dev/storage_local.py", status: completed, session: "1", verified: true }
+      - { path: "src/engramory/adapters/dev/storage_pg.py", status: completed, session: "1", verified: true }
+      - { path: "src/engramory/adapters/dev/llm_litellm.py", status: completed, session: "1", verified: true }
+      - { path: "src/engramory/adapters/factory.py", status: completed, session: "1", verified: true }
+      - { path: "src/engramory/core/extraction/multimodal.py", status: completed, session: "1", verified: true }
+      - { path: "src/engramory/core/extraction/router.py", status: completed, session: "1", verified: true }
+      - { path: "src/engramory/core/repository.py", status: completed, session: "1", verified: true }
+      - { path: "src/engramory/core/kb_graph.py", status: completed, session: "1", verified: true }
+      - { path: "src/engramory/core/knowledge.py", status: completed, session: "1", verified: true }
+      - { path: "src/engramory/access/surface.py", status: completed, session: "1", verified: true }
+      - { path: "src/engramory/mcp/server.py", status: completed, session: "1", verified: true }
+      - { path: "src/engramory/cli.py", status: completed, session: "1", verified: true }
+      - { path: "tests/test_storage_pg_blob_cas.py", status: completed, session: "1", verified: true }
+      - { path: "tests/test_multimodal_extraction_and_graphrag.py", status: completed, session: "1", verified: true }
 
 tdd_consistency:
   summary: "Governed in consolidated SDD corpus."

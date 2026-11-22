@@ -6,19 +6,15 @@ from collections.abc import Mapping, Sequence
 from dataclasses import fields
 from typing import Any
 
-from engramory.access.poisoning_guard import inspect_memory_write
-from engramory.core.models import Episode, ValidationError
+from engramory.core.models import Episode, ValidationError, thaw_value
+from engramory.core.poisoning_guard import inspect_memory_write
 from engramory.core.repository import Repository
 from engramory.ports import LLMPort, VectorPort
 
 
 def _thaw_value(value: Any) -> Any:
-    """Convert frozen MappingProxyType / nested lists into plain mutable structures."""
-    if isinstance(value, Mapping):
-        return {k: _thaw_value(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_thaw_value(v) for v in value]
-    return value
+    """Convert frozen MappingProxyType / tuples / nested collections into plain structures."""
+    return thaw_value(value)
 
 
 def _dataclass_to_dict(obj: Any) -> dict[str, Any]:

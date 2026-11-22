@@ -1,0 +1,330 @@
+# CHG-013_audit-wave-p3-verification-perf-sdd.yaml — Wave P3 Verification, Performance, Portability & SDD Parity Remediation (PLAN-026 TASK-4)
+
+document_control:
+  project_name: platform-engramory
+  document_id: CHG-013
+  version: '1.0'
+  status: Completed
+  author: Antigravity + Operator
+  created_date: '2026-11-22'
+  last_updated: '2026-11-22'
+  framework_version: 0.96.25
+  revision_history:
+  - version: '1.0'
+    date: '2026-11-22'
+    author: Antigravity + Operator
+    description: Wave P3 (H16, M1, M2, M4, M5, M8, L1, L3, L4) SDD2C change record for PLAN-026 TASK-4 deep-audit remediation.
+id: CHG-013
+doc_id: CHG-013
+chg_id: CHG-013
+status: Completed
+title: "Wave P3 Audit Remediation — Verification, Connection Pooling, Indexes, Portability, Extraction & SDD Parity (PLAN-026 TASK-4)"
+classification:
+  type: Type-F
+  weight: C2
+  flow: SDD2C
+metadata:
+  document_type: chg-document
+  layer: 9
+  purpose: governance
+  last_updated: '2026-11-22'
+  change_level:
+    value: C2
+  change_source:
+    value: sdd
+change_control:
+  chg_id: CHG-013
+  status: Completed
+  flow: sdd_to_code
+  flow_code: SDD2C
+  change_level: C2
+  change_source: sdd
+  entry_gate: GATE-SPEC
+  semver_impact: minor
+  version_action: bump
+  author: Antigravity + Operator
+  date_proposed: '2026-11-22T10:45:00'
+  date_approved: '2026-11-22T10:45:00'
+  date_implemented: '2026-11-22'
+  supersedes:
+  - docs/archive/CHG-013/SPEC-01_access_surface_v1.4.yaml
+  - docs/archive/CHG-013/SPEC-03_retrieval_graph_v1.0.yaml
+  - docs/archive/CHG-013/SPEC-04_distillation_engine_v1.2.yaml
+  - docs/archive/CHG-013/SPEC-06_ports_portability_v1.3.yaml
+  - docs/archive/CHG-013/SPEC-07_cli_face_v1.3.yaml
+decision:
+  decision_id: DEC-CHG-013
+  title: "Enforce >=85% Real-DB CI Verification, psycopg AsyncConnectionPool + 0013 Indexes, Profile Adapter Routing, Deep Immutability, Win32/Extraction Hardening, and 0-Violation SDD Graph Invariants (PLAN-026 Wave P3)"
+  status: Ratified
+  context: "AUDIT-2026-11-20_deep-review.md remaining Wave P3 findings cover DB connection pooling & index hygiene (M1), adapter/domain/lifecycle cleanup (M2), cross-platform portability (M4), extraction/parsing/git_sync/docs/stack/LLM bugs (M5), stale SDD/PRD/SPEC/IPLAN/graph parity (M8), test/CI coverage & real-DB verification (H16), anchored regex validation (L1), profile completeness & CLI init permissions (L3), deep immutability & layer-boundary placement (L4), plus scripts/deploy-stage.sh executable bit drift."
+  choice: "Execute PLAN-026 TASK-4 under SDD2C (C2): archive SPEC-01/03/04/06/07 into docs/archive/CHG-013/ and reconcile ADR/SPEC/IPLAN docs first; move poisoning_guard to core/ with thin re-export shim and enforce deep immutability + \\A...\\Z fullmatch validation; add psycopg[binary,pool] lazy per-loop AsyncConnectionPool, SQL 0013 indexes/FK/RLS hygiene, non-mutating agent_brain_compare, unified adapter profile factory & clean worker shutdown; harden Win32 event loop/POSIX paths/CRLF lint, multimodal extractor bounds, MarkdownParser/HtmlParser/TextParser, git_sync upsert-before-delete, StackPolicyValidator, LiteLLM 16 MiB/dimensions, and SDD validate-graph --invariants zero violations; raise COV_MIN to 85% with real-DB PG18 + Neo4j integration coverage."
+  consequences: "Closes all 39 AUDIT-2026-11-20_deep-review.md findings (Wave P0 + P1 + P2 + P3) locally on branch feature/plan-026-wave-p3-verification-perf-sdd with 0 SDD graph invariant violations and >=85% test coverage."
+  alternatives_considered:
+  - option: Keep asyncio-global single pool or defer SDD --invariants to warn-only
+    rationale_rejected: Fails cross-loop CLI/pytest execution and leaves 9 unresolved SDD graph invariant violations in sdd:check.
+change_description:
+  what: "Remediate Wave P3 findings (H16, M1, M2, M4, M5, M8, L1, L3, L4) and scripts/deploy-stage.sh mode across db/migrations/, docs/, scripts/, src/engramory/, tests/, .aidoc/, .github/workflows/, pyproject.toml, uv.lock, Taskfile.yml, unified-test-suite.config.json, and AGENTS.md."
+  why: "Eliminate connection-per-op overhead, missing FK/indexes, stale adapter factory routing, mutable nested domain payloads, regex newline bypasses, Win32/CRLF incompatibilities, parser/extractor/git_sync bugs, SDD graph invariant failures, and sub-85% CI verification coverage."
+  trigger: "Completion and merge of Wave P0/P1/P2 into dev (9ec5619) and explicit operator authorization to proceed with PLAN-026 TASK-4."
+impact_assessment:
+  affected_layers:
+  - layer: SPEC
+    artifacts:
+    - SPEC-01
+    - SPEC-03
+    - SPEC-04
+    - SPEC-06
+    - SPEC-07
+    impact: Reconciled public AccessSurface/distillation/port/CLI inventories with implemented codebase before Wave P3 edits.
+  - layer: IPLAN
+    artifacts:
+    - IPLAN-00
+    - IPLAN-01
+    - IPLAN-02
+    - IPLAN-03
+    - IPLAN-04
+    - IPLAN-05
+    - IPLAN-06
+    - IPLAN-07
+    - IPLAN-08
+    - IPLAN-13
+    impact: Reconciled Completed IPLAN manifests to real codebase inventories and created executable Wave P3 IPLAN-13 / SLICE-13.
+  cascade_direction: downstream
+  risk_level: Medium
+justification: "Completes PLAN-026 TASK-4 (Wave P3), the final remediation wave of AUDIT-2026-11-20_deep-review.md."
+scope:
+  in_scope:
+  - "Wave P3 findings H16, M1, M2, M4, M5, M8, L1, L3, L4, scripts/deploy-stage.sh executable bit, governed docs sync, and >=85% test/CI coverage"
+  out_of_scope:
+  - "External repository mutations outside platform-engramory or edits to .ci/"
+  - "Git remote push or merge (local branch commits only)"
+  files_to_touch: &id001
+  - .aidoc/Taskfile.yml
+  - .github/workflows/ci.yml
+  - AGENTS.md
+  - Taskfile.yml
+  - config/domains/example-domain.yaml
+  - db/migrations/0013_wave_p3_indexes_and_hygiene.sql
+  - db/migrations/down/0013_wave_p3_indexes_and_hygiene.sql
+  - docs/ARCHITECTURE.md
+  - docs/MULTIMODAL_AND_POSTGRES_BLOB_STORAGE.md
+  - docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md
+  - docs/archive/CHANGELOG.md
+  - docs/archive/CHG-013/SPEC-01_access_surface_v1.4.yaml
+  - docs/archive/CHG-013/SPEC-03_retrieval_graph_v1.0.yaml
+  - docs/archive/CHG-013/SPEC-04_distillation_engine_v1.2.yaml
+  - docs/archive/CHG-013/SPEC-06_ports_portability_v1.3.yaml
+  - docs/archive/CHG-013/SPEC-07_cli_face_v1.3.yaml
+  - docs/doc-tools/00_INDEX.md
+  - docs/doc-tools/10_DOCUMENTATION_TOOLS_TECHNICAL_REFERENCE.md
+  - docs/sdd/05_ADR/ADR-00_index.md
+  - docs/sdd/06_SPEC/SPEC-01_access_surface.yaml
+  - docs/sdd/06_SPEC/SPEC-03_retrieval_graph.yaml
+  - docs/sdd/06_SPEC/SPEC-04_distillation_engine.yaml
+  - docs/sdd/06_SPEC/SPEC-06_ports_portability.yaml
+  - docs/sdd/06_SPEC/SPEC-07_cli_face.yaml
+  - docs/sdd/08_IPLAN/IPLAN-00_index.yaml
+  - docs/sdd/08_IPLAN/IPLAN-01_access_surface.yaml
+  - docs/sdd/08_IPLAN/IPLAN-02_memory_store.yaml
+  - docs/sdd/08_IPLAN/IPLAN-03_retrieval_graph.yaml
+  - docs/sdd/08_IPLAN/IPLAN-04_distillation_engine.yaml
+  - docs/sdd/08_IPLAN/IPLAN-05_kb_compatibility.yaml
+  - docs/sdd/08_IPLAN/IPLAN-06_ports_portability.yaml
+  - docs/sdd/08_IPLAN/IPLAN-07_cli_face.yaml
+  - docs/sdd/08_IPLAN/IPLAN-08_multimodal_rag_graphrag.yaml
+  - docs/sdd/08_IPLAN/IPLAN-13_audit-wave-p3-verification-perf-sdd.swf.yaml
+  - docs/sdd/09_CHG/CHG-013_audit-wave-p3-verification-perf-sdd.yaml
+  - docs/sdd/graph/SLICE-13_audit-wave-p3-verification-perf-sdd.graph.yaml
+  - plans/HANDOFF-PLAN-026_v030-deep-audit-remediation.md
+  - pyproject.toml
+  - scripts/deploy-stage.sh
+  - scripts/ingest_docs.py
+  - scripts/smoke_preprod.sh
+  - src/engramory/access/jwt_auth.py
+  - src/engramory/access/poisoning_guard.py
+  - src/engramory/access/surface.py
+  - src/engramory/adapters/dev/events_nats.py
+  - src/engramory/adapters/dev/graph_neo4j.py
+  - src/engramory/adapters/dev/llm_litellm.py
+  - src/engramory/adapters/dev/storage_local.py
+  - src/engramory/adapters/dev/storage_pg.py
+  - src/engramory/adapters/dev/vector_pg.py
+  - src/engramory/adapters/factory.py
+  - src/engramory/cli.py
+  - src/engramory/core/chunking.py
+  - src/engramory/core/citations.py
+  - src/engramory/core/context_tools.py
+  - src/engramory/core/docs_tools.py
+  - src/engramory/core/experience.py
+  - src/engramory/core/extraction/enrichment.py
+  - src/engramory/core/extraction/multimodal.py
+  - src/engramory/core/git_sync.py
+  - src/engramory/core/kb_graph.py
+  - src/engramory/core/knowledge.py
+  - src/engramory/core/memory.py
+  - src/engramory/core/models.py
+  - src/engramory/core/parsers/html.py
+  - src/engramory/core/parsers/markdown.py
+  - src/engramory/core/parsers/text.py
+  - src/engramory/core/poisoning_guard.py
+  - src/engramory/core/repository.py
+  - src/engramory/mcp/server.py
+  - src/engramory/ports/__init__.py
+  - src/engramory/ports/cache.py
+  - src/engramory/ports/memory.py
+  - src/engramory/ports/secrets.py
+  - src/engramory/ports/storage.py
+  - src/engramory/workers/distillation.py
+  - src/engramory/workers/runner.py
+  - tests/conftest.py
+  - tests/integration/test_graph_reproject.py
+  - tests/security/test_failclosed.py
+  - tests/security/test_wave_p2_infra_governance.py
+  - tests/security/test_wave_p3_verification_perf_sdd.py
+  - tests/test_docs_tools.py
+  - tests/test_migrations.py
+  - tests/test_multimodal_extraction_and_graphrag.py
+  - tests/test_storage_pg_blob_cas.py
+  - tests/test_virtual_employee_lifecycle.py
+  - tests/unit/test_cli_and_surface_coverage.py
+  - tests/unit/test_jwt_auth.py
+  - tests/unit/test_llm_litellm.py
+  - tests/unit/test_mcp_server.py
+  - tests/unit/test_no_vendor_imports.py
+  - tests/unit/test_repository_unit.py
+  - unified-test-suite.config.json
+  - uv.lock
+implementation:
+  steps:
+  - step: Archive SPEC-01/03/04/06/07 pre-edit snapshots and reconcile ADR/SPEC/IPLAN baselines
+    phase: sdd_lifecycle
+    artifact: SPEC-01, SPEC-03, SPEC-04, SPEC-06, SPEC-07
+    archive_path: docs/archive/CHG-013/
+    current_version: '1.4'
+    new_version: '1.5'
+    status: Completed
+  - step: Create IPLAN-13 (IPLAN-13_audit-wave-p3-verification-perf-sdd.swf.yaml) and SLICE-13_audit-wave-p3-verification-perf-sdd.graph.yaml
+    phase: iplan_creation
+    artifact: IPLAN-13
+    status: Completed
+  - step: Synchronize IPLAN-00_index.yaml, AGENTS.md, CHANGELOG.md, and watched_paths documentation with Wave P3 changes
+    phase: documentation_sync
+    artifact: IPLAN-00_index and docs/
+    status: Completed
+  artifacts_modified:
+  - id: SPEC-01
+    file: docs/sdd/06_SPEC/SPEC-01_access_surface.yaml
+    change_type: modified
+  - id: SPEC-03
+    file: docs/sdd/06_SPEC/SPEC-03_retrieval_graph.yaml
+    change_type: modified
+  - id: SPEC-04
+    file: docs/sdd/06_SPEC/SPEC-04_distillation_engine.yaml
+    change_type: modified
+  - id: SPEC-06
+    file: docs/sdd/06_SPEC/SPEC-06_ports_portability.yaml
+    change_type: modified
+  - id: SPEC-07
+    file: docs/sdd/06_SPEC/SPEC-07_cli_face.yaml
+    change_type: modified
+  - id: IPLAN-13
+    file: docs/sdd/08_IPLAN/IPLAN-13_audit-wave-p3-verification-perf-sdd.swf.yaml
+    change_type: created
+  rollback_steps:
+  - step: Reset feature/plan-026-wave-p3-verification-perf-sdd to 9ec5619
+    phase: rollback
+    artifact: codebase
+verification:
+  pre_implementation_validation:
+  - description: Verify CHG-013, IPLAN-13, and SLICE-13 3-way parity before Wave P3 code edits
+    command: uv --project ${AIOPS_HARNESS_ROOT:-../aiops-harness} run aiops-harness chg verify docs/sdd/09_CHG/CHG-013_audit-wave-p3-verification-perf-sdd.yaml
+  post_implementation_validation:
+  - description: Full quality, unit+real-DB integration (>=85% coverage), SDD graph invariants (0 violations), docs lint/drift, lockfile, and task ci gates
+    command: task doctor && task check && task sdd:check && task ci
+  exit_criteria:
+    all_tests_pass: true
+    no_regressions: true
+    zero_security_downgrade: true
+gate_approval:
+  gate: GATE-SPEC
+  approved: true
+  approver: Operator (explicit go-ahead for next task 2026-11-22)
+  role: Judge (C2)
+  approval_date: '2026-11-22'
+  evidence: Operator instructed "continue with the next task" following Wave P2 merge 9ec5619 per PLAN-026 TASK-4.
+  approved_scope_files: *id001
+rollback_plan:
+  strategy: branch-reset
+  steps:
+  - git reset --hard 9ec5619 && uv sync --locked
+  estimated_effort: 2m
+emergency_change:
+  emergency_id: null
+  incident_severity: null
+  fix_deployed: null
+  post_mortem_due: null
+  post_mortem_completed: false
+  post_hoc_gate: null
+glossary:
+  terms:
+  - term: Per-Loop Lazy AsyncConnectionPool
+    definition: WeakKeyDictionary-keyed psycopg_pool.AsyncConnectionPool registry instantiating pools lazily per asyncio running loop so CLI invocations and pytest function loops share connections safely without cross-loop RuntimeError.
+  - term: Zero-Violation SDD Graph Invariants
+    definition: Deterministic graph validation across BRD/PRD/EARS/BDD/ADR/SPEC/TDD/IPLAN/CHG honoring metadata.status_marker sketches, cross_links/document_control dependencies, and host-doc element ID resolution.
+creation_checklist:
+  checks:
+  - id: 1
+    check: Read every file you reference
+    status: Pass
+  - id: 2
+    check: Verify the architectural claim
+    status: Pass
+  - id: 3
+    check: Check existing struct/type signatures
+    status: Pass
+  - id: 4
+    check: Check existing INSERT/SELECT queries
+    status: Pass
+  - id: 5
+    check: Cross-reference upstream requirements
+    status: Pass
+  - id: 6
+    check: Check for existing handlers/webhooks
+    status: Pass
+  - id: 7
+    check: Couple dependent issues
+    status: Pass
+  - id: 8
+    check: Add automated test specifications
+    status: Pass
+  - id: 9
+    check: Document rollback strategy
+    status: Pass
+  - id: 10
+    check: Verify archive paths
+    status: Pass
+  - id: 11
+    check: Verify supersedes list
+    status: Pass
+  - id: 12
+    check: Verify version bumps
+    status: Pass
+  - id: 13
+    check: SDD-first implementation order
+    status: Pass
+  - id: 14
+    check: 'CHG scope: governance, not implementation plan'
+    status: Pass
+  - id: 15
+    check: Mandatory formal decision block
+    status: Pass
+validation:
+  document_structure:
+  - id_match: Verified CHG-013 matches filename
+  decision_block:
+  - decision_present: Verified DEC-CHG-013 present
+  scope:
+  - governance_only: Verified only sdd_lifecycle, iplan_creation, and documentation_sync steps present
+diff:
+  diff_stat: "Wave P3 PLAN-026 TASK-4 (CHG-013)"
+  breaking_changes: false

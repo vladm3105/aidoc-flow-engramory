@@ -30,7 +30,7 @@ VENDOR_ROOTS = {
     "minio",
     "keycloak",
 }
-SPINE = {"psycopg"}  # allowed in core only (ADR-01/SPEC-06 carve-out)
+SPINE = {"psycopg", "psycopg_pool"}  # allowed in core only (ADR-01/SPEC-06 carve-out)
 
 
 def _import_roots(path: Path) -> set[str]:

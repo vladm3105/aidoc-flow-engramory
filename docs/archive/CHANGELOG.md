@@ -4,6 +4,13 @@ All notable changes to Engramory are documented here. Format: [Keep a Changelog]
 
 ## [Unreleased]
 
+### Fixed & Changed — 2026-11-22 (`PLAN-026` / `CHG-013` / `IPLAN-13` — Wave P3 Deep-Audit Remediation)
+
+- **Real-DB CI & 85% Coverage Verification (`H16`):** Raised `COV_MIN=85` across `Taskfile.yml`, `unified-test-suite.config.json`, and `.github/workflows/ci.yml` with real `pgvector/pgvector:pg18` + `neo4j:5.26-community` integration coverage, expanded `test_no_vendor_imports.py` (`ports/` stdlib-only, `access/` zero vendor/adapter imports), and added comprehensive unit + security regression coverage (`tests/security/test_wave_p3_verification_perf_sdd.py`, `tests/unit/test_repository_unit.py`, `tests/unit/test_cli_and_surface_coverage.py`).
+- **PostgreSQL 18 Pooling & Migration `0013` (`M1`):** Added `psycopg[binary,pool]>=3.2` lazy per-event-loop `AsyncConnectionPool` in `Repository`, `StoreUnavailable` translation for `InterfaceError`/`TimeoutError`/`PoolTimeout`, non-mutating `agent_brain_compare`, and migration `0013_wave_p3_indexes_and_hygiene.sql` (+ down-migration) provisioning 6 hot-path indexes, dedicated `set_kb_blobs_updated_at()`, nullable `embedding_model`, and `fk_kb_sections_blob` (`ON DELETE SET NULL`).
+- **Adapters, Immutability, Anchoring & Layer Boundaries (`M2`, `L1`, `L3`, `L4`):** Unified `cli.py` and `runner.py` through `adapters_for_profile()` with clean loop teardown, declared `ACTIVE_PROFILES`/`PLANNED_PROFILES`, relocated `poisoning_guard.py` into `src/engramory/core/` (with compatibility shim in `access/`), enforced deep freezing (`MappingProxyType`/tuples), `\\A...\\Z` regex validation, and `0o600` `.engramory/config.toml` permissions on `init`.
+- **Cross-Platform Portability, Extraction, Parsers & SDD Parity (`M4`, `M5`, `M8`):** Added Windows selector event-loop policy, `.as_posix()` path normalization, CRLF frontmatter support, cross-platform smoke built-ins, bounded media/FFmpeg extraction, upsert-before-delete `GitSyncEngine`, `HTMLParser`/`MarkdownParser`/`TextParser` fixes, and reconciled `SPEC-01..07`, `IPLAN-00..13`, `ADR-00_index.md`, and `sdd validate-graph --invariants` to zero violations.
+
 ## [0.3.0] - 2026-11-13
 
 ### Added — 2026-11-13 (`PLAN-024` / `CHG-009` / `IPLAN-09`)

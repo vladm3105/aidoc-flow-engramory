@@ -31,10 +31,6 @@ from typing import Any
 
 import yaml
 
-from engramory.access.poisoning_guard import (
-    detect_hard_secrets,
-    redact_hard_secrets,
-)
 from engramory.core.citations import build_doc_id, generate_evidence_ref
 from engramory.core.models import (
     AUTONOMY_TIERS,
@@ -43,6 +39,10 @@ from engramory.core.models import (
     KBDocument,
     KBRunbookStep,
     ValidationError,
+)
+from engramory.core.poisoning_guard import (
+    detect_hard_secrets,
+    redact_hard_secrets,
 )
 
 MAX_SECTION_WORDS = 450
@@ -311,7 +311,7 @@ _GREEN_BANNED_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     ),
 )
 
-_GIT_REF_RE = re.compile(r"^[A-Za-z0-9_./~^-]+$")
+_GIT_REF_RE = re.compile(r"\A[A-Za-z0-9_./~^-]+\Z")
 _AMBIGUOUS_SUBJECT_RE = re.compile(
     r"^(?:It|This|They|These|Those)\s+(?:is|are|was|were|will|should|must|can|triggers|runs|fails)\b"
 )
@@ -330,6 +330,14 @@ _ALLOWED_SMOKE_ENV_KEYS = frozenset(
         "VIRTUAL_ENV",
         "UV_CACHE_DIR",
         "UV_PYTHON",
+        "SYSTEMROOT",
+        "COMSPEC",
+        "PATHEXT",
+        "TEMP",
+        "TMP",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
     }
 )
 _SHELL_META_RE = re.compile(r"[`$|;&><\r\n\x00]|\$\(|\$\{")
@@ -453,6 +461,26 @@ def _is_sdd_doc_path(file_path: Path, repo_root: Path) -> bool:
     return False
 
 
+def validate_watched_path_glob(glob_pat: str) -> tuple[str | None, str | None]:
+    """Validate and POSIX-normalize a relative `watched_paths` glob pattern.
+
+    Returns `(normalized_glob, error_reason)`.
+    """
+    stripped = glob_pat.strip()
+    if not stripped:
+        return None, "watched_paths glob must not be empty"
+    norm = stripped.replace("\\", "/")
+    if (
+        norm.startswith("/")
+        or Path(stripped).is_absolute()
+        or (len(norm) >= 2 and norm[1] == ":" and norm[0].isalpha())
+    ):
+        return None, f"watched_paths glob '{glob_pat}' must be repository-relative, not absolute"
+    if ".." in norm.split("/"):
+        return None, f"watched_paths glob '{glob_pat}' must not contain '..' path traversal"
+    return norm, None
+
+
 def resolve_confined_repo_path(
     path: str | Path,
     *,
@@ -502,14 +530,12 @@ def resolve_confined_repo_path(
             raw_lexical = raw_effective_base / raw
             candidate = (effective_base / raw).resolve()
     else:
-        raw_cwd = Path.cwd() / raw
-        cwd_candidate = (Path.cwd().resolve() / raw).resolve()
-        if allowed_root is not None and not cwd_candidate.is_relative_to(base):
+        if allowed_root is not None:
             raw_lexical = raw_base / raw
             candidate = (base / raw).resolve()
         else:
-            raw_lexical = raw_cwd
-            candidate = cwd_candidate
+            raw_lexical = Path.cwd() / raw
+            candidate = (Path.cwd().resolve() / raw).resolve()
 
     symlink_root = raw_effective_base if enforce_project_boundary else raw_base
     if has_symlink_component(raw_lexical, symlink_root) or (
@@ -899,9 +925,10 @@ def check_green_step_safety(command_body: str) -> list[str]:
 
 def _extract_frontmatter(content: str) -> tuple[dict[str, Any] | None, str, int, str | None]:
     """Return (frontmatter_dict, body_text, body_start_line, yaml_error)."""
-    lines = content.splitlines()
+    normalized = content.replace("\r\n", "\n").replace("\r", "\n")
+    lines = normalized.splitlines()
     if not lines or lines[0].strip() != "---":
-        return None, content, 1, None
+        return None, normalized, 1, None
 
     end_idx: int | None = None
     for idx in range(1, len(lines)):
@@ -910,7 +937,7 @@ def _extract_frontmatter(content: str) -> tuple[dict[str, Any] | None, str, int,
             break
 
     if end_idx is None:
-        return None, content, 1, "Unclosed YAML frontmatter fence '---'"
+        return None, normalized, 1, "Unclosed YAML frontmatter fence '---'"
 
     fm_text = "\n".join(lines[1:end_idx])
     body = "\n".join(lines[end_idx + 1 :])
@@ -958,7 +985,7 @@ def parse_markdown_document(
     resolved_file = file_path.resolve()
     if repo_root is not None:
         try:
-            rel_path = str(resolved_file.relative_to(repo_root.resolve()))
+            rel_path = resolved_file.relative_to(repo_root.resolve()).as_posix()
         except ValueError:
             rel_path = resolved_file.name
     else:
@@ -1087,7 +1114,7 @@ def parse_markdown_document(
             if isinstance(alerts_list, list):
                 trigger_alerts = tuple(str(a) for a in alerts_list if a)
 
-        raw_last_verified = fm_dict.get("last_verified", "2026-11-06")
+        raw_last_verified = fm_dict.get("last_verified", date.today().isoformat())
         if isinstance(raw_last_verified, date):
             last_verified_str = raw_last_verified.isoformat()
         else:
@@ -1105,7 +1132,7 @@ def parse_markdown_document(
                         remediation_hint="Format 'last_verified' as YYYY-MM-DD (e.g. 2026-11-06).",
                     )
                 )
-                last_verified_str = "2026-11-06"
+                last_verified_str = date.today().isoformat()
 
         raw_ttl = fm_dict.get("review_ttl_days", 90)
         try:
@@ -1511,13 +1538,29 @@ def lint_markdown_file(
                                 )
                             )
 
-    # Check watched_paths glob existence (DEAD_WATCHED_PATH_GLOB)
+    # Check watched_paths glob existence (DEAD_WATCHED_PATH_GLOB / INVALID_WATCHED_PATH_GLOB)
     if repo_root is not None and parsed.kb_document is not None:
         root_res = repo_root.resolve()
         for glob_pat in parsed.kb_document.watched_paths:
-            matched = list(root_res.glob(glob_pat))
-            if not matched and "**" in glob_pat:
-                base_glob = glob_pat.replace("/**", "")
+            norm_glob, glob_err = validate_watched_path_glob(glob_pat)
+            if glob_err is not None or norm_glob is None:
+                diags.append(
+                    LintDiagnostic(
+                        rule_id="INVALID_WATCHED_PATH_GLOB",
+                        severity="error",
+                        file=rel_path,
+                        line=1,
+                        message=glob_err or f"Invalid watched_paths glob '{glob_pat}'",
+                        remediation_hint=(
+                            f"Update 'watched_paths' in '{rel_path}' so '{glob_pat}' is a "
+                            f"relative POSIX glob without '..' traversal or drive letters."
+                        ),
+                    )
+                )
+                continue
+            matched = list(root_res.glob(norm_glob))
+            if not matched and "**" in norm_glob:
+                base_glob = norm_glob.replace("/**", "")
                 matched = list(root_res.glob(base_glob))
             if not matched:
                 diags.append(
@@ -1784,7 +1827,7 @@ def lint_repo(
         req_fm = (
             require_frontmatter
             or "doc-tools" in f.parts
-            or f.read_text(encoding="utf-8").startswith("---\n")
+            or f.read_text(encoding="utf-8").startswith(("---\n", "---\r\n"))
         )
         all_diags.extend(
             lint_markdown_file(
@@ -1862,6 +1905,31 @@ def _build_scrubbed_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if k in _ALLOWED_SMOKE_ENV_KEYS}
 
 
+def _run_builtin_smoke_command(
+    argv: list[str], cwd: Path, env: dict[str, str]
+) -> tuple[int, str, str] | None:
+    """Execute pure-Python fallbacks for simple read-only smoke builtins when absent on OS."""
+    if not argv:
+        return None
+    cmd = Path(argv[0]).name.lower()
+    if cmd == "echo":
+        return 0, " ".join(argv[1:]) + "\n", ""
+    if cmd == "true":
+        return 0, "", ""
+    if cmd == "pwd":
+        return 0, f"{cwd}\n", ""
+    if cmd == "printenv":
+        if len(argv) == 1:
+            lines = "".join(f"{k}={v}\n" for k, v in sorted(env.items()))
+            return 0, lines, ""
+        if len(argv) == 2:
+            key = argv[1]
+            if key in env:
+                return 0, f"{env[key]}\n", ""
+            return 1, "", ""
+    return None
+
+
 def smoke_run_green_steps(
     repo_path: Path,
     *,
@@ -1869,8 +1937,6 @@ def smoke_run_green_steps(
     dry_run: bool = False,
 ) -> dict[str, Any]:
     """Verify and run (or allowlist-check in dry_run) tier='green' mode='read-only' steps."""
-    if repo_path.is_symlink():
-        raise ValidationError("Requested path is outside allowed boundary")
     if repo_path.is_symlink():
         raise ValidationError("Requested path is outside allowed boundary")
     root = repo_path.resolve()
@@ -2000,17 +2066,47 @@ def smoke_run_green_steps(
                         }
                     )
                 except OSError as exc:
-                    failed += 1
-                    results.append(
-                        {
-                            "step_uid": step.step_uid,
-                            "step_id": step.step_id,
-                            "doc_id": step.doc_id,
-                            "mode": "live_green_probe",
-                            "status": "failed",
-                            "stderr": str(exc)[:MAX_SMOKE_OUTPUT_BYTES],
-                        }
+                    gvisor_active = (
+                        os.environ.get("ENGRAMORY_SMOKE_SANDBOX", "").lower() == "gvisor"
                     )
+                    builtin_cwd = root if root.is_dir() else root.parent
+                    builtin_res = (
+                        None
+                        if gvisor_active
+                        else _run_builtin_smoke_command(argv, builtin_cwd, scrubbed_env)
+                    )
+                    if builtin_res is not None:
+                        b_rc, b_out, b_err = builtin_res
+                        b_ok = b_rc == step.expect_exit
+                        if b_ok:
+                            passed += 1
+                        else:
+                            failed += 1
+                        results.append(
+                            {
+                                "step_uid": step.step_uid,
+                                "step_id": step.step_id,
+                                "doc_id": step.doc_id,
+                                "mode": "live_green_probe",
+                                "status": "ok" if b_ok else "failed",
+                                "exit_code": b_rc,
+                                "expect_exit": step.expect_exit,
+                                "stdout": b_out[:MAX_SMOKE_OUTPUT_BYTES],
+                                "stderr": b_err[:MAX_SMOKE_OUTPUT_BYTES],
+                            }
+                        )
+                    else:
+                        failed += 1
+                        results.append(
+                            {
+                                "step_uid": step.step_uid,
+                                "step_id": step.step_id,
+                                "doc_id": step.doc_id,
+                                "mode": "live_green_probe",
+                                "status": "failed",
+                                "stderr": str(exc)[:MAX_SMOKE_OUTPUT_BYTES],
+                            }
+                        )
 
     return {
         "status": "failed" if failed > 0 else "ok",
@@ -2109,11 +2205,27 @@ def check_repo_drift(
             continue
         docs_scanned += 1
 
-        # 0. Check for dead watched_paths globs (DEAD_WATCHED_PATH_GLOB)
+        # 0. Check for invalid or dead watched_paths globs
         for glob_pat in doc.watched_paths:
-            matched_glob = list(root.glob(glob_pat))
-            if not matched_glob and "**" in glob_pat:
-                matched_glob = list(root.glob(glob_pat.replace("/**", "")))
+            norm_glob, glob_err = validate_watched_path_glob(glob_pat)
+            if glob_err is not None or norm_glob is None:
+                findings.append(
+                    {
+                        "kind": "INVALID_WATCHED_PATH_GLOB",
+                        "doc_id": doc.doc_id,
+                        "file": doc.repo_path,
+                        "glob": glob_pat,
+                        "message": glob_err or f"Invalid watched_paths glob '{glob_pat}'",
+                        "remediation_hint": (
+                            f"Update 'watched_paths' in '{doc.repo_path}' so '{glob_pat}' is a "
+                            f"relative POSIX glob without '..' traversal or drive letters."
+                        ),
+                    }
+                )
+                continue
+            matched_glob = list(root.glob(norm_glob))
+            if not matched_glob and "**" in norm_glob:
+                matched_glob = list(root.glob(norm_glob.replace("/**", "")))
             if not matched_glob:
                 findings.append(
                     {
@@ -2137,9 +2249,14 @@ def check_repo_drift(
         if doc.repo_path not in modified:
             matched_watched: list[str] = []
             for mod_file in sorted(modified):
+                mod_norm = mod_file.replace("\\", "/")
                 for pat in doc.watched_paths:
-                    if fnmatch.fnmatch(mod_file, pat) or (
-                        pat.endswith("/**") and mod_file.startswith(pat[:-3].rstrip("/") + "/")
+                    pat_norm, pat_err = validate_watched_path_glob(pat)
+                    if pat_err is not None or pat_norm is None:
+                        continue
+                    if fnmatch.fnmatch(mod_norm, pat_norm) or (
+                        pat_norm.endswith("/**")
+                        and mod_norm.startswith(pat_norm[:-3].rstrip("/") + "/")
                     ):
                         matched_watched.append(mod_file)
                         break
@@ -2218,8 +2335,6 @@ def export_repo_llms(
     """Generate deterministic, prompt-cache friendly `/llms.txt` and `/llms-full.txt` manifests."""
     if repo_path.is_symlink():
         raise ValidationError("Requested path is outside allowed boundary")
-    if repo_path.is_symlink():
-        raise ValidationError("Requested path is outside allowed boundary")
     root = repo_path.resolve()
     repo_name = _scrub_manifest_inline(root.name) or "repo"
 
@@ -2252,7 +2367,7 @@ def export_repo_llms(
             continue
         if f.suffix.lower() == ".yaml":
             try:
-                rel_path = str(f.resolve().relative_to(root))
+                rel_path = f.resolve().relative_to(root).as_posix()
             except ValueError:
                 rel_path = f.name
             raw_yaml = f.read_text(encoding="utf-8")

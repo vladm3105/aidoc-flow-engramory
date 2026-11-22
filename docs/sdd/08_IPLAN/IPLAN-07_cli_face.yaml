@@ -1,0 +1,66 @@
+# IPLAN-07 — CLI Face & Developer Ergonomics. Upstream: SPEC-07, TDD-01.
+metadata: { schema_version: "1.0", document_type: "iplan-document", layer: 8, total_sections: 6, c4_level: { value: none }, tags: [iplan-document, layer-8-artifact, shared-architecture] }
+
+document_control:
+  iplan_id: "IPLAN-07"
+  subtype: code_build
+  source_spec: "@spec: SPEC-07"
+  status: Completed
+  version: "1.0"
+  date_created: "2026-07-11T00:00:00"
+  last_updated: "2026-11-22T00:00:00"
+  author: "Engramory team"
+  complexity: 3
+  estimated_files: 4
+  session_count: 1
+
+file_manifest:
+  files:
+    - { path: "src/engramory/cli.py", order: 1, status: DONE, session: "s1-2026-07-11", verified: true }
+    - { path: "src/engramory/adapters/factory.py", order: 2, status: DONE, session: "s1-2026-07-11", verified: true }
+    - { path: "tests/integration/test_cli.py", order: 3, status: DONE, session: "s1-2026-07-11", verified: true }
+    - { path: "tests/unit/test_factory_fence.py", order: 4, status: DONE, session: "s1-2026-07-11", verified: true }
+
+execution_commands:
+  setup: ["uv sync"]
+  implementation:
+    - "Implement thin argparse CLI face over AccessSurface with ADR-10 dev-tier fence and exit codes 0/1/2/3"
+  validation:
+    - "uv run pytest tests/unit/test_factory_fence.py tests/integration/test_cli.py -q"
+    - "uv run ruff check src/engramory/cli.py src/engramory/adapters/factory.py"
+
+implementation_contracts:
+  provided:
+    contracts:
+      - { name: "CLI Face (`engramory`)", type: "CLI Transport", note: "memory/profile/knowledge/sdd/docs/worker/graph/mcp/status/init commands over AccessSurface" }
+  consumed:
+    dependencies:
+      - { name: "AccessSurface", from: "@spec: SPEC-01", note: "Default-deny access control and audit surface" }
+      - { name: "AdapterFactory", from: "@spec: SPEC-06", note: "require_dev_profile() & adapters_for_profile()" }
+
+session_handoff:
+  sessions:
+    - date: "2026-07-11"
+      agent: "Engramory team"
+      files_touched: ["src/engramory/cli.py", "src/engramory/adapters/factory.py", "tests/integration/test_cli.py", "tests/unit/test_factory_fence.py"]
+      partial_work: "CLI face, exit codes 0/1/2/3, --json purity, upward config discovery, and ADR-10 require_dev_profile() implemented and verified."
+      blockers: "None."
+      next_session_directive: "Completed; extended by IPLAN-08..13."
+      validation_results: { tests_passing: true, coverage: null, lint_clean: true }
+
+traceability:
+  upstream:
+    spec_references: ["@spec: SPEC-07"]
+    tdd_references: ["@tdd: TDD.01.04.a100"]
+  downstream:
+    code_paths: ["@code: src/engramory/cli.py", "@code: src/engramory/adapters/factory.py"]
+    test_paths: ["@tests: tests/integration/test_cli.py", "@tests: tests/unit/test_factory_fence.py"]
+  code_inventory:
+    files:
+      - { path: "src/engramory/cli.py", status: created, session: "s1-2026-07-11", verified: true }
+      - { path: "src/engramory/adapters/factory.py", status: created, session: "s1-2026-07-11", verified: true }
+      - { path: "tests/integration/test_cli.py", status: created, session: "s1-2026-07-11", verified: true }
+      - { path: "tests/unit/test_factory_fence.py", status: created, session: "s1-2026-07-11", verified: true }
+
+tdd_consistency:
+  summary: "Governed in consolidated SDD corpus."

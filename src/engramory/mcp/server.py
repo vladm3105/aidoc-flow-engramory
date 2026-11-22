@@ -43,7 +43,7 @@ from engramory.access.jwt_auth import (
     claims_to_actor_context,
 )
 from engramory.access.surface import AccessSurface, AuthzError, GovernedWriteRejected
-from engramory.core.models import ValidationError
+from engramory.core.models import ValidationError, thaw_mapping
 from engramory.core.repository import Repository, StoreUnavailable
 
 logger = logging.getLogger(__name__)
@@ -1022,7 +1022,7 @@ class McpServer:
                         "token_count": h.token_count,
                         "retrieval_id": h.retrieval_id,
                         **(
-                            {"provenance": dict(h.provenance)}
+                            {"provenance": thaw_mapping(h.provenance)}
                             if (arguments.get("include_knowledge") or arguments.get("expand_graph"))
                             else {}
                         ),
@@ -1113,7 +1113,7 @@ class McpServer:
                 data = {
                     "agent_id": profile.agent_id,
                     "display_name": profile.display_name,
-                    "standing_preferences": dict(profile.standing_preferences),
+                    "standing_preferences": thaw_mapping(profile.standing_preferences),
                 }
                 return {"content": [{"type": "text", "text": json.dumps(data, indent=2)}]}
 
@@ -1139,7 +1139,7 @@ class McpServer:
                 out_data = {
                     "agent_id": upserted.agent_id,
                     "display_name": upserted.display_name,
-                    "standing_preferences": dict(upserted.standing_preferences),
+                    "standing_preferences": thaw_mapping(upserted.standing_preferences),
                 }
                 return {"content": [{"type": "text", "text": json.dumps(out_data, indent=2)}]}
 
@@ -1267,7 +1267,7 @@ class McpServer:
                         "modality": getattr(s, "modality", "text"),
                         "blob_sha256": getattr(s, "blob_sha256", None),
                         "blob_uri": getattr(s, "blob_uri", None),
-                        "media_metadata": dict(getattr(s, "media_metadata", {}) or {}),
+                        "media_metadata": thaw_mapping(getattr(s, "media_metadata", None)),
                     }
                     for s in sections
                 ]

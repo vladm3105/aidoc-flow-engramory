@@ -94,6 +94,7 @@ Engramory tracks structured `brain_metadata` (`brain_variant`, `distiller_model`
 - `skill_count`, `mean_confidence`, and `mean_token_count`.
 - Closed-loop retrieval feedback (`total_retrievals`, `useful_count`, `not_useful_count`, `harmful_count`, `useful_rate`) aggregated across both active and quarantined memories of the variant.
 - Live side-by-side query hit lists, overlap ratio, and recommended winning variant (`winner`).
+- Non-mutating read-only benchmarking (`CHG-013`): `agent_brain_compare` queries `get_memories()` without recording `memory_retrievals` or mutating `retrieval_count`, backed by lazy per-loop `AsyncConnectionPool` and migration `0013` partial indexes (`idx_memories_tenant_domain_live`, `idx_memories_tenant_variant_live`).
 
 ---
 

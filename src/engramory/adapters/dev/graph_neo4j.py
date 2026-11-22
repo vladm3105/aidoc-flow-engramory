@@ -24,12 +24,12 @@ DEFAULT_NEO4J_URI = "bolt://localhost:7687"
 DEFAULT_NEO4J_USER = "neo4j"
 DEFAULT_NEO4J_PASSWORD = "change_me"  # nosec B105  # reason: local dev default placeholder when NEO4J_PASSWORD is unset
 
-_IDENT_RE = re.compile(r"^[A-Za-z0-9_]+$")
+_IDENT_RE = re.compile(r"\A[A-Za-z0-9_]+\Z")
 
 
 def _validate_tenant_id(tenant_id: str) -> str:
-    """Validate Neo4j tenant identifier (non-empty and free of ':' UID delimiters)."""
-    if not tenant_id or ":" in tenant_id:
+    """Validate Neo4j tenant identifier (non-empty and free of ':' delimiters or control chars)."""
+    if not tenant_id or ":" in tenant_id or any(ch in tenant_id for ch in ("\n", "\r", "\x00")):
         raise ValidationError(f"Invalid tenant_id for Neo4j graph: {tenant_id!r}")
     return tenant_id
 
@@ -50,7 +50,7 @@ def _sanitize_props(props: Mapping[str, Any] | None) -> tuple[str, Any, dict[str
 
 def _sanitize_ident(ident: str, kind: str) -> str:
     """Validate identifier contains only alphanumeric characters or underscores."""
-    if not _IDENT_RE.match(ident):
+    if not _IDENT_RE.fullmatch(ident):
         raise ValueError(f"invalid {kind} identifier: {ident!r}")
     return ident
 

@@ -1,0 +1,369 @@
+# SLICE-13_audit-wave-p3-verification-perf-sdd.graph.yaml — Layer 08 Graph Slice
+
+schema_version: 2.0-graph
+slice_id: IPLAN-13_audit-wave-p3-verification-perf-sdd
+initiative_ref: INIT-13_audit-wave-p3-verification-perf-sdd
+metadata:
+  author: Antigravity + Operator
+  created_date: '2026-11-22'
+  last_updated: '2026-11-22'
+  status: Completed
+  framework_version: 0.96.25
+  description: Machine-executable DAG and SAGA rollback for PLAN-026 Wave P3 (CHG-013, H16 + M1 + M2 + M4 + M5 + M8 + L1 + L3 + L4)
+  layer: 08_IPLAN
+  flow: sdd_to_code
+  flow_code: SDD2C
+  tdd_consistency:
+    status: complete
+    coverage_percentage: 100
+nodes:
+- id: CHG-013
+  type: change_request
+  title: "Wave P3 Audit Remediation — Verification, Connection Pooling, Indexes, Portability, Extraction & SDD Parity (PLAN-026 TASK-4)"
+  properties:
+    change_level: C2
+    flow_code: SDD2C
+    status: Completed
+    execution_status: DONE
+    files_to_touch:
+    - .aidoc/Taskfile.yml
+    - .github/workflows/ci.yml
+    - AGENTS.md
+    - Taskfile.yml
+    - config/domains/example-domain.yaml
+    - db/migrations/0013_wave_p3_indexes_and_hygiene.sql
+    - db/migrations/down/0013_wave_p3_indexes_and_hygiene.sql
+    - docs/ARCHITECTURE.md
+    - docs/MULTIMODAL_AND_POSTGRES_BLOB_STORAGE.md
+    - docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md
+    - docs/archive/CHANGELOG.md
+    - docs/archive/CHG-013/SPEC-01_access_surface_v1.4.yaml
+    - docs/archive/CHG-013/SPEC-03_retrieval_graph_v1.0.yaml
+    - docs/archive/CHG-013/SPEC-04_distillation_engine_v1.2.yaml
+    - docs/archive/CHG-013/SPEC-06_ports_portability_v1.3.yaml
+    - docs/archive/CHG-013/SPEC-07_cli_face_v1.3.yaml
+    - docs/doc-tools/00_INDEX.md
+    - docs/doc-tools/10_DOCUMENTATION_TOOLS_TECHNICAL_REFERENCE.md
+    - docs/sdd/05_ADR/ADR-00_index.md
+    - docs/sdd/06_SPEC/SPEC-01_access_surface.yaml
+    - docs/sdd/06_SPEC/SPEC-03_retrieval_graph.yaml
+    - docs/sdd/06_SPEC/SPEC-04_distillation_engine.yaml
+    - docs/sdd/06_SPEC/SPEC-06_ports_portability.yaml
+    - docs/sdd/06_SPEC/SPEC-07_cli_face.yaml
+    - docs/sdd/08_IPLAN/IPLAN-00_index.yaml
+    - docs/sdd/08_IPLAN/IPLAN-01_access_surface.yaml
+    - docs/sdd/08_IPLAN/IPLAN-02_memory_store.yaml
+    - docs/sdd/08_IPLAN/IPLAN-03_retrieval_graph.yaml
+    - docs/sdd/08_IPLAN/IPLAN-04_distillation_engine.yaml
+    - docs/sdd/08_IPLAN/IPLAN-05_kb_compatibility.yaml
+    - docs/sdd/08_IPLAN/IPLAN-06_ports_portability.yaml
+    - docs/sdd/08_IPLAN/IPLAN-07_cli_face.yaml
+    - docs/sdd/08_IPLAN/IPLAN-08_multimodal_rag_graphrag.yaml
+    - docs/sdd/08_IPLAN/IPLAN-13_audit-wave-p3-verification-perf-sdd.swf.yaml
+    - docs/sdd/09_CHG/CHG-013_audit-wave-p3-verification-perf-sdd.yaml
+    - docs/sdd/graph/SLICE-13_audit-wave-p3-verification-perf-sdd.graph.yaml
+    - plans/HANDOFF-PLAN-026_v030-deep-audit-remediation.md
+    - pyproject.toml
+    - scripts/deploy-stage.sh
+    - scripts/ingest_docs.py
+    - scripts/smoke_preprod.sh
+    - src/engramory/access/jwt_auth.py
+    - src/engramory/access/poisoning_guard.py
+    - src/engramory/access/surface.py
+    - src/engramory/adapters/dev/events_nats.py
+    - src/engramory/adapters/dev/graph_neo4j.py
+    - src/engramory/adapters/dev/llm_litellm.py
+    - src/engramory/adapters/dev/storage_local.py
+    - src/engramory/adapters/dev/storage_pg.py
+    - src/engramory/adapters/dev/vector_pg.py
+    - src/engramory/adapters/factory.py
+    - src/engramory/cli.py
+    - src/engramory/core/chunking.py
+    - src/engramory/core/citations.py
+    - src/engramory/core/context_tools.py
+    - src/engramory/core/docs_tools.py
+    - src/engramory/core/experience.py
+    - src/engramory/core/extraction/enrichment.py
+    - src/engramory/core/extraction/multimodal.py
+    - src/engramory/core/git_sync.py
+    - src/engramory/core/kb_graph.py
+    - src/engramory/core/knowledge.py
+    - src/engramory/core/memory.py
+    - src/engramory/core/models.py
+    - src/engramory/core/parsers/html.py
+    - src/engramory/core/parsers/markdown.py
+    - src/engramory/core/parsers/text.py
+    - src/engramory/core/poisoning_guard.py
+    - src/engramory/core/repository.py
+    - src/engramory/mcp/server.py
+    - src/engramory/ports/__init__.py
+    - src/engramory/ports/cache.py
+    - src/engramory/ports/memory.py
+    - src/engramory/ports/secrets.py
+    - src/engramory/ports/storage.py
+    - src/engramory/workers/distillation.py
+    - src/engramory/workers/runner.py
+    - tests/conftest.py
+    - tests/integration/test_graph_reproject.py
+    - tests/security/test_failclosed.py
+    - tests/security/test_wave_p2_infra_governance.py
+    - tests/security/test_wave_p3_verification_perf_sdd.py
+    - tests/test_docs_tools.py
+    - tests/test_migrations.py
+    - tests/test_multimodal_extraction_and_graphrag.py
+    - tests/test_storage_pg_blob_cas.py
+    - tests/test_virtual_employee_lifecycle.py
+    - tests/unit/test_cli_and_surface_coverage.py
+    - tests/unit/test_jwt_auth.py
+    - tests/unit/test_llm_litellm.py
+    - tests/unit/test_mcp_server.py
+    - tests/unit/test_no_vendor_imports.py
+    - tests/unit/test_repository_unit.py
+    - unified-test-suite.config.json
+    - uv.lock
+- id: TDD.01.04.d400
+  type: test_fixture
+  title: Wave P3 Verification, Pooling, Portability & SDD Parity Regression Suite
+  properties:
+    test_file: tests/security/test_wave_p3_verification_perf_sdd.py
+- id: TASK.08.13.a001
+  type: task_action
+  title: "Phase 0-1: SDD2C Baseline, Deep Immutability, Layer Boundaries & Regex Anchoring"
+  action: apply_patch
+  target_file: src/engramory/core/models.py
+  target_files: &id001
+  - config/domains/example-domain.yaml
+  - docs/archive/CHG-013/SPEC-01_access_surface_v1.4.yaml
+  - docs/archive/CHG-013/SPEC-03_retrieval_graph_v1.0.yaml
+  - docs/archive/CHG-013/SPEC-04_distillation_engine_v1.2.yaml
+  - docs/archive/CHG-013/SPEC-06_ports_portability_v1.3.yaml
+  - docs/archive/CHG-013/SPEC-07_cli_face_v1.3.yaml
+  - docs/sdd/05_ADR/ADR-00_index.md
+  - docs/sdd/06_SPEC/SPEC-01_access_surface.yaml
+  - docs/sdd/06_SPEC/SPEC-03_retrieval_graph.yaml
+  - docs/sdd/06_SPEC/SPEC-04_distillation_engine.yaml
+  - docs/sdd/06_SPEC/SPEC-06_ports_portability.yaml
+  - docs/sdd/06_SPEC/SPEC-07_cli_face.yaml
+  - docs/sdd/08_IPLAN/IPLAN-00_index.yaml
+  - docs/sdd/08_IPLAN/IPLAN-01_access_surface.yaml
+  - docs/sdd/08_IPLAN/IPLAN-02_memory_store.yaml
+  - docs/sdd/08_IPLAN/IPLAN-03_retrieval_graph.yaml
+  - docs/sdd/08_IPLAN/IPLAN-04_distillation_engine.yaml
+  - docs/sdd/08_IPLAN/IPLAN-05_kb_compatibility.yaml
+  - docs/sdd/08_IPLAN/IPLAN-06_ports_portability.yaml
+  - docs/sdd/08_IPLAN/IPLAN-07_cli_face.yaml
+  - docs/sdd/08_IPLAN/IPLAN-08_multimodal_rag_graphrag.yaml
+  - docs/sdd/08_IPLAN/IPLAN-13_audit-wave-p3-verification-perf-sdd.swf.yaml
+  - docs/sdd/09_CHG/CHG-013_audit-wave-p3-verification-perf-sdd.yaml
+  - docs/sdd/graph/SLICE-13_audit-wave-p3-verification-perf-sdd.graph.yaml
+  - scripts/deploy-stage.sh
+  - scripts/smoke_preprod.sh
+  - src/engramory/access/jwt_auth.py
+  - src/engramory/access/poisoning_guard.py
+  - src/engramory/adapters/dev/events_nats.py
+  - src/engramory/adapters/dev/graph_neo4j.py
+  - src/engramory/adapters/dev/storage_local.py
+  - src/engramory/adapters/dev/storage_pg.py
+  - src/engramory/core/chunking.py
+  - src/engramory/core/experience.py
+  - src/engramory/core/memory.py
+  - src/engramory/core/models.py
+  - src/engramory/core/poisoning_guard.py
+  - src/engramory/mcp/server.py
+  - src/engramory/ports/storage.py
+  - src/engramory/workers/distillation.py
+  - tests/test_storage_pg_blob_cas.py
+  - tests/test_virtual_employee_lifecycle.py
+  command: uv run pytest -q tests/test_storage_pg_blob_cas.py tests/test_virtual_employee_lifecycle.py
+  compensation: git checkout 9ec5619 -- docs/sdd/ docs/archive/ config/ scripts/ src/ tests/
+  properties:
+    session: 1
+    execution_status: DONE
+    target_files: *id001
+- id: TASK.08.13.a001_rollback
+  type: task_action
+  title: Rollback Phase 0-1 SDD & Immutability
+  action: run_script
+  target_file: src/engramory/core/models.py
+  target_files: *id001
+  command: git checkout 9ec5619 -- docs/sdd/ docs/archive/ config/ scripts/ src/ tests/
+  properties:
+    saga_step: compensate_task_a001
+- id: TASK.08.13.a002
+  type: task_action
+  title: "Phase 2: AsyncConnectionPool, 0013 Indexes & Adapter Profile Completeness"
+  action: apply_patch
+  target_file: src/engramory/core/repository.py
+  target_files: &id002
+  - db/migrations/0013_wave_p3_indexes_and_hygiene.sql
+  - db/migrations/down/0013_wave_p3_indexes_and_hygiene.sql
+  - pyproject.toml
+  - scripts/ingest_docs.py
+  - src/engramory/access/surface.py
+  - src/engramory/adapters/dev/vector_pg.py
+  - src/engramory/adapters/factory.py
+  - src/engramory/cli.py
+  - src/engramory/core/repository.py
+  - src/engramory/ports/__init__.py
+  - src/engramory/ports/cache.py
+  - src/engramory/ports/memory.py
+  - src/engramory/ports/secrets.py
+  - src/engramory/workers/runner.py
+  - tests/test_migrations.py
+  - tests/unit/test_no_vendor_imports.py
+  - tests/unit/test_repository_unit.py
+  - uv.lock
+  depends_on:
+  - TASK.08.13.a001
+  command: uv lock && uv sync --locked && uv run pytest -q tests/test_migrations.py tests/unit/test_no_vendor_imports.py
+  compensation: git checkout 9ec5619 -- pyproject.toml uv.lock db/migrations/ scripts/ingest_docs.py src/ tests/
+  properties:
+    session: 1
+    execution_status: DONE
+    target_files: *id002
+- id: TASK.08.13.a002_rollback
+  type: task_action
+  title: Rollback Phase 2 Pooling & Migrations
+  action: run_script
+  target_file: src/engramory/core/repository.py
+  target_files: *id002
+  command: git checkout 9ec5619 -- pyproject.toml uv.lock db/migrations/ scripts/ingest_docs.py src/ tests/
+  properties:
+    saga_step: compensate_task_a002
+- id: TASK.08.13.a003
+  type: task_action
+  title: "Phase 3: Win32 Portability, Extraction/Parsers, GitSync, StackPolicy & SDD Graph Invariants"
+  action: apply_patch
+  target_file: src/engramory/core/context_tools.py
+  target_files: &id003
+  - src/engramory/adapters/dev/llm_litellm.py
+  - src/engramory/core/citations.py
+  - src/engramory/core/context_tools.py
+  - src/engramory/core/docs_tools.py
+  - src/engramory/core/extraction/enrichment.py
+  - src/engramory/core/extraction/multimodal.py
+  - src/engramory/core/git_sync.py
+  - src/engramory/core/knowledge.py
+  - src/engramory/core/parsers/html.py
+  - src/engramory/core/parsers/markdown.py
+  - src/engramory/core/parsers/text.py
+  - tests/test_docs_tools.py
+  - tests/test_multimodal_extraction_and_graphrag.py
+  - tests/unit/test_llm_litellm.py
+  depends_on:
+  - TASK.08.13.a002
+  command: uv run engramory --json sdd validate-graph --invariants
+  compensation: git checkout 9ec5619 -- src/ tests/
+  properties:
+    session: 1
+    execution_status: DONE
+    target_files: *id003
+- id: TASK.08.13.a003_rollback
+  type: task_action
+  title: Rollback Phase 3 Extraction & SDD Graph
+  action: run_script
+  target_file: src/engramory/core/context_tools.py
+  target_files: *id003
+  command: git checkout 9ec5619 -- src/ tests/
+  properties:
+    saga_step: compensate_task_a003
+- id: TASK.08.13.a004
+  type: task_action
+  title: "Phase 4-5: Real-DB CI Verification (>=85% Coverage), Docs Sync & Full Gates"
+  action: apply_patch
+  target_file: tests/security/test_wave_p3_verification_perf_sdd.py
+  target_files: &id004
+  - .aidoc/Taskfile.yml
+  - .github/workflows/ci.yml
+  - AGENTS.md
+  - Taskfile.yml
+  - docs/ARCHITECTURE.md
+  - docs/MULTIMODAL_AND_POSTGRES_BLOB_STORAGE.md
+  - docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md
+  - docs/archive/CHANGELOG.md
+  - docs/doc-tools/00_INDEX.md
+  - docs/doc-tools/10_DOCUMENTATION_TOOLS_TECHNICAL_REFERENCE.md
+  - plans/HANDOFF-PLAN-026_v030-deep-audit-remediation.md
+  - src/engramory/core/kb_graph.py
+  - tests/conftest.py
+  - tests/integration/test_graph_reproject.py
+  - tests/security/test_failclosed.py
+  - tests/security/test_wave_p2_infra_governance.py
+  - tests/security/test_wave_p3_verification_perf_sdd.py
+  - tests/unit/test_cli_and_surface_coverage.py
+  - tests/unit/test_jwt_auth.py
+  - tests/unit/test_mcp_server.py
+  - unified-test-suite.config.json
+  depends_on:
+  - TASK.08.13.a003
+  command: task doctor && task check && task sdd:check && task ci
+  compensation: git checkout 9ec5619 -- .aidoc/Taskfile.yml .github/workflows/ci.yml AGENTS.md Taskfile.yml docs/ unified-test-suite.config.json src/ tests/
+  properties:
+    session: 1
+    execution_status: DONE
+    target_files: *id004
+- id: TASK.08.13.a004_rollback
+  type: task_action
+  title: Rollback Phase 4-5 CI & Docs
+  action: run_script
+  target_file: tests/security/test_wave_p3_verification_perf_sdd.py
+  target_files: *id004
+  command: git checkout 9ec5619 -- .aidoc/Taskfile.yml .github/workflows/ci.yml AGENTS.md Taskfile.yml docs/ unified-test-suite.config.json src/ tests/
+  properties:
+    saga_step: compensate_task_a004
+edges:
+- from: CHG-013
+  to: TASK.08.13.a001
+  relation: authorized_by
+  notes: CHG-013 authorizes Phase 0-1 SDD baseline, deep immutability, layer boundaries & regex anchoring
+- from: CHG-013
+  to: TASK.08.13.a002
+  relation: authorized_by
+  notes: CHG-013 authorizes Phase 2 AsyncConnectionPool, 0013 indexes & adapter profile completeness
+- from: CHG-013
+  to: TASK.08.13.a003
+  relation: authorized_by
+  notes: CHG-013 authorizes Phase 3 Win32 portability, extraction/parsers, git_sync, StackPolicy & SDD graph invariants
+- from: CHG-013
+  to: TASK.08.13.a004
+  relation: authorized_by
+  notes: CHG-013 authorizes Phase 4-5 real-DB CI integration (>=85% coverage), docs sync & full gates
+- from: TASK.08.13.a002
+  to: TASK.08.13.a001
+  relation: verifies
+  properties:
+    verification_type: preflight_attestation
+- from: TASK.08.13.a003
+  to: TASK.08.13.a002
+  relation: verifies
+  properties:
+    verification_type: preflight_attestation
+- from: TASK.08.13.a004
+  to: TASK.08.13.a003
+  relation: verifies
+  properties:
+    verification_type: preflight_attestation
+- from: TASK.08.13.a001
+  to: TDD.01.04.d400
+  relation: implements
+- from: TASK.08.13.a002
+  to: TDD.01.04.d400
+  relation: implements
+- from: TASK.08.13.a003
+  to: TDD.01.04.d400
+  relation: implements
+- from: TASK.08.13.a004
+  to: TDD.01.04.d400
+  relation: implements
+- from: TASK.08.13.a001
+  to: TASK.08.13.a001_rollback
+  relation: compensated_by
+- from: TASK.08.13.a002
+  to: TASK.08.13.a002_rollback
+  relation: compensated_by
+- from: TASK.08.13.a003
+  to: TASK.08.13.a003_rollback
+  relation: compensated_by
+- from: TASK.08.13.a004
+  to: TASK.08.13.a004_rollback
+  relation: compensated_by

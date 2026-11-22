@@ -28,6 +28,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from engramory.core.docs_tools import has_symlink_component
+from engramory.core.models import thaw_mapping
 from engramory.ports.storage import (
     BlobIntegrityError,
     BlobNotFoundError,
@@ -128,8 +129,11 @@ class PgBlobStorageAdapter:
         worker_sweep: bool = False,
     ) -> AsyncIterator[Any]:
         if self._conn_factory is not None:
-            async with self._conn_factory() as c:
-                yield c
+            try:
+                async with self._conn_factory() as c:
+                    yield c
+            except (psycopg.OperationalError, psycopg.InterfaceError, TimeoutError) as exc:
+                raise StorageError(f"PostgreSQL blob store unavailable: {exc}") from exc
             return
         try:
             conn = await psycopg.AsyncConnection.connect(
@@ -149,6 +153,8 @@ class PgBlobStorageAdapter:
                 if worker_sweep:
                     await conn.execute("SELECT set_config('app.worker_sweep', 'on', true)")
             yield conn
+        except (psycopg.OperationalError, psycopg.InterfaceError, TimeoutError) as exc:
+            raise StorageError(f"PostgreSQL blob store unavailable: {exc}") from exc
         finally:
             await conn.close()
 
@@ -528,7 +534,7 @@ class PgBlobStorageAdapter:
         expected_chunks = (
             0 if byte_size == 0 else (byte_size + self._chunk_size - 1) // self._chunk_size
         )
-        caller_meta = dict(metadata or {})
+        caller_meta = thaw_mapping(metadata)
         meta_json = json.dumps(caller_meta, sort_keys=True)
         lock_key = _cas_lock_key(tenant_id, sha256)
 

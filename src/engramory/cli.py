@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import inspect
 import json
 import logging
@@ -37,9 +38,13 @@ from typing import Any
 from engramory.access.authz import ActorContext
 from engramory.access.poisoning_guard import MemoryPoisoningError
 from engramory.access.surface import AccessSurface, AuthzError, GovernedWriteRejected
-from engramory.adapters.factory import DevTierFenceError, dev_adapters, require_dev_profile
+from engramory.adapters.factory import (
+    DevTierFenceError,
+    adapters_for_profile,
+    require_dev_profile,
+)
 from engramory.core.kb_graph import ingest_sdd_knowledge_graph
-from engramory.core.models import ValidationError
+from engramory.core.models import ValidationError, thaw_mapping
 from engramory.core.repository import Repository, StoreUnavailable
 from engramory.workers.distillation import reflect
 from engramory.workers.graph_projection import reproject_all
@@ -150,21 +155,29 @@ def _upsert_profile_best_effort(
 
     async def _do_upsert() -> None:
         repo = Repository(dsn)
-        existing = await repo.get_agent_profile(agent_id, tenant_id=tenant_id)
-        prefs: dict[str, Any] = dict(existing.standing_preferences) if existing is not None else {}
-        if domain_id and not prefs.get("department_focus"):
-            prefs["department_focus"] = domain_id
-        display = (
-            existing.display_name if (existing is not None and existing.display_name) else agent_id
-        )
-        await repo.upsert_agent_profile(
-            AgentProfile(
-                agent_id=agent_id,
-                display_name=display,
-                standing_preferences=prefs,
-                tenant_id=tenant_id,
+        try:
+            existing = await repo.get_agent_profile(agent_id, tenant_id=tenant_id)
+            prefs: dict[str, Any] = (
+                thaw_mapping(existing.standing_preferences) if existing is not None else {}
             )
-        )
+            if domain_id and not prefs.get("department_focus"):
+                prefs["department_focus"] = domain_id
+            display = (
+                existing.display_name
+                if (existing is not None and existing.display_name)
+                else agent_id
+            )
+            await repo.upsert_agent_profile(
+                AgentProfile(
+                    agent_id=agent_id,
+                    display_name=display,
+                    standing_preferences=prefs,
+                    tenant_id=tenant_id,
+                )
+            )
+        finally:
+            if hasattr(repo, "close"):
+                await repo.close()
 
     try:
         asyncio.run(_do_upsert())
@@ -194,7 +207,10 @@ def _cmd_init(args: argparse.Namespace) -> int:
         scopes = list(DEFAULT_SCOPES)
         if domain_id and "domain" not in scopes:
             scopes.append("domain")
-    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with contextlib.suppress(OSError):
+        # nosemgrep  # reason: owner-only 0o700 dir permissions needed for traversal
+        os.chmod(cfg_path.parent, 0o700)
     domain_line = f"domain_id = {json.dumps(domain_id)}\n" if domain_id else ""
     cfg_path.write_text(
         "[actor]\n"
@@ -206,11 +222,14 @@ def _cmd_init(args: argparse.Namespace) -> int:
         "\n[store]\n"
         f"dsn = {json.dumps(args.dsn)}\n"
     )
+    with contextlib.suppress(OSError):
+        os.chmod(cfg_path, 0o600)
     # The config carries a DSN (credentials): keep the whole directory out of git.
     gitignore = Path(".gitignore")
     entry = f"{CONFIG_DIRNAME}/"
     existing = gitignore.read_text() if gitignore.exists() else ""
-    if entry not in existing:
+    existing_lines = {ln.strip() for ln in existing.splitlines()}
+    if entry not in existing_lines and CONFIG_DIRNAME not in existing_lines:
         gitignore.write_text(existing.rstrip("\n") + ("\n" if existing else "") + entry + "\n")
     profile_state = _upsert_profile_best_effort(
         args.agent_id, args.dsn, args.tenant_id, domain_id=domain_id
@@ -223,9 +242,13 @@ def _cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
-async def _close_adapters(adapters: Any) -> None:
-    for attr in ("graph", "events", "storage"):
-        adapter = getattr(adapters, attr, None)
+async def _close_adapters(adapters: Any, *, repo: Repository | None = None) -> None:
+    targets: list[Any] = [
+        getattr(adapters, attr, None) for attr in ("vector", "graph", "events", "storage")
+    ]
+    if repo is not None:
+        targets.append(repo)
+    for adapter in targets:
         if adapter is not None and hasattr(adapter, "close"):
             try:
                 res = adapter.close()
@@ -241,9 +264,10 @@ def _run_with_surface(
     human: Callable[[dict[str, Any]], str],
 ) -> int:
     config = _load_config(getattr(args, "config", None))
-    adapters = dev_adapters(config.dsn)
+    adapters = adapters_for_profile(dsn=config.dsn)
+    repo = Repository(config.dsn)
     surface = AccessSurface(
-        Repository(config.dsn),
+        repo,
         graph=adapters.graph,
         llm=getattr(adapters, "llm", None),
         storage=getattr(adapters, "storage", None),
@@ -253,7 +277,7 @@ def _run_with_surface(
         try:
             return await op(surface, config.ctx)
         finally:
-            await _close_adapters(adapters)
+            await _close_adapters(adapters, repo=repo)
 
     payload = asyncio.run(_runner())
     _emit(args.json, payload, human(payload))
@@ -304,7 +328,7 @@ def _cmd_memory_search(args: argparse.Namespace) -> int:
                     "retrieval_id": h.retrieval_id,
                     "token_count": h.token_count,
                     **(
-                        {"provenance": dict(h.provenance)}
+                        {"provenance": thaw_mapping(h.provenance)}
                         if (
                             getattr(args, "include_knowledge", False)
                             or getattr(args, "expand_graph", False)
@@ -366,7 +390,7 @@ def _cmd_memory_distill(args: argparse.Namespace) -> int:
     """Dev-tier ops command (not a SPEC-01 tool): run the interim reflect pass."""
     config = _load_config(getattr(args, "config", None))
     repo = Repository(config.dsn)
-    adapters = dev_adapters(config.dsn)
+    adapters = adapters_for_profile(dsn=config.dsn)
     rag_params: dict[str, Any] | None = None
     if getattr(args, "rag_params_json", None):
         rag_params = json.loads(args.rag_params_json)
@@ -384,7 +408,7 @@ def _cmd_memory_distill(args: argparse.Namespace) -> int:
                 rag_params=rag_params,
             )
         finally:
-            await _close_adapters(adapters)
+            await _close_adapters(adapters, repo=repo)
 
     created = asyncio.run(_run_distill())
     out_payload: dict[str, Any] = {"created": created}
@@ -521,7 +545,7 @@ def _cmd_knowledge_search(args: argparse.Namespace) -> int:
                     "modality": s.modality,
                     "blob_sha256": s.blob_sha256,
                     "blob_uri": s.blob_uri,
-                    "media_metadata": dict(s.media_metadata),
+                    "media_metadata": thaw_mapping(s.media_metadata),
                     "text": s.text[:200] + ("..." if len(s.text) > 200 else ""),
                 }
                 for s in sections
@@ -582,7 +606,7 @@ def _cmd_knowledge_blob_get(args: argparse.Namespace) -> int:
     from engramory.core.docs_tools import resolve_confined_repo_path
 
     config = _load_config(getattr(args, "config", None))
-    adapters = dev_adapters(config.dsn)
+    adapters = adapters_for_profile(dsn=config.dsn)
     repo = Repository(config.dsn)
     surface = AccessSurface(
         repo,
@@ -625,7 +649,7 @@ def _cmd_knowledge_blob_get(args: argparse.Namespace) -> int:
                 "bytes_written": total_written,
             }
         finally:
-            await _close_adapters(adapters)
+            await _close_adapters(adapters, repo=repo)
 
     payload = asyncio.run(run_download())
     _emit(
@@ -638,24 +662,21 @@ def _cmd_knowledge_blob_get(args: argparse.Namespace) -> int:
 
 def _cmd_worker_start(args: argparse.Namespace) -> int:
     config = _load_config(getattr(args, "config", None))
-    adapters = dev_adapters(config.dsn)
+    adapters = adapters_for_profile(dsn=config.dsn)
     repo = Repository(config.dsn)
     tenant_id = os.getenv("ENGRAMORY_TENANT_ID")
     if not tenant_id and config.path != Path(".env"):
         tenant_id = config.ctx.tenant_id
     interval = args.interval or int(os.getenv("ENGRAMORY_REFLECT_INTERVAL_SEC", "300"))
-    try:
-        return start_daemon(
-            repo,
-            llm=adapters.llm,
-            vector=adapters.vector,
-            events=adapters.events,
-            storage=getattr(adapters, "storage", None),
-            interval_sec=interval,
-            tenant_id=tenant_id,
-        )
-    finally:
-        asyncio.run(_close_adapters(adapters))
+    return start_daemon(
+        repo,
+        llm=adapters.llm,
+        vector=adapters.vector,
+        events=adapters.events,
+        storage=getattr(adapters, "storage", None),
+        interval_sec=interval,
+        tenant_id=tenant_id,
+    )
 
 
 def _cmd_profile_get(args: argparse.Namespace) -> int:
@@ -664,7 +685,7 @@ def _cmd_profile_get(args: argparse.Namespace) -> int:
         return {
             "agent_id": profile.agent_id,
             "display_name": profile.display_name,
-            "standing_preferences": dict(profile.standing_preferences),
+            "standing_preferences": thaw_mapping(profile.standing_preferences),
         }
 
     return _run_with_surface(args, op, lambda p: f"{p['agent_id']} ({p['display_name']})")
@@ -702,7 +723,7 @@ def _cmd_profile_set(args: argparse.Namespace) -> int:
         return {
             "agent_id": upserted.agent_id,
             "display_name": upserted.display_name,
-            "standing_preferences": dict(upserted.standing_preferences),
+            "standing_preferences": thaw_mapping(upserted.standing_preferences),
         }
 
     return _run_with_surface(
@@ -846,7 +867,7 @@ def _cmd_profile_offboard(args: argparse.Namespace) -> int:
 def _cmd_graph_reproject(args: argparse.Namespace) -> int:
     """Rebuild all graph projections from PostgreSQL into Neo4j (ADR-01/03/05)."""
     config = _load_config(getattr(args, "config", None))
-    adapters = dev_adapters(config.dsn)
+    adapters = adapters_for_profile(dsn=config.dsn)
     if not adapters.graph:
         _emit(
             args.json,
@@ -865,7 +886,7 @@ def _cmd_graph_reproject(args: argparse.Namespace) -> int:
             nodes, edges = await reproject_all(repo, adapters.graph, tenant_id=tenant_id)
             return {"status": "ok", "tenant_id": tenant_id, "nodes": nodes, "edges": edges}
         finally:
-            await _close_adapters(adapters)
+            await _close_adapters(adapters, repo=repo)
 
     payload = asyncio.run(run_reproject())
     msg = (
@@ -1135,7 +1156,7 @@ def _cmd_mcp_serve(args: argparse.Namespace) -> int:
         )
 
     config = _load_config(getattr(args, "config", None))
-    adapters = dev_adapters(config.dsn)
+    adapters = adapters_for_profile(dsn=config.dsn)
     repo = Repository(config.dsn)
     surface = AccessSurface(
         repo,
@@ -1180,13 +1201,20 @@ def _cmd_mcp_serve(args: argparse.Namespace) -> int:
         auth_enabled=auth_enabled,
         security_gate_url=security_gate_url,
     )
-    try:
-        if transport == "sse":
+    if transport == "sse":
+        try:
             server.run_sse(host=host, port=port)
-        else:
-            asyncio.run(server.run_stdio())
-    finally:
-        asyncio.run(_close_adapters(adapters))
+        finally:
+            asyncio.run(_close_adapters(adapters, repo=repo))
+    else:
+
+        async def _serve_stdio() -> None:
+            try:
+                await server.run_stdio()
+            finally:
+                await _close_adapters(adapters, repo=repo)
+
+        asyncio.run(_serve_stdio())
     return 0
 
 
@@ -1196,13 +1224,17 @@ def _cmd_status(args: argparse.Namespace) -> int:
     repo = Repository(config.dsn)
 
     async def counts() -> dict[str, Any]:
-        return {
-            "store": "ok",
-            "episodes": await repo.count_episodes(tenant_id=config.ctx.tenant_id),
-            "kb_sections": await repo.count_kb_sections(tenant_id=config.ctx.tenant_id),
-            "graph_entities": await repo.count_graph_entities(tenant_id=config.ctx.tenant_id),
-            "graph_relations": await repo.count_graph_relations(tenant_id=config.ctx.tenant_id),
-        }
+        try:
+            return {
+                "store": "ok",
+                "episodes": await repo.count_episodes(tenant_id=config.ctx.tenant_id),
+                "kb_sections": await repo.count_kb_sections(tenant_id=config.ctx.tenant_id),
+                "graph_entities": await repo.count_graph_entities(tenant_id=config.ctx.tenant_id),
+                "graph_relations": await repo.count_graph_relations(tenant_id=config.ctx.tenant_id),
+            }
+        finally:
+            if hasattr(repo, "close"):
+                await repo.close()
 
     payload = asyncio.run(counts())
     _emit(
@@ -1680,7 +1712,14 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _configure_windows_event_loop() -> None:
+    """Select SelectorEventLoop on Windows for psycopg3 async compatibility."""
+    if sys.platform == "win32" and hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+
 def main(argv: list[str] | None = None) -> int:
+    _configure_windows_event_loop()
     try:
         args = _build_parser().parse_args(argv)
     except SystemExit as exc:  # argparse: 0 for --help, 2 for usage errors
@@ -1840,7 +1879,9 @@ def _register_docs_subcommands(sub: Any) -> None:
     )
     p_smoke.add_argument("--doc-id", default=None, help="optional document id filter")
     p_smoke.add_argument(
-        "--dry-run", action="store_true", help="run bash -n syntax check without executing"
+        "--dry-run",
+        action="store_true",
+        help="validate allowlisted read-only green commands without executing",
     )
     p_smoke.add_argument(
         "--json", action="store_true", default=argparse.SUPPRESS, help="emit JSON output"
@@ -2171,7 +2212,7 @@ def _cmd_memory_ingest_event(args: argparse.Namespace) -> int:
         raise ValueError("ExperienceEvent JSON must decode to a JSON object")
 
     config = _load_config(getattr(args, "config", None))
-    adapters = dev_adapters(config.dsn)
+    adapters = adapters_for_profile(dsn=config.dsn)
     repo = Repository(config.dsn)
     surface = AccessSurface(
         repo,
@@ -2206,7 +2247,7 @@ def _cmd_memory_ingest_event(args: argparse.Namespace) -> int:
                 "published_topic": published_topic,
             }
         finally:
-            await _close_adapters(adapters)
+            await _close_adapters(adapters, repo=repo)
 
     payload = asyncio.run(_run())
     _emit(

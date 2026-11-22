@@ -13,7 +13,8 @@ watched_paths:
   - "src/engramory/core/parsers/detector.py"
   - "src/engramory/core/extraction/router.py"
   - "db/migrations/0010_multimodal_rag_and_blob_cas.sql"
-last_verified: "2026-11-21"
+  - "db/migrations/0013_wave_p3_indexes_and_hygiene.sql"
+last_verified: "2026-11-22"
 ---
 
 # Engramory Multimodal Ingestion & PostgreSQL 18 Large-Blob (`20 GB+`) CAS Architecture
@@ -237,7 +238,7 @@ Neo4j always acts as a **deterministic, rebuildable projection** of canonical Po
 
 Engramory implements the full multimodal and PostgreSQL 18 `20 GB+` Chunked Blob CAS pipeline across five modules:
 
-1. **Migrations `0010`, `0011` & `0012` (`db/migrations/0010_multimodal_rag_and_blob_cas.sql`, `0011_wave_p0_isolation_and_rls.sql`, `0012_wave_p1_cas_projects_and_dedup.sql`):** Provisions `kb_blobs`, `kb_blob_projects`, `kb_blob_aliases`, `kb_blob_chunks` (`LOGGED` `<= 50 MiB`), `kb_blob_chunks_large` (`UNLOGGED` `> 50 MiB`, `STORAGE EXTERNAL`), multimodal `kb_sections` columns (`modality`, `blob_sha256`, `blob_uri`, `media_metadata`, `agent_id`), rescoped `uq_episodes_event_id`, and `FORCE ROW LEVEL SECURITY` with `NULLIF(current_setting('app.tenant_id', true), '')` + `engramory_worker` policies.
+1. **Migrations `0010`, `0011`, `0012` & `0013` (`db/migrations/0010_multimodal_rag_and_blob_cas.sql`, `0011_wave_p0_isolation_and_rls.sql`, `0012_wave_p1_cas_projects_and_dedup.sql`, `0013_wave_p3_indexes_and_hygiene.sql`):** Provisions `kb_blobs`, `kb_blob_projects`, `kb_blob_aliases`, `kb_blob_chunks` (`LOGGED` `<= 50 MiB`), `kb_blob_chunks_large` (`UNLOGGED` `> 50 MiB`, `STORAGE EXTERNAL`), multimodal `kb_sections` columns (`modality`, `blob_sha256`, `blob_uri`, `media_metadata`, `agent_id`), rescoped `uq_episodes_event_id`, `FORCE ROW LEVEL SECURITY` with `NULLIF(current_setting('app.tenant_id', true), '')`, plus Wave P3 (`CHG-013`) hot-path partial/composite indexes (`idx_kb_blobs_status_updated`, `idx_kb_sections_tenant_doc_ver`), dedicated `trg_kb_blobs_updated_at` trigger (`set_kb_blobs_updated_at()`), nullable `embedding_model`, and `fk_kb_sections_blob` (`ON DELETE SET NULL`).
 2. **`StoragePort` Streaming, `PgBlobStorageAdapter` & `LocalFsStorageAdapter` (`src/engramory/ports/storage.py`, `src/engramory/adapters/dev/storage_pg.py`, `src/engramory/adapters/dev/storage_local.py`):** Implements `put_stream()`, `get_stream()`, and `gc_orphan_chunks()` with `4 MiB` chunking, transactional advisory + `FOR UPDATE` locking, per-project CAS isolation via `kb_blob_projects`, bounded `max_bytes` reads, MCP `blob_put`/`blob_get` parity, and disk-persistent project-scoped `LocalFsStorageAdapter` with symlink rejection.
 3. **Multimodal Extractors, `GitSyncEngine` & Router (`src/engramory/core/extraction/router.py`, `docling.py`, `src/engramory/core/git_sync.py`, `src/engramory/core/knowledge.py`):** `ImageExtractor` and `VideoAudioExtractor` perform `O(1)`-RAM header probing, `SmartExtractionRouter` preserves full native PDF parsing up to `50 MiB`, `DoclingExtractor` blocks ZIP bombs and isolates tenant caches atomically, and `GitSyncEngine` / `KnowledgeCore` run `inspect_memory_write()` before persisting blobs.
 4. **3-Leg Hybrid RRF & Dual-Engine GraphRAG (`src/engramory/core/repository.py`, `src/engramory/core/kb_graph.py`, `src/engramory/adapters/dev/graph_neo4j.py`):** `search_kb_sections()` normalizes stale embeddings on text updates and enforces `allowed_scopes` + `ts_lex` + escaped `ILIKE`; `Neo4jGraphAdapter` rejects empty/colon `tenant_id` in `_node_uid`, strips reserved properties in `_sanitize_props`, and guards `project_id IS NULL` nodes unless `scope='shared'`.

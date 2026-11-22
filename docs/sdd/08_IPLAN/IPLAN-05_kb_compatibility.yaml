@@ -5,39 +5,37 @@ document_control:
   iplan_id: "IPLAN-05"
   subtype: code_build
   source_spec: "@spec: SPEC-05"
-  status: Draft
-  version: "1.0"
+  status: Completed
+  version: "1.1"
   date_created: "2026-06-22T00:00:00"
-  last_updated: "2026-06-22T00:00:00"
+  last_updated: "2026-11-22T00:00:00"
   author: "Engramory team"
   complexity: 4
   estimated_files: 6
-  session_count: 0
+  session_count: 1
 
 file_manifest:
   files:
-    - { path: "tests/unit/test_coverage.py", order: 1, status: NOT_STARTED, session: null, verified: false }
-    - { path: "src/engramory/core/kb_compat.py", order: 2, status: NOT_STARTED, session: null, verified: false }
-    - { path: "src/engramory/skills/kb_context.py", order: 3, status: NOT_STARTED, session: null, verified: false }
-    - { path: "src/engramory/skills/kb_maintenance.py", order: 4, status: NOT_STARTED, session: null, verified: false }
-    - { path: "tests/integration/test_governed_ingest.py", order: 5, status: NOT_STARTED, session: null, verified: false }
-    - { path: "tests/e2e/test_ucx_kb_parity.py", order: 6, status: NOT_STARTED, session: null, verified: false }
+    - { path: "src/engramory/core/knowledge.py", order: 1, status: DONE, session: "consolidated", verified: true }
+    - { path: "src/engramory/core/kb_graph.py", order: 2, status: DONE, session: "consolidated", verified: true }
+    - { path: "src/engramory/core/context_tools.py", order: 3, status: DONE, session: "consolidated", verified: true }
+    - { path: "skills/engramory-memory/SKILL.md", order: 4, status: DONE, session: "consolidated", verified: true }
+    - { path: "tests/test_knowledge_core.py", order: 5, status: DONE, session: "consolidated", verified: true }
+    - { path: "tests/integration/test_sdd_knowledge_graph.py", order: 6, status: DONE, session: "consolidated", verified: true }
 
 execution_commands:
-  setup: ["source .venv/bin/activate", "mkdir -p src/engramory/skills tests/e2e"]
+  setup: ["uv sync"]
   implementation:
-    - "# TDD: tests/unit/test_coverage.py (coverage rules) FIRST"
-    - "# Implement kb_compat.py (ingest_artifact governed, check_coverage, traceability graph)"
-    - "# Implement Hermes skill adapters kb_context.py / kb_maintenance.py (ucx-kb-* parity)"
+    - "# Consolidated KB/SDD engine into core/knowledge.py, core/kb_graph.py, core/context_tools.py, and skills/engramory-memory/SKILL.md"
   validation:
-    - "python -m pytest tests/unit/test_coverage.py tests/integration/test_governed_ingest.py tests/e2e/test_ucx_kb_parity.py -v"
-    - "python -m ruff check src/engramory/core/kb_compat.py src/engramory/skills"
+    - "uv run pytest tests/test_knowledge_core.py tests/integration/test_sdd_knowledge_graph.py -q"
+    - "uv run ruff check src/engramory/core/knowledge.py src/engramory/core/kb_graph.py src/engramory/core/context_tools.py"
 
 implementation_contracts:
   provided:
     contracts:
-      - { name: "KBCompatibility", type: "Protocol Interface", note: "ingest_artifact(entry, evidence_ref); check_coverage(project); kb_context; kb_maintain" }
-      - { name: "Hermes skill adapters", type: "DI Interface", note: "ucx-kb-context + ucx-kb-maintenance parity" }
+      - { name: "KBCompatibility", type: "KnowledgeCore + SDD Graph", note: "governed file/git/SDD ingest, context_slice, blast_radius, validate_invariants" }
+      - { name: "Engramory Skill", type: "Agent Skill", note: "skills/engramory-memory/SKILL.md" }
   consumed:
     dependencies:
       - { name: "Repository (MemoryStore)", from: "@spec: SPEC-02", note: "KB section persistence" }
@@ -50,19 +48,32 @@ session_handoff:
       agent: "(unstarted)"
       files_touched: []
       partial_work: "None."
-      blockers: "Depends on IPLAN-02 (store) and IPLAN-01 (governed-write gate). Parity suite is the ucx_kb cutover gate."
-      next_session_directive: "File order 1: tests/unit/test_coverage.py (TDD-05.04.a100)."
+      blockers: "Depends on IPLAN-02 and IPLAN-01."
+      next_session_directive: "Implement KB/SDD modules."
       validation_results: { tests_passing: null, coverage: null, lint_clean: false }
+    - date: "2026-11-22"
+      agent: "Wave P3 M8 Reconciliation"
+      files_touched: ["src/engramory/core/knowledge.py", "src/engramory/core/kb_graph.py", "src/engramory/core/context_tools.py", "skills/engramory-memory/SKILL.md", "tests/test_knowledge_core.py", "tests/integration/test_sdd_knowledge_graph.py"]
+      partial_work: "Completed via KnowledgeCore, extract_sdd_graph/extract_adr_graph, AidocDependencyGraph/ContextSlicer, and SKILL.md."
+      blockers: "None."
+      next_session_directive: "Done."
+      validation_results: { tests_passing: true, coverage: null, lint_clean: true }
 
 traceability:
   upstream:
     spec_references: ["@spec: SPEC-05"]
     tdd_references: ["@tdd: TDD-05"]
   downstream:
-    code_paths: ["@code: src/engramory/core/kb_compat.py", "@code: src/engramory/skills/"]
-    test_paths: ["@tests: tests/e2e/test_ucx_kb_parity.py"]
+    code_paths: ["@code: src/engramory/core/knowledge.py", "@code: src/engramory/core/kb_graph.py", "@code: src/engramory/core/context_tools.py"]
+    test_paths: ["@tests: tests/test_knowledge_core.py", "@tests: tests/integration/test_sdd_knowledge_graph.py"]
   code_inventory:
-    files: []
+    files:
+      - { path: "src/engramory/core/knowledge.py", status: completed, session: "consolidated", verified: true }
+      - { path: "src/engramory/core/kb_graph.py", status: completed, session: "consolidated", verified: true }
+      - { path: "src/engramory/core/context_tools.py", status: completed, session: "consolidated", verified: true }
+      - { path: "skills/engramory-memory/SKILL.md", status: completed, session: "consolidated", verified: true }
+      - { path: "tests/test_knowledge_core.py", status: completed, session: "consolidated", verified: true }
+      - { path: "tests/integration/test_sdd_knowledge_graph.py", status: completed, session: "consolidated", verified: true }
 
 tdd_consistency:
   summary: "Governed in consolidated SDD corpus."

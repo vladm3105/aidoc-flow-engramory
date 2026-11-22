@@ -17,7 +17,9 @@ from engramory.adapters.dev.storage_pg import PgBlobStorageAdapter
 from engramory.adapters.dev.vector_pg import PgVectorAdapter
 from engramory.ports import EventsPort, GraphPort, LLMPort, StoragePort, VectorPort
 
-PROFILES = ("dev", "stage", "gcp", "azure")
+ACTIVE_PROFILES = ("dev", "stage")
+PLANNED_PROFILES = ("gcp", "azure")
+PROFILES = ACTIVE_PROFILES + PLANNED_PROFILES
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,9 +59,9 @@ def dev_adapters(
 def adapters_for_profile(profile: str | None = None, *, dsn: str) -> AdapterSet:
     """Select the adapter set; profile defaults to $ENGRAMORY_PROFILE, then dev."""
     resolved = profile or os.environ.get("ENGRAMORY_PROFILE", "dev")
-    if resolved in ("dev", "stage"):
+    if resolved in ACTIVE_PROFILES:
         return dev_adapters(dsn, profile=resolved)
-    if resolved in PROFILES:
+    if resolved in PLANNED_PROFILES:
         raise NotImplementedError(f"adapter set '{resolved}' arrives with BRD-02")
     raise ValueError(f"unknown ENGRAMORY_PROFILE: {resolved!r} (expected one of {PROFILES})")
 

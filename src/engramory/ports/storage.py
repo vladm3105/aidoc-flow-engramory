@@ -19,6 +19,18 @@ from typing import Any, Protocol
 
 VALID_STORAGE_TIERS = frozenset({"logged", "unlogged"})
 VALID_BLOB_STATUSES = frozenset({"uploading", "ready", "failed"})
+MIN_CHUNK_SIZE = 65_536
+MAX_CHUNK_SIZE = 16_777_216
+
+
+def _freeze_storage_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType({k: _freeze_storage_value(v) for k, v in value.items()})
+    if isinstance(value, list | tuple):
+        return tuple(_freeze_storage_value(item) for item in value)
+    if isinstance(value, set | frozenset):
+        return frozenset(_freeze_storage_value(item) for item in value)
+    return value
 
 
 class StorageError(RuntimeError):
@@ -67,8 +79,11 @@ class KBBlob:
             raise ValueError("KBBlob.media_type is required")
         if self.byte_size < 0:
             raise ValueError("KBBlob.byte_size must be >= 0")
-        if self.chunk_size <= 0:
-            raise ValueError("KBBlob.chunk_size must be > 0")
+        if not (MIN_CHUNK_SIZE <= self.chunk_size <= MAX_CHUNK_SIZE):
+            raise ValueError(
+                f"KBBlob.chunk_size must be in [{MIN_CHUNK_SIZE}, {MAX_CHUNK_SIZE}], "
+                f"got {self.chunk_size}"
+            )
         if self.chunk_count < 0:
             raise ValueError("KBBlob.chunk_count must be >= 0")
         if self.storage_tier not in VALID_STORAGE_TIERS:
@@ -80,7 +95,7 @@ class KBBlob:
             raise ValueError(
                 f"KBBlob.status must be one of {sorted(VALID_BLOB_STATUSES)}, got {self.status!r}"
             )
-        object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
+        object.__setattr__(self, "metadata", _freeze_storage_value(dict(self.metadata)))
 
     @property
     def chunk_size_bytes(self) -> int:

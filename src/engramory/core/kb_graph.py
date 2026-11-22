@@ -51,6 +51,12 @@ def _safe_neo4j_label(raw: str) -> str:
     return cleaned or "Entity"
 
 
+def normalize_neo4j_rel(raw: str, default: str = "DEPENDS_ON") -> str:
+    """Normalize an arbitrary relationship string into a safe uppercase Neo4j type."""
+    cleaned = re.sub(r"[^A-Za-z0-9_]+", "_", str(raw).strip()).strip("_").upper()
+    return cleaned or default
+
+
 def entity_labels_for(entity: GraphEntity) -> list[str]:
     """Compute canonical Neo4j labels for a GraphEntity (GAP-06)."""
     norm_type = _safe_neo4j_label(entity.entity_type)
@@ -221,9 +227,7 @@ def extract_adr_graph(
             if not dst_adr:
                 continue
             raw_rel = dep.get("relationship", "DEPENDS_ON")
-            rel_type = (
-                re.sub(r"[^A-Za-z0-9_]+", "_", str(raw_rel)).strip("_").upper() or "DEPENDS_ON"
-            )
+            rel_type = normalize_neo4j_rel(str(raw_rel))
             rationale = dep.get("rationale", "")
             rel_props: dict[str, Any] = {
                 "rationale": rationale,
@@ -452,10 +456,7 @@ def extract_sdd_graph(
                 for dst in extract_sdd_target_ids(dst_adr):
                     if dst != doc_id:
                         raw_rel = dep.get("relationship", "DEPENDS_ON")
-                        rel_type = (
-                            re.sub(r"[^A-Za-z0-9_]+", "_", str(raw_rel)).strip("_").upper()
-                            or "DEPENDS_ON"
-                        )
+                        rel_type = normalize_neo4j_rel(str(raw_rel))
                         relations_map[(qualified_doc_id, _qualify_id(dst), rel_type)] = dep.get(
                             "rationale", ""
                         )
@@ -906,7 +907,7 @@ def extract_docs_graph(
         ent_type = (
             "RUNBOOK"
             if doc.kind == "runbook" or parsed.steps
-            else re.sub(r"[^A-Za-z0-9_]", "_", doc.kind.upper())
+            else _safe_neo4j_label(doc.kind.upper())
         )
         entities[doc.doc_id] = GraphEntity(
             id=doc.doc_id,

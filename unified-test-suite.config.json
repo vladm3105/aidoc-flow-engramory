@@ -60,7 +60,7 @@
   },
   "coverage": {
     "unit": {
-      "minPercent": 80
+      "minPercent": 85
     }
   },
   "stack": {

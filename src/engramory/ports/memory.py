@@ -1,10 +1,11 @@
 """MemoryPort — the experiential memory interface (L1/L2/L3).
 
-Adapters: LangMem / Mem0 / Cipher over Postgres (dev & cloud), with Postgres always
-canonical. A managed memory service may back this as an accelerator only.
+Canonical relational spine is ``engramory.core.repository.Repository`` over
+PostgreSQL (dev & stage); an external managed MemoryPort accelerator adapter
+(LangMem / Mem0) is a planned extension rather than a shipped runtime adapter.
 
 Scope ladder (see GLOSSARY + ADR-07): agent -> project -> domain -> space, all within a
-tenant. `tenant_id` is the hard isolation boundary; `space` scope = tenant-wide sharing.
+tenant. ``tenant_id`` is the hard isolation boundary; ``space`` scope = tenant-wide sharing.
 """
 
 from __future__ import annotations

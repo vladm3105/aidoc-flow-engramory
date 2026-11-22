@@ -1,6 +1,8 @@
-"""CachePort — ephemeral key/value cache (L1 session state, transient results).
+"""CachePort — ephemeral key/value cache interface (L1 session state, transient results).
 
-Dev: Redis. Cloud: Memorystore / Azure Cache for Redis. Losing it is never data loss.
+Planned port interface: no concrete ``CachePort`` adapter is shipped in dev/stage
+profiles yet (Valkey/Redis / Memorystore / Azure Cache adapters arrive when needed).
+Losing cached entries must never cause data loss.
 """
 
 from __future__ import annotations

@@ -592,7 +592,7 @@ def test_dev_adapters_honors_engramory_blob_dsn(monkeypatch: pytest.MonkeyPatch)
 
 @pytest.mark.asyncio
 async def test_local_and_pg_storage_lifecycle_and_async_streams() -> None:
-    local = LocalFsStorageAdapter(chunk_size_bytes=16)
+    local = LocalFsStorageAdapter(chunk_size_bytes=65536)
 
     # 1. put() alias resolution, exists(), delete(), and close()
     await local.put(key="alias-key", data=b"0123456789abcdefABCDEF", tenant_id="t1")
@@ -618,7 +618,7 @@ async def test_local_and_pg_storage_lifecycle_and_async_streams() -> None:
         sha256=b_async.sha256,
         media_type="application/octet-stream",
         byte_size=b_async.byte_size,
-        chunk_size=16,
+        chunk_size=65536,
         chunk_count=2,
         storage_tier="logged",
         status="ready",
@@ -630,7 +630,7 @@ async def test_local_and_pg_storage_lifecycle_and_async_streams() -> None:
 
     # 2. PgBlobStorageAdapter put(), spooled put_stream() without expected_sha256,
     # AsyncIterator stream, exists(), delete(), gc_orphan_chunks(), close()
-    pg = _FakePgBlobStorageAdapter(chunk_size=16)
+    pg = _FakePgBlobStorageAdapter(chunk_size=65536)
     await pg.put(key="pg-direct", data=b"hello-pg-cas-world-12345", tenant_id="t1")
     sha = hashlib.sha256(b"hello-pg-cas-world-12345").hexdigest()
     assert await pg.exists(key=f"pgblob://t1/{sha}", tenant_id="t1") is True
@@ -660,7 +660,7 @@ async def test_local_disk_persistence_project_isolation_and_gc(tmp_path: Path) -
     src_file = tmp_path / "doc.bin"
     src_file.write_bytes(payload)
 
-    a1 = LocalFsStorageAdapter(base_dir=root, chunk_size_bytes=12)
+    a1 = LocalFsStorageAdapter(base_dir=root, chunk_size_bytes=65536)
     b_p1 = await a1.put_file(
         file_path=src_file,
         content_type="application/octet-stream",
@@ -678,7 +678,7 @@ async def test_local_disk_persistence_project_isolation_and_gc(tmp_path: Path) -
     assert b_p1.sha256 == b_p2.sha256
 
     # Re-instantiate fresh adapter against same base_dir -> persists on disk (H15)
-    a2 = LocalFsStorageAdapter(base_dir=root, chunk_size_bytes=12)
+    a2 = LocalFsStorageAdapter(base_dir=root, chunk_size_bytes=65536)
     head_p2 = await a2.head(key=b_p1.sha256, tenant_id="t1", project_id="proj-2")
     assert head_p2 is not None
     assert head_p2.project_id == "proj-2"
@@ -712,7 +712,7 @@ async def test_local_disk_persistence_project_isolation_and_gc(tmp_path: Path) -
         '{"tenant_id":"t1","sha256":"'
         + stale_sha
         + '","project_id":"proj-1","media_type":"text/plain","byte_size":5,'
-        '"chunk_size":12,"chunk_count":1,"storage_tier":"logged","status":"failed"}',
+        '"chunk_size":65536,"chunk_count":1,"storage_tier":"logged","status":"failed"}',
         encoding="utf-8",
     )
     assert await a2.gc_orphan_chunks(older_than_seconds=7200, tenant_id="t1") == 0
@@ -723,7 +723,7 @@ async def test_local_disk_persistence_project_isolation_and_gc(tmp_path: Path) -
 
 @pytest.mark.asyncio
 async def test_pg_blob_cas_project_isolation_locking_and_bounds(tmp_path: Path) -> None:
-    pg = _FakePgBlobStorageAdapter(chunk_size=16)
+    pg = _FakePgBlobStorageAdapter(chunk_size=65536)
     f = tmp_path / "cas.bin"
     payload = b"hello-pg-cas-project-isolation"
     f.write_bytes(payload)

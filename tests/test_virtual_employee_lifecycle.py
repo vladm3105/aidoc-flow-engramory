@@ -429,7 +429,7 @@ def test_cli_init_profile_preservation_and_config_domain(monkeypatch: pytest.Mon
     )
     assert preserved is not None
     assert preserved.display_name == "Senior Billing Specialist"
-    assert preserved.standing_preferences["specializations"] == ["stripe"]
+    assert preserved.standing_preferences["specializations"] == ("stripe",)
     assert preserved.standing_preferences["department_focus"] == "billing"
 
 
@@ -789,7 +789,7 @@ async def test_virtual_employee_brain_passport_promotion_archetype_guard_and_off
     sup2_prof = await repo.get_agent_profile("agent-support-02", tenant_id="tenant-acme")
     assert sup2_prof is not None
     assert sup2_prof.display_name == "Billing Specialist #2"
-    assert sup2_prof.standing_preferences["specializations"] == ["oidc", "stripe", "chargebacks"]
+    assert sup2_prof.standing_preferences["specializations"] == ("oidc", "stripe", "chargebacks")
 
     # 7. Offboard agent-support-01 from Tenant A: retires private memories & private episodes
     # while preserving shared project episodes ([M1])

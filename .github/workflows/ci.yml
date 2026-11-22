@@ -29,3 +29,15 @@ jobs:
         run: uv run mypy src
       - name: Test
         run: uv run pytest -m "not integration"
+
+  integration:
+    needs: check
+    runs-on: [self-hosted, ci, ephemeral]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+      - name: Install locked dependencies
+        run: uv sync --locked
+      - name: Test with integration & coverage gate
+        run: uv run pytest --cov=src --cov-fail-under=85
