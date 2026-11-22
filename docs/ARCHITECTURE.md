@@ -104,6 +104,11 @@ The **Knowledge core** and **Memory core** are two *bounded cores of one platfor
 - **Durable Events & Hexagonal Memory (`H1`, `H2`):** `NatsEventsAdapter` runs NATS JetStream durable pull consumers with ACK-on-yield, NAK-on-error, CRLF header rejection, and token-exact wildcards; `MemoryCore` implements `MemoryPort`, and background workers enforce broker `_nats_subject` tenant verification with per-event DLQ isolation (`engramory.dlq.worker`).
 - **Unified Governance & Fail-Closed SDD Gates (`H6`, `H11`):** Every CLI knowledge, SDD ingest, experience-event, and learning-health command routes through `AccessSurface` (exit code `2` reserved for `DevTierFenceError`, exit code `1` for authorization/ownership denials), and `InvariantChecker` / `ContextSlicer` fail closed when git is unavailable or contract prefixes (`03_EARS`, `05_ADR`, `06_SPEC`, `db/migrations/`) change on fast paths.
 
+### Wave P3 Verification, Pooling, Portability & SDD Parity (`CHG-013`)
+
+- **Pooled PostgreSQL 18 Spine & Index Hygiene (`M1`):** `Repository` uses a lazy per-event-loop `psycopg_pool.AsyncConnectionPool` translating driver/pool errors to `StoreUnavailable`, backed by migration `0013` hot-path partial/composite indexes, dedicated `set_kb_blobs_updated_at()`, nullable `embedding_model`, and `fk_kb_sections_blob` (`ON DELETE SET NULL`).
+- **Immutability, Layer Boundaries & Portability (`M2`, `M4`, `M5`, `L4`):** Core entities enforce deep freezing (`MappingProxyType`/tuples), `core/poisoning_guard.py` sits in `core/` (with `access/poisoning_guard.py` compatibility shim), `cli.py` routes through unified `adapters_for_profile()` with clean loop teardown, Windows/CRLF/POSIX `.as_posix()` paths validate cleanly, and `Taskfile.yml` / CI enforce `>= 85%` coverage over live `pgvector/pgvector:pg18` and `neo4j:5.26-community`.
+
 ---
 
 ## The portability matrix (the heart of this design)

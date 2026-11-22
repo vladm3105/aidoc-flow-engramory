@@ -21,7 +21,7 @@ includes:
     taskfile: .ci/taskfiles/python.yml
     dir: .
     vars:
-      COV_MIN: "80"
+      COV_MIN: "85"
       INSTALL: "test -f uv.lock || { echo 'python: uv.lock missing — run uv lock locally' >&2; exit 1; }; uv sync --locked"
 
 tasks: {}

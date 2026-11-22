@@ -360,10 +360,10 @@ def test_multimodal_magic_headers_dimensions_and_ffmpeg_helpers(
 
     def _fake_run(cmd: list[str], **kwargs: Any) -> Any:
         if cmd[0] == "ffprobe":
-            return SimpleNamespace(returncode=0, stdout=probe_json)
-        return SimpleNamespace(returncode=0, stdout=b"FAKE_MEDIA_BYTES")
+            return SimpleNamespace(returncode=0, stdout=probe_json, stderr="")
+        return SimpleNamespace(returncode=0, stdout=b"FAKE_MEDIA_BYTES", stderr=b"")
 
-    monkeypatch.setattr("subprocess.run", _fake_run)
+    monkeypatch.setattr("engramory.core.extraction.multimodal._run_bounded_subprocess", _fake_run)
     vid_path = tmp_path / "demo.mp4"
     vid_path.write_bytes(b"\x00\x00\x00\x18ftypisom" + b"\x00" * 128)
 

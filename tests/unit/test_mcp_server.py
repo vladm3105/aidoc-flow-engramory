@@ -335,12 +335,14 @@ def test_mcp_http_server_authenticated_endpoints(mock_surface: AccessSurface) ->
         assert "revoked by platform kill-switch" in resp.read().decode("utf-8")
         conn.close()
 
-        # 4. Valid Bearer token on POST /messages -> 200 OK
+        # 4. Valid Bearer token on POST /messages -> 200 OK & spoofed headers ignored
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
         headers = {
             "Content-Type": "application/json",
             "Authorization": "Bearer valid-token",
             "X-Tenant-ID": "spoofed-tenant",  # spoofing attempt
+            "X-Project-ID": "spoofed-proj",
+            "X-Domain-ID": "spoofed-domain",
         }
         conn.request("POST", "/messages", body=json.dumps(rpc_req), headers=headers)
         resp = conn.getresponse()
@@ -349,6 +351,39 @@ def test_mcp_http_server_authenticated_endpoints(mock_surface: AccessSurface) ->
         assert data["id"] == 1
         tools = data["result"]["tools"]
         assert any(t["name"] == "memory_search" for t in tools)
+        conn.close()
+
+        # 4b. Authenticated tools/call receives JWT ActorContext, not spoofed headers
+        for req_id, tool_name, args, mock_fn in (
+            (101, "sdd_context_slice", {"task_id": "IPLAN-03"}, mock_surface.context_slice),
+            (102, "memory_add", {"content": "clean note", "kind": "note"}, mock_surface.memory_add),
+        ):
+            call_req = {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "method": "tools/call",
+                "params": {"name": tool_name, "arguments": args},
+            }
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            conn.request("POST", "/messages", body=json.dumps(call_req), headers=headers)
+            resp = conn.getresponse()
+            assert resp.status == 200
+            _ = json.loads(resp.read().decode("utf-8"))
+            conn.close()
+            passed_ctx = mock_fn.await_args.args[0]
+            assert passed_ctx.tenant_id == "aidoc"
+            assert passed_ctx.project_id == "aidoc-flow-iplanic"
+            assert passed_ctx.tenant_id != "spoofed-tenant"
+            assert passed_ctx.project_id != "spoofed-proj"
+
+        # 4c. Unknown JSON-RPC method returns -32601
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        unknown_req = {"jsonrpc": "2.0", "id": 103, "method": "nonexistent/method"}
+        conn.request("POST", "/messages", body=json.dumps(unknown_req), headers=headers)
+        resp = conn.getresponse()
+        assert resp.status == 200
+        unknown_err = json.loads(resp.read().decode("utf-8"))
+        assert unknown_err["error"]["code"] == -32601
         conn.close()
 
         # 5. GET /sse without token -> 401
@@ -378,3 +413,27 @@ def test_mcp_http_server_authenticated_endpoints(mock_surface: AccessSurface) ->
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+def test_mcp_http_app_rejects_oversized_and_malformed_json(
+    mock_surface: AccessSurface, mock_ctx: ActorContext
+) -> None:
+    from fastapi.testclient import TestClient
+
+    server = McpServer(mock_surface, mock_ctx)
+    app = server.create_http_app(max_body_bytes=64)
+    client = TestClient(app)
+
+    # 1. Oversized POST /messages -> 413 Request payload too large (-32600)
+    oversized = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "pad": "x" * 200})
+    resp = client.post("/messages", content=oversized, headers={"Content-Type": "application/json"})
+    assert resp.status_code == 413
+    assert resp.json()["error"]["code"] == -32600
+    assert "too large" in resp.json()["error"]["message"].lower()
+
+    # 2. Malformed JSON POST /messages -> 400 Parse error (-32700)
+    bad_resp = client.post(
+        "/messages", content="{bad json", headers={"Content-Type": "application/json"}
+    )
+    assert bad_resp.status_code == 400
+    assert bad_resp.json()["error"]["code"] == -32700

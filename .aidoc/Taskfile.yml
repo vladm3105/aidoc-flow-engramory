@@ -118,7 +118,7 @@ tasks:
           fi;
         else
           echo "sdd:check: standalone CI mode (aiops-harness absent) — running fail-closed native SDD & docs gates";
-          uv run engramory --json sdd validate-graph &&
+          uv run engramory --json sdd validate-graph --invariants &&
           uv run engramory --json docs lint --strict --verify-registry docs/doc-tools;
         fi
 

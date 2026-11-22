@@ -229,6 +229,8 @@ class MarkdownParser(BaseParser):
         eff_max = max(1, self.max_words_per_chunk - header_words)
 
         words = section.content.split()
+        if not words:
+            return []
         if len(words) <= eff_max:
             section.order = start_order
             if ctx_header and not section.content.startswith("[Doc: "):

@@ -15,7 +15,7 @@ title: "Access Surface & Authorization"
 
 document_control:
   status: Approved
-  version: "1.4"
+  version: "1.5"
   date_created: "2026-06-22T00:00:00"
   last_updated: "2026-11-22T00:00:00"
   author: "Engramory team"
@@ -24,19 +24,13 @@ document_control:
 
 component_overview:
   description: |
-    The single access surface (AccessSurface) through which all agents read/write
-    knowledge and memory, reached via thin transport faces (ADR-10): the MCP gateway
-    is the authenticated production face; the `engramory` CLI is the dev/CI face.
-    Faces add no logic — every call is authorized and scoped by agent/project/tenant,
-    audited, and fails closed on uncertainty inside AccessSurface itself. Implements
-    the governed-write gate for SDD-artifact writes.
-    TRUST (ADR-10 dev-tier carve-out): in production, ActorContext is constructed
-    exclusively from OIDC claims verified by the gateway (HTTPS/loopback/mesh JWKS,
-    fail-closed async/sync revocation cache, strict string-claim validation, no ?token=
-    query auth, and pre-body HTTP authentication over FastAPI/Uvicorn); the one fenced
-    exception is the dev tier, where the CLI builds ActorContext from local config —
-    permitted only on loopback hosts when --auth is disabled under ENGRAMORY_PROFILE=dev
-    (stdio with --auth is refused).
+    Single AccessSurface for scoped, audited agent reads/writes via thin transports (ADR-10):
+    authenticated MCP gateway (prod) and `engramory` CLI (dev/CI). Authorizes per call,
+    audits all decisions, enforces governed-write evidence, and fails closed.
+    TRUST (ADR-10 dev-tier carve-out): prod builds ActorContext solely from gateway-verified
+    OIDC claims (JWKS, async/sync revocation cache, strict claims, pre-body auth, no `?token=`);
+    dev CLI builds local ActorContext only on loopback hosts when `--auth` is off under
+    `ENGRAMORY_PROFILE=dev` (`--auth` with stdio is refused).
   architecture_decision: "@adr: ADR-02"
   diagram:
     tags: ["@diagram: c4-l3", "@diagram: dfd-l3"]
@@ -55,122 +49,157 @@ interfaces:
   exports:
     - name: "memory_search"
       type: "async function"
-      signature: "async def memory_search(ctx: ActorContext, query: str, *, scope: str = 'agent', tenant_id: str | None = None, domain_id: str | None = None, brain_variant: str | None = None, specialization: str | None = None, k: int = 8, token_budget: int | None = 2000, include_knowledge: bool = False, expand_graph: bool = False, graph_depth: int = 1) -> list[MemoryHit]"
-      description: "Scoped retrieval of knowledge + distilled memory. Token budget defaults to @threshold:PRD.01.perf.context_token_budget . Deliberately does NOT expose include_advisory: advisory/quarantined memories are unreachable through the agent-facing surface (EARS.01.03.b800); include_advisory exists only on the internal MemoryPort/retrieve layer for ops and evaluation."
-      errors: ["AuthzError: caller scope insufficient", "StoreUnavailable: fail closed"]
+      signature: "async def memory_search(ctx, query, *, scope='agent', tenant_id=None, domain_id=None, brain_variant=None, specialization=None, k=8, token_budget=2000, expand_graph=False, include_knowledge=False) -> list[MemoryHit]"
+      description: "Scoped retrieval of L0 knowledge and L2 distilled memory within @threshold:PRD.01.perf.context_token_budget . Quarantined/superseded rows stay unreachable (EARS.01.03.b800)."
+      errors: ["AuthzError", "StoreUnavailable"]
     - name: "memory_add"
       type: "async function"
-      signature: "async def memory_add(ctx: ActorContext, content: str, *, kind: str = 'note', metadata: Mapping[str, Any] | None = None, scope: str = 'agent', domain_id: str | None = None, brain_variant: str | None = None, specializations: Sequence[str] | None = None) -> str"
-      description: "Append an episode in the caller's scope with optional domain_id, brain_variant, and specializations."
-      errors: ["AuthzError", "GovernedWriteRejected", "StoreUnavailable"]
+      signature: "async def memory_add(ctx, *, content, kind='note', scope='agent', domain_id=None, specializations=None, brain_variant=None, metadata=None) -> str"
+      description: "Append a poisoning-screened episode in caller scope with bounded content/metadata, domain_id, brain_variant, and specializations."
+      errors: ["AuthzError", "GovernedWriteRejected", "ValidationError", "StoreUnavailable"]
     - name: "memory_feedback"
       type: "async function"
-      signature: "async def memory_feedback(ctx: ActorContext, retrieval_id: RetrievalId, outcome: str) -> None"
-      description: "Record a retrieval outcome (useful | not_useful | harmful); enforces retrieval ownership (tenant/agent/scope), reverses prior applied_delta on revision, requires >= 2 distinct agent_id harmful votes for shared scopes, and audits denials."
+      signature: "async def memory_feedback(ctx, retrieval_id, outcome) -> None"
+      description: "Record outcome (useful|not_useful|harmful); enforces retrieval ownership, reverses prior applied_delta, requires >=2 agent_id harmful votes on shared scopes, and audits denials."
       errors: ["AuthzError"]
     - name: "memory_forget"
       type: "async function"
-      signature: "async def memory_forget(ctx: ActorContext, memory_id: MemoryId, reason: str) -> None"
-      description: "Retire a memory in the caller's scope: end-date + mark superseded (soft; provenance retained). Audited."
+      signature: "async def memory_forget(ctx, memory_id, *, reason) -> None"
+      description: "Soft-retire and supersede a memory within caller scope/ownership with audit reason."
       errors: ["AuthzError"]
     - name: "agent_profile_get"
       type: "async function"
-      signature: "async def agent_profile_get(ctx: ActorContext) -> AgentProfile"
-      description: "Load the caller's L3 identity profile (MEMORY_DESIGN task step 1)."
+      signature: "async def agent_profile_get(ctx) -> AgentProfile"
+      description: "Load caller L3 identity profile (returns default on fresh store)."
       errors: ["AuthzError"]
     - name: "agent_profile_upsert"
       type: "async function"
-      signature: "async def agent_profile_upsert(ctx: ActorContext, *, display_name: str | None = None, agent_type: str | None = None, role: str | None = None, domain_id: str | None = None, specializations: Sequence[str] | None = None, brain_config: Mapping[str, Any] | None = None, standing_preferences: Mapping[str, Any] | None = None) -> AgentProfile"
-      description: "Governed L3 Virtual Employee profile upsert storing agent_type, role, department_focus (domain_id), specializations, and brain_config in standing_preferences after poisoning screening."
-      errors: ["AuthzError", "GovernedWriteRejected", "StoreUnavailable"]
+      signature: "async def agent_profile_upsert(ctx, *, display_name=None, agent_type=None, role=None, domain_id=None, specializations=None, brain_config=None, standing_preferences=None) -> AgentProfile"
+      description: "Governed L3 Virtual Employee profile upsert storing archetype, role, department_focus, specializations, and bounded preferences/brain_config."
+      errors: ["AuthzError", "GovernedWriteRejected", "ValidationError", "StoreUnavailable"]
     - name: "agent_roster_list"
       type: "async function"
-      signature: "async def agent_roster_list(ctx: ActorContext, *, domain_id: str | None = None, agent_type: str | None = None, role: str | None = None, specialization: str | None = None, include_stats: bool = True) -> list[dict[str, Any]]"
-      description: "List and rank Virtual Employee instances in the caller's tenant filtered by domain_id, agent_type, role, or specialization with live active_skill_count and mean_confidence statistics."
+      signature: "async def agent_roster_list(ctx, *, domain_id=None, agent_type=None, role=None, specialization=None, include_stats=True) -> list[dict[str, Any]]"
+      description: "List and rank tenant Virtual Employee instances with active_skill_count and mean_confidence."
       errors: ["AuthzError", "StoreUnavailable"]
     - name: "agent_brain_export"
       type: "async function"
-      signature: "async def agent_brain_export(ctx: ActorContext, *, domain_id: str | None = None, brain_variant: str | None = None, specialization: str | None = None, limit: int = 100, redact_terms: Sequence[str] = ()) -> dict[str, Any]"
-      description: "Export a sanitized, tenant-neutral Virtual Employee Brain Passport (engramory.brain_passport.v1) with recursive PII scrubbing, brain_metadata, specializations, and canonical passport_sha256 digest."
+      signature: "async def agent_brain_export(ctx, *, domain_id=None, brain_variant=None, specialization=None, min_confidence=0.5, limit=100, redact_terms=()) -> dict[str, Any]"
+      description: "Export scrubbed, tenant-neutral Brain Passport (engramory.brain_passport.v1) with canonical passport_sha256 digest."
       errors: ["AuthzError", "StoreUnavailable"]
     - name: "agent_brain_import"
       type: "async function"
-      signature: "async def agent_brain_import(ctx: ActorContext, *, passport: Mapping[str, Any], evidence_ref: str | None, target_domain_id: str | None = None, brain_variant: str | None = None, redact_terms: Sequence[str] = (), verify_integrity: bool = True, allow_type_override: bool = False) -> dict[str, Any]"
-      description: "Import a sanitized Brain Passport into the caller's private scope='agent' memory space after verifying evidence_ref, passport_sha256 integrity, agent_type compatibility, and poisoning guard checks."
+      signature: "async def agent_brain_import(ctx, *, passport, evidence_ref, target_domain_id=None, brain_variant=None, redact_terms=(), verify_integrity=True, allow_type_override=False) -> dict[str, Any]"
+      description: "Governed import of Brain Passport into private scope='agent' space verifying evidence_ref, passport_sha256, agent_type match, and poisoning guard."
       errors: ["AuthzError", "GovernedWriteRejected", "ValidationError", "StoreUnavailable"]
     - name: "agent_brain_compare"
       type: "async function"
-      signature: "async def agent_brain_compare(ctx: ActorContext, *, variant_a: str, variant_b: str, query: str | None = None, k: int = 5, scope: str = 'agent', domain_id: str | None = None, specialization: str | None = None) -> dict[str, Any]"
-      description: "Compare two multi-model brain variants (variant_a vs. variant_b) across skill count, confidence, token efficiency, retrieval feedback useful_rate, and optional live query hit overlap."
+      signature: "async def agent_brain_compare(ctx, *, variant_a, variant_b, query=None, k=5, scope='agent', domain_id=None, specialization=None) -> dict[str, Any]"
+      description: "Non-mutating comparison of two brain variants across aggregate feedback metrics and live hits (no memory_retrievals writes or count bumps)."
       errors: ["AuthzError", "ValidationError", "StoreUnavailable"]
     - name: "agent_space_offboard"
       type: "async function"
-      signature: "async def agent_space_offboard(ctx: ActorContext, *, evidence_ref: str | None, reason: str = 'cross_tenant_reassignment', purge_episodes: bool = True, retire_memories: bool = True) -> dict[str, Any]"
-      description: "Governed transactional offboarding of a Virtual Employee's private scope='agent' memories, private episodes, and L3 profile on the old tenant while preserving shared project/domain/space artifacts."
+      signature: "async def agent_space_offboard(ctx, *, evidence_ref, target_agent_id=None, reason='cross_tenant_reassignment', purge_episodes=True, retire_memories=True) -> dict[str, Any]"
+      description: "Transactional offboarding of private scope='agent' memories, episodes, and L3 profile while preserving shared scopes."
       errors: ["AuthzError", "GovernedWriteRejected", "StoreUnavailable"]
     - name: "memory_promote"
       type: "async function"
-      signature: "async def memory_promote(ctx: ActorContext, *, memory_id: str, target_scope: str, evidence_ref: str | None, target_domain_id: str | None = None, target_project_id: str | None = None, specializations: Sequence[str] | None = None) -> dict[str, Any]"
-      description: "Governed promotion of a validated L2 memory up the ADR-07 scope ladder (agent -> project -> domain -> space) with strict source visibility, cross-instance deduplication, and provenance."
+      signature: "async def memory_promote(ctx, *, memory_id, target_scope, evidence_ref, target_domain_id=None, target_project_id=None, specializations=None) -> dict[str, Any]"
+      description: "Governed ADR-07 scope promotion (agent->project->domain->space) with source visibility, dedup, and provenance."
       errors: ["AuthzError", "GovernedWriteRejected", "ValidationError", "KeyError", "StoreUnavailable"]
+    - name: "graph_neighbors"
+      type: "async function"
+      signature: "async def graph_neighbors(ctx, *, id, rel=None, depth=1, scope='project', domain_id=None) -> Sequence[Mapping[str, Any]]"
+      description: "Scoped graph neighborhood traversal via GraphPort with PostgreSQL CTE fallback."
+      errors: ["AuthzError", "StoreUnavailable"]
+    - name: "context_slice"
+      type: "async function"
+      signature: "async def context_slice(ctx, *, task_id, depth=6, scope='project', domain_id=None, layers=None, max_tokens=2000) -> Sequence[Mapping[str, Any]]"
+      description: "Deterministic SDD ancestor DAG slice within caller tenant/project/domain scope."
+      errors: ["AuthzError", "StoreUnavailable"]
+    - name: "blast_radius"
+      type: "async function"
+      signature: "async def blast_radius(ctx, *, doc_id, depth=6, scope='project', domain_id=None) -> Sequence[Mapping[str, Any]]"
+      description: "Downstream SDD graph impact closure within caller tenant/project/domain scope."
+      errors: ["AuthzError", "StoreUnavailable"]
     - name: "knowledge_search"
       type: "async function"
-      signature: "async def knowledge_search(ctx: ActorContext, query: str, *, limit: int = 8, scope: str = 'project', domain_id: str | None = None, modality: str | None = None, expand_graph: bool = False, graph_depth: int = 1) -> list[dict[str, Any]]"
-      description: "Scoped 3-leg hybrid RRF search over L0 kb_sections with optional modality filtering and GraphRAG expansion."
+      signature: "async def knowledge_search(ctx, query, *, domain_id=None, query_vec=None, scope=None, modality=None, expand_graph=False, graph_depth=1, limit=5) -> list[KBSection]"
+      description: "Scoped 3-leg hybrid RRF search (capped at MAX_K=100) over kb_sections with modality and GraphRAG expansion."
       errors: ["AuthzError", "StoreUnavailable"]
     - name: "knowledge_ingest"
       type: "async function"
-      signature: "async def knowledge_ingest(ctx: ActorContext, entry: KBEntryIn, evidence_ref: str | None, *, domain_id: str | None = None) -> EntryId"
-      description: "Create/update SDD KB entry with domain check and evidence_ref."
-      errors: ["GovernedWriteRejected: missing/invalid evidence_ref", "AuthzError"]
+      signature: "async def knowledge_ingest(ctx, *, doc_id, citation, text, evidence_ref, scope='project', version=1, modality='text', blob_sha256=None, blob_uri=None, media_metadata=None) -> str"
+      description: "Governed L0 KB section upsert with scope check, poisoning screening, and evidence_ref."
+      errors: ["GovernedWriteRejected", "AuthzError", "ValidationError", "StoreUnavailable"]
+    - name: "knowledge_ingest_batch"
+      type: "async function"
+      signature: "async def knowledge_ingest_batch(ctx, *, sections, evidence_ref, scope='project') -> list[str]"
+      description: "Batch governed L0 KB section ingest with validation and poisoning screening."
+      errors: ["GovernedWriteRejected", "AuthzError", "ValidationError", "StoreUnavailable"]
     - name: "knowledge_ingest_files"
       type: "async function"
-      signature: "async def knowledge_ingest_files(ctx: ActorContext, *, paths: Sequence[Path | str], evidence_ref: str | None, scope: str = 'project', domain_id: str | None = None, embed: bool = True, project_graph: bool = False, allowed_root: Path | None = None) -> dict[str, list[str]]"
+      signature: "async def knowledge_ingest_files(ctx, *, paths, evidence_ref, scope='project', domain_id=None, embed=True, project_graph=True, docling=False, repo_root=None, enforce_project_boundary=False) -> dict[str, list[str]]"
       description: "Governed file/dir knowledge ingest with poisoning screen and path confinement."
       errors: ["GovernedWriteRejected", "AuthzError", "ValidationError", "StoreUnavailable"]
     - name: "knowledge_sync_git"
       type: "async function"
-      signature: "async def knowledge_sync_git(ctx: ActorContext, *, repo_path: Path | str, evidence_ref: str | None, base_sha: str | None = None, head_sha: str | None = None, scope: str = 'project', domain_id: str | None = None) -> dict[str, Any]"
-      description: "Governed git-diff sync into kb_sections and graph with evidence_ref."
+      signature: "async def knowledge_sync_git(ctx, *, repo_path, base_sha=None, head_sha=None, scope='project', enforce_project_boundary=False) -> dict[str, Any]"
+      description: "Governed commit-differential git sync with upsert-before-delete semantics."
       errors: ["GovernedWriteRejected", "AuthzError", "ValidationError", "StoreUnavailable"]
     - name: "sdd_ingest"
       type: "async function"
-      signature: "async def sdd_ingest(ctx: ActorContext, *, sdd_root: Path | str, evidence_ref: str | None, scope: str = 'project', project_id: str | None = None, reconcile: bool = True, project_graph: bool = True) -> dict[str, Any]"
+      signature: "async def sdd_ingest(ctx, *, sdd_root, evidence_ref, project_id=None, scope='project', reconcile=True, ingest_fn=None, enforce_project_boundary=False) -> dict[str, Any]"
       description: "Governed SDD YAML graph ingest with evidence_ref, scope check, and symlink confinement."
       errors: ["GovernedWriteRejected", "AuthzError", "ValidationError", "StoreUnavailable"]
     - name: "knowledge_ingest_media"
       type: "async function"
-      signature: "async def knowledge_ingest_media(ctx: ActorContext, *, file_path: Path, evidence_ref: str | None, scope: str = 'project', domain_id: str | None = None, embed: bool = True, project_graph: bool = True) -> dict[str, Any]"
-      description: "Governed media ingest (binary/media only: image, audio, video, PDF/Office) to Chunked Blob CAS and graph."
+      signature: "async def knowledge_ingest_media(ctx, *, file_path, evidence_ref, scope='project', domain_id=None, embed=True, project_graph=True, allowed_root=None, enforce_project_boundary=False) -> dict[str, Any]"
+      description: "Governed multimodal ingest (regular binary/media files) to Chunked Blob CAS and graph."
       errors: ["GovernedWriteRejected", "AuthzError", "ValidationError", "BlobTooLargeError", "StoreUnavailable"]
+    - name: "docs_ingest_runbook"
+      type: "async function"
+      signature: "async def docs_ingest_runbook(ctx, *, doc, steps, evidence_ref, scope='project', _preauthorized=False) -> dict[str, Any]"
+      description: "Governed runbook doc + step persistence with domain boundary and secret/injection screening."
+      errors: ["GovernedWriteRejected", "AuthzError", "ValidationError", "StoreUnavailable"]
+    - name: "docs_slice_runbook"
+      type: "async function"
+      signature: "async def docs_slice_runbook(ctx, *, doc_id=None, alert_id=None, max_tier=None, scope='project', domain_id=None, include_memories=True, token_budget=2000, format='json') -> dict[str, Any]"
+      description: "Token-budgeted executable runbook slicing across L0 steps and L2 memories."
+      errors: ["AuthzError", "StoreUnavailable"]
     - name: "blob_put"
       type: "async function"
-      signature: "async def blob_put(ctx: ActorContext, *, file_path: Path | None = None, data: bytes | None = None, content_type: str = 'application/octet-stream', scope: str = 'project', metadata: Mapping[str, Any] | None = None) -> dict[str, Any]"
+      signature: "async def blob_put(ctx, *, file_path=None, key=None, data=None, content_type='application/octet-stream', scope='project', metadata=None, allowed_root=None, enforce_project_boundary=False) -> dict[str, Any]"
       description: "Governed content-addressable blob write into kb_blobs / kb_blob_chunks(_large)."
-      errors: ["AuthzError", "BlobTooLargeError", "StoreUnavailable"]
+      errors: ["AuthzError", "ValidationError", "BlobTooLargeError", "StoreUnavailable"]
     - name: "blob_head"
       type: "async function"
-      signature: "async def blob_head(ctx: ActorContext, *, sha256: str, scope: str = 'project') -> dict[str, Any] | None"
-      description: "Tenant-scoped manifest + chunk completeness inspection for a SHA-256 blob."
+      signature: "async def blob_head(ctx, *, sha256, scope='project') -> dict[str, Any] | None"
+      description: "Tenant-scoped manifest and chunk completeness inspection for a SHA-256 blob."
       errors: ["AuthzError", "StoreUnavailable"]
     - name: "blob_get"
       type: "async function"
-      signature: "async def blob_get(ctx: ActorContext, *, sha256: str, scope: str = 'project', max_bytes: int | None = None) -> bytes"
+      signature: "async def blob_get(ctx, *, sha256, scope='project', max_bytes=16777216) -> bytes"
       description: "Project/tenant CAS blob read bounded by max_bytes."
       errors: ["AuthzError", "BlobNotFoundError", "BlobTruncatedError", "BlobIntegrityError", "BlobTooLargeError", "StoreUnavailable"]
     - name: "memory_ingest_event"
       type: "async function"
-      signature: "async def memory_ingest_event(ctx: ActorContext, event_data: Mapping[str, Any] | ExperienceEvent, *, scope: str = 'project') -> dict[str, Any]"
-      description: "Validate, screen, and persist ExperienceEvent to episodes; checks producer == ctx.agent_id across all non-space scopes."
+      signature: "async def memory_ingest_event(ctx, event_data, *, scope='project') -> dict[str, Any]"
+      description: "Validate, screen, and persist ExperienceEvent to episodes enforcing producer==ctx.agent_id outside space scope."
       errors: ["ValidationError", "MemoryPoisoningError", "AuthzError", "StoreUnavailable"]
     - name: "memory_learning_health"
       type: "async function"
-      signature: "async def memory_learning_health(ctx: ActorContext, *, project_id: str | None = None, limit: int = 500, scope: str = 'project') -> dict[str, Any]"
-      description: "Compute learning metrics over recent episodes, filtered by agent_id when scope='agent'."
+      signature: "async def memory_learning_health(ctx, *, project_id=None, limit=500, scope='project') -> dict[str, Any]"
+      description: "Compute learning health metrics over recent episodes, filtered by agent_id when scope='agent'."
       errors: ["AuthzError", "StoreUnavailable"]
+    - name: "audit_denial"
+      type: "async function"
+      signature: "async def audit_denial(ctx, action, reason) -> None"
+      description: "Record structured fail-closed authorization denial audit event."
+      errors: ["StoreUnavailable"]
     - name: "authorize"
       type: "function"
-      signature: "def authorize(ctx: ActorContext, action: str, target_scope: Scope) -> AuthzDecision"
+      signature: "def authorize(ctx, action, target) -> AuthzDecision"
       description: "Per-call scope authorization; default deny."
       errors: []
 
@@ -179,22 +208,22 @@ data_models:
     - name: "ActorContext"
       type: "dataclass"
       fields:
-        - { name: "agent_id", type: "str", required: true, description: "Calling agent identity" }
+        - { name: "agent_id", type: "str", required: true, description: "Agent ID" }
         - { name: "project_id", type: "str", required: true, description: "Project scope" }
         - { name: "tenant_id", type: "str", required: true, description: "Tenant scope" }
-        - { name: "scopes", type: "set[str]", required: true, description: "Granted scopes (agent|project|domain|space) per @adr: ADR-07" }
-        - { name: "domain_id", type: "str | None", required: false, description: "Optional department/domain focus (e.g. billing, security, platform)" }
+        - { name: "scopes", type: "frozenset[str]", required: true, description: "Granted scopes (agent|project|domain|space) per @adr: ADR-07" }
+        - { name: "domain_id", type: "str | None", required: false, description: "Department/domain focus" }
     - name: "AuthzDecision"
       type: "dataclass"
       fields:
         - { name: "allowed", type: "bool", required: true, description: "Allow/deny" }
-        - { name: "reason", type: "str", required: true, description: "Decision reason (for audit)" }
+        - { name: "reason", type: "str", required: true, description: "Decision reason" }
     - name: "AuditRecord"
       type: "dataclass"
       fields:
         - { name: "actor", type: "ActorContext", required: true, description: "Caller" }
         - { name: "action", type: "str", required: true, description: "Operation" }
-        - { name: "decision", type: "AuthzDecision", required: true, description: "Allow/deny + reason" }
+        - { name: "decision", type: "AuthzDecision", required: true, description: "Decision" }
         - { name: "ts", type: "datetime", required: true, description: "Timestamp" }
 
 behavior:

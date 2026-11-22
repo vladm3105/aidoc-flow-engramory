@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from engramory.core.docs_tools import has_symlink_component
+from engramory.core.models import thaw_mapping
 from engramory.ports.storage import (
     BlobIntegrityError,
     BlobNotFoundError,
@@ -542,7 +543,7 @@ class LocalFsStorageAdapter:
         expected_chunks = (
             0 if byte_size == 0 else (byte_size + self._chunk_size - 1) // self._chunk_size
         )
-        caller_meta = dict(metadata or {})
+        caller_meta = thaw_mapping(metadata)
 
         async with self._blob_lock(tenant_id, sha256):
             # Dedup fast-path when blob already exists completely in 'ready' state

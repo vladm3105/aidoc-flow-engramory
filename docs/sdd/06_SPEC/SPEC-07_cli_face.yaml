@@ -16,7 +16,7 @@ title: "CLI Face — engramory dev/CI transport"
 
 document_control:
   status: Approved
-  version: "1.3"
+  version: "1.4"
   date_created: "2026-07-11T00:00:00"
   last_updated: "2026-11-22T00:00:00"
   author: "Engramory team"
@@ -32,11 +32,14 @@ component_overview:
     pruning orphan portal files). A THIN BINDING: it may only construct
     ActorContext from local config, parse arguments, and map errors to exit
     codes; the authorize -> audit -> execute order and every SPEC-01 semantic
-    live in AccessSurface. Two commands are dev-tier OPS COMMANDS outside the
-    agent-tool face contract (they are not thin bindings over AccessSurface):
-    `memory distill` (runs the interim reflect worker in-process) and `status`
-    (store reachability + tenant counts). The faces-add-no-logic rule applies
-    to all SPEC-01 agent tools, not to these two.
+    live in AccessSurface. Several commands are dev/CI OPS or local-tooling
+    COMMANDS outside the agent-tool face contract (they are not thin bindings
+    over AccessSurface): `memory distill` (runs the interim reflect worker
+    in-process), `status` (store reachability + tenant counts), `worker start`,
+    `graph reproject`, `sdd validate-graph`/`check-invariants`/`lint-policy`,
+    `mcp`, and `docs lint`/`check-drift`/`export-llms`/`smoke-run`/`tools`/`build-portal`.
+    The faces-add-no-logic rule applies to all SPEC-01 agent tools, not to these
+    declared ops/tooling commands.
     TRUST (ADR-10 dev-tier carve-out): the identity in .engramory/config.toml
     is client-supplied and trusted ONLY under ENGRAMORY_PROFILE=dev —
     enforced by the factory guard require_dev_profile(), which the CLI calls
@@ -75,12 +78,28 @@ interfaces:
     - { name: "profile compare-brains", maps_to: "AccessSurface.agent_brain_compare", notes: "--variant-a, --variant-b, --query, --domain-id, --specialization, -k; side-by-side multi-model brain comparison" }
     - { name: "profile offboard", maps_to: "AccessSurface.agent_space_offboard", notes: "--evidence-ref, --reason, --keep-episodes, --keep-memories; transactional offboarding of private agent space" }
     - { name: "knowledge ingest", maps_to: "AccessSurface.knowledge_ingest / knowledge_ingest_files (alias: kb ingest)", notes: "Inline --text or file/dir path, --evidence-ref, --scope, --domain-id; governed ingestion via AccessSurface" }
-    - { name: "knowledge sync-git", maps_to: "AccessSurface.knowledge_sync_git (alias: kb sync-git)", notes: "--repo, --base, --head, --evidence-ref, --scope, --domain-id; governed git sync via AccessSurface" }
+    - { name: "knowledge sync-git", maps_to: "AccessSurface.knowledge_sync_git (alias: kb sync-git)", notes: "--repo-path, --base-sha, --head-sha, --scope; governed git sync via AccessSurface" }
     - { name: "knowledge search", maps_to: "AccessSurface.knowledge_search (alias: kb search)", notes: "query, --limit, --scope, --domain-id, --modality, --expand-graph, --graph-depth; 3-leg hybrid RRF + GraphRAG expansion" }
     - { name: "sdd ingest", maps_to: "AccessSurface.sdd_ingest", notes: "--sdd-root, --project-id, --tenant-id, --evidence-ref, --scope, --no-reconcile; governed SDD graph ingestion via AccessSurface" }
-    - { name: "knowledge ingest-media", maps_to: "AccessSurface.knowledge_ingest_media (alias: kb ingest-media)", notes: "path, --evidence-ref, --scope, --domain-id, --no-embed, --no-graph; streams media into PostgreSQL 18 Chunked Blob CAS and indexes multimodal sections" }
+    - { name: "knowledge ingest-media", maps_to: "AccessSurface.knowledge_ingest_media (alias: kb ingest-media)", notes: "path, --evidence-ref, --scope, --no-embed, --no-graph; streams media into PostgreSQL 18 Chunked Blob CAS and indexes multimodal sections" }
     - { name: "knowledge blob-stat", maps_to: "AccessSurface.blob_head (alias: kb blob-stat)", notes: "sha256, --scope; inspects kb_blobs manifest and chunk completeness" }
     - { name: "knowledge blob-get", maps_to: "AccessSurface.blob_get / StoragePort.get_stream (alias: kb blob-get)", notes: "sha256, --out PATH, --scope; streams 4 MiB chunks with SHA-256 verification" }
+    - { name: "worker start", maps_to: "runner.start_daemon (OPS COMMAND)", notes: "--once, --subject, --max-workers; starts NATS distillation/reflection worker loop" }
+    - { name: "graph reproject", maps_to: "kb_graph.reproject (OPS COMMAND)", notes: "--domain-id, --scope, --limit; backfills Neo4j projection from PostgreSQL store" }
+    - { name: "sdd slice", maps_to: "AccessSurface.context_slice", notes: "--target, --sdd-root, --project-id, --scope, --max-hops, --budget; bounded SDD context slice" }
+    - { name: "sdd blast-radius", maps_to: "AccessSurface.blast_radius", notes: "--target, --sdd-root, --project-id, --scope, --max-hops; transitive SDD impact query" }
+    - { name: "sdd validate-graph", maps_to: "context_tools.validate_graph (LOCAL TOOLING)", notes: "--sdd-root, --invariants; checks cycles, orphan refs, and cross-layer cardinality invariants" }
+    - { name: "sdd check-invariants", maps_to: "context_tools.validate_invariants (LOCAL TOOLING)", notes: "--sdd-root; verifies cross-layer SDD graph invariants" }
+    - { name: "sdd lint-policy", maps_to: "context_tools.StackPolicyValidator (LOCAL TOOLING)", notes: "--repo-root, --policy; verifies lockfile and source dependencies against stack policy" }
+    - { name: "mcp", maps_to: "mcp_server.McpServer (TRANSPORT FACE)", notes: "--transport, --host, --port; launches MCP stdio/HTTP server backed by AccessSurface" }
+    - { name: "docs lint", maps_to: "docs_tools.lint_repo (LOCAL TOOLING)", notes: "--paths, --strict, --verify-registry; checks frontmatter, H2/H3 chunk length, deictics, and banned tools" }
+    - { name: "docs check-drift", maps_to: "git_sync / docs_tools.check_drift (LOCAL TOOLING)", notes: "--base-ref, --head-ref; audits watched paths vs documentation freshness" }
+    - { name: "docs export-llms", maps_to: "docs_tools.export_llms (LOCAL TOOLING)", notes: "--out-dir; generates llms.txt and llms-full.txt portal artifacts" }
+    - { name: "docs slice-runbook", maps_to: "AccessSurface.docs_slice_runbook", notes: "--runbook-id, --budget, --scope; slices governed runbook chunks via AccessSurface" }
+    - { name: "docs smoke-run", maps_to: "docs_tools.smoke_run_green_steps (LOCAL TOOLING)", notes: "--paths, --execute; audits or dry-checks executable green-step blocks in docs" }
+    - { name: "docs ingest", maps_to: "AccessSurface.docs_ingest_runbook", notes: "--path, --evidence-ref, --scope; ingests governed runbook into Engramory KB" }
+    - { name: "docs tools", maps_to: "docs_tools.tool_inventory (alias: docs tool-inventory) (LOCAL TOOLING)", notes: "--format; dumps declarative MCP/CLI/runbook tool inventory" }
+    - { name: "docs build-portal", maps_to: "portal_builder.build_portal (LOCAL TOOLING)", notes: "--out-dir; compiles governed docs and OpenAPI specs into Astro Starlight portal" }
     - { name: "status", maps_to: "Repository.count_* (OPS COMMAND)", notes: "JSON result {store, episodes, kb_sections} for the caller's tenant" }
 
 data_models:
@@ -109,7 +128,7 @@ implementation_notes:
   constraints:
     - "No logic beyond ActorContext construction, arg parsing, error mapping (ADR-10 separation rule)"
     - "asyncio.run bridges the async surface per command invocation"
-    - "The CLI never touches Repository/ports directly except the two declared ops commands"
+    - "The CLI never touches Repository/ports directly except the declared ops/tooling/transport commands"
   patterns: ["Thin transport face", "Fence-then-dispatch"]
 
 tdd_contracts:

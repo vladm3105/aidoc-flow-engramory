@@ -1,0 +1,129 @@
+# @bdd: BDD-01
+# SPEC-07 — CLI Face (dev/CI transport over AccessSurface). Upstream: ADR-10, SPEC-01.
+metadata:
+  schema_version: "1.0"
+  document_type: "spec-document"
+  layer: 6
+  total_sections: 8
+  deliverable_type: code
+  c4_level: { value: component }
+  id_standard: { format: "{doc_type}.{doc_id}.{section_id}.{hash}", hash_algorithm: SHA256, hash_length: 4 }
+  tags: [spec-document, layer-6-artifact, shared-architecture]
+
+id: SPEC-07
+doc_id: SPEC-07
+title: "CLI Face — engramory dev/CI transport"
+
+document_control:
+  status: Approved
+  version: "1.3"
+  date_created: "2026-07-11T00:00:00"
+  last_updated: "2026-11-22T00:00:00"
+  author: "Engramory team"
+  component: "engramory.cli"
+  tdd_ready_score: "98/100"
+
+component_overview:
+  description: |
+    The `engramory` console script (alias: `python -m engramory`) — the ADR-10
+    dev/CI face over AccessSurface (with stage MCP Authentik defaults targeting
+    `auth.int.aiops-flow.io`, `pypdf` replacing AGPL `pymupdf` in extraction
+    packaging, and `portal_builder` synthesizing `title:` frontmatter and
+    pruning orphan portal files). A THIN BINDING: it may only construct
+    ActorContext from local config, parse arguments, and map errors to exit
+    codes; the authorize -> audit -> execute order and every SPEC-01 semantic
+    live in AccessSurface. Two commands are dev-tier OPS COMMANDS outside the
+    agent-tool face contract (they are not thin bindings over AccessSurface):
+    `memory distill` (runs the interim reflect worker in-process) and `status`
+    (store reachability + tenant counts). The faces-add-no-logic rule applies
+    to all SPEC-01 agent tools, not to these two.
+    TRUST (ADR-10 dev-tier carve-out): the identity in .engramory/config.toml
+    is client-supplied and trusted ONLY under ENGRAMORY_PROFILE=dev —
+    enforced by the factory guard require_dev_profile(), which the CLI calls
+    before any command dispatch.
+    Production identity is gateway-only (OIDC-verified claims).
+  architecture_decision: "@adr: ADR-10"
+  language: "Python"
+  dependencies:
+    - { name: "stdlib only (argparse, tomllib, asyncio, json)", version: ">=3.12", purpose: "No new runtime deps; psycopg arrives via the Repository" }
+
+interfaces:
+  invocation: "engramory [--json] [--config PATH] <command> [args]"
+  global_flags:
+    - { flag: "--json", behavior: "Emit exactly ONE machine-readable JSON object on stdout; diagnostics go to stderr" }
+    - { flag: "--config PATH", behavior: "Explicit config file; default .engramory/config.toml discovered upward from CWD" }
+  exit_codes:  # NORMATIVE (adopted from the interlog CLI-SPEC draft; pinned here)
+    - { code: 0, meaning: "success" }
+    - { code: 1, meaning: "fail-closed reject — authz deny (AuthzError), governed-write reject, invalid input (ValidationError/ValueError), unknown id (KeyError), storage/filesystem errors (StorageError/OSError)" }
+    - { code: 2, meaning: "usage / config / environment — argparse errors, missing or malformed config, the ADR-10 dev-tier fence (DevTierFenceError subclassing PermissionError)" }
+    - { code: 3, meaning: "retryable — canonical store unreachable (StoreUnavailable)" }
+  commands:
+    - { name: "init", maps_to: "scaffold + Repository.upsert_agent_profile (best-effort)", notes: "Writes .engramory/config.toml (actor identity + optional --domain-id + store dsn), appends .engramory/ to .gitignore. Idempotent unless --force is passed. Profile upsert is best-effort: store-down still exits 0 with profile=deferred." }
+    - { name: "memory add", maps_to: "AccessSurface.memory_add", notes: "--content, --kind (default note), --scope, --domain-id, --brain-variant, --specialization; JSON result {episode_id}" }
+    - { name: "memory search", maps_to: "AccessSurface.memory_search", notes: "--query, --scope (default agent), --domain-id, --brain-variant, --specialization, --include-knowledge, --expand-graph, -k (default 8); JSON result {hits: [...]}" }
+    - { name: "memory feedback", maps_to: "AccessSurface.memory_feedback", notes: "--retrieval-id, --outcome (useful|not_useful|harmful); JSON result {ok}" }
+    - { name: "memory forget", maps_to: "AccessSurface.memory_forget", notes: "--memory-id, --reason (audited); JSON result {ok}" }
+    - { name: "memory distill", maps_to: "workers.distillation.reflect (OPS COMMAND)", notes: "Interim reflect pass (--brain-variant, --distiller-model, --rag-params-json); JSON result {created, brain_variant}. Replaced in body by the SPEC-04 engine; command survives." }
+    - { name: "memory promote", maps_to: "AccessSurface.memory_promote", notes: "--memory-id, --target-scope (project|domain|space), --evidence-ref, --domain-id, --project-id, --specialization; governed promotion up ADR-07 scope ladder" }
+    - { name: "memory ingest-event", maps_to: "AccessSurface.memory_ingest_event", notes: "--event-json or --event-file; validates ExperienceEvent and persists L1 episode" }
+    - { name: "memory learning-health", maps_to: "AccessSurface.memory_learning_health", notes: "--project-id, --limit; computes repeat_findings_rate, calibration_delta, and mean_effectiveness_score" }
+    - { name: "profile get", maps_to: "AccessSurface.agent_profile_get", notes: "Caller's own L3 profile; default profile on fresh store; JSON result {agent_id, display_name, standing_preferences}" }
+    - { name: "profile set", maps_to: "AccessSurface.agent_profile_upsert", notes: "--display-name, --agent-type, --role, --domain-id, --specialization, --brain-variant, --distiller-model, --extraction-model, --embedding-model, --rag-params-json, --pref KEY=VALUE" }
+    - { name: "profile list", maps_to: "AccessSurface.agent_roster_list", notes: "--domain-id, --agent-type, --role, --specialization; lists and ranks Virtual Employee instances with live skill statistics" }
+    - { name: "profile export-brain", maps_to: "AccessSurface.agent_brain_export", notes: "--domain-id, --brain-variant, --specialization, --limit, --redact-term, --out PATH; exports sanitized engramory.brain_passport.v1 with passport_sha256" }
+    - { name: "profile import-brain", maps_to: "AccessSurface.agent_brain_import", notes: "--in PATH, --evidence-ref, --domain-id, --brain-variant, --redact-term, --allow-type-override; verifies passport_sha256 and imports sanitized skills" }
+    - { name: "profile compare-brains", maps_to: "AccessSurface.agent_brain_compare", notes: "--variant-a, --variant-b, --query, --domain-id, --specialization, -k; side-by-side multi-model brain comparison" }
+    - { name: "profile offboard", maps_to: "AccessSurface.agent_space_offboard", notes: "--evidence-ref, --reason, --keep-episodes, --keep-memories; transactional offboarding of private agent space" }
+    - { name: "knowledge ingest", maps_to: "AccessSurface.knowledge_ingest / knowledge_ingest_files (alias: kb ingest)", notes: "Inline --text or file/dir path, --evidence-ref, --scope, --domain-id; governed ingestion via AccessSurface" }
+    - { name: "knowledge sync-git", maps_to: "AccessSurface.knowledge_sync_git (alias: kb sync-git)", notes: "--repo, --base, --head, --evidence-ref, --scope, --domain-id; governed git sync via AccessSurface" }
+    - { name: "knowledge search", maps_to: "AccessSurface.knowledge_search (alias: kb search)", notes: "query, --limit, --scope, --domain-id, --modality, --expand-graph, --graph-depth; 3-leg hybrid RRF + GraphRAG expansion" }
+    - { name: "sdd ingest", maps_to: "AccessSurface.sdd_ingest", notes: "--sdd-root, --project-id, --tenant-id, --evidence-ref, --scope, --no-reconcile; governed SDD graph ingestion via AccessSurface" }
+    - { name: "knowledge ingest-media", maps_to: "AccessSurface.knowledge_ingest_media (alias: kb ingest-media)", notes: "path, --evidence-ref, --scope, --domain-id, --no-embed, --no-graph; streams media into PostgreSQL 18 Chunked Blob CAS and indexes multimodal sections" }
+    - { name: "knowledge blob-stat", maps_to: "AccessSurface.blob_head (alias: kb blob-stat)", notes: "sha256, --scope; inspects kb_blobs manifest and chunk completeness" }
+    - { name: "knowledge blob-get", maps_to: "AccessSurface.blob_get / StoragePort.get_stream (alias: kb blob-get)", notes: "sha256, --out PATH, --scope; streams 4 MiB chunks with SHA-256 verification" }
+    - { name: "status", maps_to: "Repository.count_* (OPS COMMAND)", notes: "JSON result {store, episodes, kb_sections} for the caller's tenant" }
+
+data_models:
+  config_file:
+    path: ".engramory/config.toml (discovered upward; --config overrides)"
+    schema: |
+      [actor]
+      agent_id = "<str>"        # required
+      project_id = "<str>"      # required
+      tenant_id = "<str>"       # required
+      domain_id = "<str>"       # optional department focus (e.g. "billing")
+      scopes = ["agent", "project"]   # optional; MUST be a TOML list (a string is rejected as ConfigError)
+      [store]
+      dsn = "<postgres dsn>"    # required; credentials — the directory is gitignored
+
+behavior:
+  validation_rules:
+    - { rule: "require_dev_profile runs BEFORE any command dispatch; non-dev ENGRAMORY_PROFILE exits 2 naming ADR-10", source: "@adr: ADR.10.03.a100" }
+    - { rule: "AuthzError/GovernedWriteRejected subclass PermissionError and MUST be matched before the fence clause — a surface deny is exit 1, never 2", source: "@spec: SPEC-01" }
+    - { rule: "--json output is exactly one JSON object on stdout; all diagnostics to stderr", source: "@adr: ADR-10" }
+  error_handling:
+    - { condition: "Store unreachable", response: "Exit 3 (retryable); init alone stays exit 0 with profile=deferred", source: "@ears: EARS.01.03.c900" }
+    - { condition: "Missing/malformed config", response: "Exit 2 with the offending path named", source: "@adr: ADR-10" }
+
+implementation_notes:
+  constraints:
+    - "No logic beyond ActorContext construction, arg parsing, error mapping (ADR-10 separation rule)"
+    - "asyncio.run bridges the async surface per command invocation"
+    - "The CLI never touches Repository/ports directly except the two declared ops commands"
+  patterns: ["Thin transport face", "Fence-then-dispatch"]
+
+tdd_contracts:
+  tdd_document: "@tdd: TDD-01"
+  test_files:
+    - { path: "tests/integration/test_cli.py", covers: "exit-code contract incl. authz-deny=1, config discovery upward + --config, --json purity, round-trip add->distill->search->feedback->forget, fence" }
+    - { path: "tests/unit/test_factory_fence.py", covers: "require_dev_profile matrix (param, env default, env override)" }
+
+traceability:
+  tags: ["@spec: SPEC-07"]
+  upstream:
+    adr_references: ["@adr: ADR.10.03.a100"]
+    spec_references: ["@spec: SPEC-01"]
+    ears_references: ["@ears: EARS.01.03.e020", "@ears: EARS.01.03.c900"]
+  downstream:
+    - { type: IPLAN, layer: 8, description: "Implemented across IPLAN-07 (CLI face), IPLAN-08 (multimodal RAG & blob CAS), and IPLAN-09 (Virtual Employee profile & Brain Passports)" }
+  health_score: { tdd_ready: "98%", target_score: ">=90/100" }

@@ -14,20 +14,21 @@ doc_id: SPEC-04
 title: "Distillation Engine"
 
 document_control:
-  status: Draft
-  version: "1.2"
+  status: Approved
+  version: "1.3"
   date_created: "2026-06-22T00:00:00"
-  last_updated: "2026-11-21T00:00:00"
+  last_updated: "2026-11-22T00:00:00"
   author: "Engramory team"
   component: "DistillationEngine"
-  tdd_ready_score: "[Pending]/100"
+  tdd_ready_score: "95/100"
 
 component_overview:
   description: |
-    Background worker that runs reflection (episodes → long-term memory) and consolidation
+    Background worker that runs reflection (episodes -> long-term memory) and consolidation
     (merge, generalize, end-date, quarantine low-confidence). Uses LLMPort for summarization/
-    embedding. Emits observable consolidation_run records. May wrap an external memory engine
-    (LangMem/Cipher/Mem0) as the MemoryPort adapter, with Postgres canonical.
+    embedding. Emits observable consolidation_run records. Built natively over PostgreSQL 18
+    canonical storage (`workers/distillation.py` + `workers/runner.py`), while optional external
+    `MemoryPort` acceleration remains planned/deferred (`BRD-07`).
   architecture_decision: "@adr: ADR-05"
   diagram:
     tags: ["@diagram: c4-l3", "@diagram: dfd-l3"]
@@ -46,13 +47,13 @@ interfaces:
   exports:
     - name: "reflect"
       type: "async function"
-      signature: "async def reflect(agent_id: str, project_id: str | None) -> int"
-      description: "Promote recent episodes into distilled long-term memories. Returns count. Port binding: MemoryPort.reflect (renamed from distill, PLAN-001). Validate this batch-reflect surface against the adopted engine's API (Mem0 write-time ADD/UPDATE/DELETE/NOOP) before building the adapter (IPLAN-04 precondition)."
+      signature: "async def reflect(repo: Repository, *, tenant_id: str, agent_id: str, llm: LLMPort | None = None, vector: VectorPort | None = None, batch_size: int = 32, brain_variant: str | None = None, distiller_model: str | None = None, rag_params: Mapping[str, Any] | None = None) -> int"
+      description: "Promote unreflected episodes into distilled long-term memories with optional brain_variant/distiller_model summarization and retried embedding projection. Returns count created."
       errors: ["LLMUnavailable: retryable"]
     - name: "consolidate"
       type: "async function"
-      signature: "async def consolidate(agent_id: str) -> ConsolidationStats"
-      description: "Compact long-term memory: merge/generalize/end-date/quarantine."
+      signature: "async def consolidate(repo: Repository, *, tenant_id: str, agent_id: str | None = None, project_id: str | None = None, domain_id: str | None = None, scope: str | None = None, expire_below_confidence: float = 0.2, min_age_days: int = 30) -> ConsolidationStats"
+      description: "Compact long-term memory: deduplicate/merge duplicates, expire stale low-confidence memories, and record consolidation_runs."
       errors: ["LLMUnavailable: retryable"]
 
 data_models:
@@ -60,10 +61,11 @@ data_models:
     - name: "ConsolidationStats"
       type: "dataclass"
       fields:
-        - { name: "merged", type: "int", required: true, description: "Memories merged" }
-        - { name: "expired", type: "int", required: true, description: "End-dated facts" }
-        - { name: "quarantined", type: "int", required: true, description: "Low-confidence lessons" }
-        - { name: "run_id", type: "str", required: true, description: "Observable consolidation_run id" }
+        - { name: "tenant_id", type: "str", required: true, description: "Tenant namespace of the consolidation run" }
+        - { name: "agent_id", type: "str | None", required: false, description: "Optional scoped agent id" }
+        - { name: "merged", type: "int", required: true, description: "Memories merged/superseded" }
+        - { name: "expired", type: "int", required: true, description: "Low-confidence memories end-dated" }
+        - { name: "run_id", type: "str | None", required: false, description: "Observable consolidation_run id when persisted" }
     - name: "ExperienceEvent"
       type: "dataclass"
       fields:
@@ -95,8 +97,10 @@ implementation_notes:
 tdd_contracts:
   tdd_document: "@tdd: TDD-04"
   test_files:
-    - { path: "tests/unit/test_distillation_worker.py", covers: "episode -> memory reflection, consolidation, and worker loop" }
+    - { path: "tests/integration/test_distillation_embedding.py", covers: "episode -> memory reflection with embeddings" }
+    - { path: "tests/integration/test_worker_runner.py", covers: "worker runner distillation loop and heartbeat" }
     - { path: "tests/unit/test_experience_pipeline.py", covers: "ExperienceEvent provenance propagation and effectiveness scoring" }
+    - { path: "tests/security/test_wave_p1_integrity_runtime.py", covers: "brain_variant coalescing, consolidate(), and DLQ worker isolation" }
 
 traceability:
   tags: ["@spec: SPEC-04"]

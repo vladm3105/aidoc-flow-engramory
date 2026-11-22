@@ -12,6 +12,7 @@ import os
 import threading
 import time
 import urllib.parse
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,7 +22,7 @@ from jwt import PyJWKClient
 from jwt.exceptions import PyJWKClientError
 
 from engramory.access.authz import ActorContext
-from engramory.core.models import SCOPES
+from engramory.core.models import SCOPES, _frozen_mapping, thaw_mapping
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,10 @@ class TokenClaims:
     iss: str
     aud: str
     exp: int
-    raw_claims: dict[str, Any]
+    raw_claims: Mapping[str, Any]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "raw_claims", _frozen_mapping(self.raw_claims))
 
     @property
     def jti(self) -> str | None:
@@ -112,7 +116,7 @@ class TokenClaims:
     def actor(self) -> dict[str, Any] | None:
         """RFC 8693 act claim for delegated agent execution."""
         act = self.raw_claims.get("act")
-        return act if isinstance(act, dict) else None
+        return thaw_mapping(act) if isinstance(act, Mapping) else None
 
 
 class JWKSValidator:

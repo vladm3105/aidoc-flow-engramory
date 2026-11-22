@@ -33,12 +33,6 @@ from pathlib import Path
 from typing import Any
 
 from engramory.access.authz import ActorContext, AuthzDecision, TargetScope, authorize
-from engramory.access.poisoning_guard import (
-    MemoryPoisoningError,
-    inspect_memory_write,
-    sanitize_portable_text,
-    sanitize_portable_value,
-)
 from engramory.core.models import (
     AgentProfile,
     Episode,
@@ -46,6 +40,14 @@ from engramory.core.models import (
     KBRunbookStep,
     KBSection,
     ValidationError,
+    thaw_mapping,
+    thaw_value,
+)
+from engramory.core.poisoning_guard import (
+    MemoryPoisoningError,
+    inspect_memory_write,
+    sanitize_portable_text,
+    sanitize_portable_value,
 )
 from engramory.core.repository import Repository, StoreUnavailable
 from engramory.ports import GraphPort, LLMPort, StoragePort
@@ -58,6 +60,7 @@ DEFAULT_TOKEN_BUDGET = 2000
 # an unbounded amount of store work.
 MAX_K = 100
 MAX_CONTENT_BYTES = 65536
+MAX_METADATA_BYTES = 65536
 MAX_SURFACE_BLOB_BYTES = 16 * 1024 * 1024
 _RESERVED_EPISODE_METADATA_KEYS: frozenset[str] = frozenset(
     {
@@ -79,6 +82,15 @@ _LADDER = ("agent", "project", "domain", "space")
 def _granted_levels(requested: str, granted: frozenset[str]) -> tuple[str, ...]:
     ceiling = _LADDER.index(requested) if requested in _LADDER else 0
     return tuple(level for level in _LADDER[: ceiling + 1] if level in granted)
+
+
+def _validate_metadata_size(payload: Any, label: str = "metadata") -> None:
+    """Bound serialized metadata size to MAX_METADATA_BYTES to prevent store bloat."""
+    if not payload:
+        return
+    encoded = json.dumps(thaw_value(payload), sort_keys=True, default=str).encode("utf-8")
+    if len(encoded) > MAX_METADATA_BYTES:
+        raise ValidationError(f"{label} exceeds {MAX_METADATA_BYTES} bytes")
 
 
 class AuthzError(PermissionError):
@@ -342,7 +354,7 @@ class AccessSurface:
                 budget -= tokens
             if memory.id is None:
                 raise RuntimeError("hydrated memory missing id")
-            prov = dict(memory.provenance)
+            prov = thaw_mapping(memory.provenance)
             if expand_graph:
                 neighbors = await self._expand_neighbors_with_fallback(
                     id=memory.id,
@@ -397,7 +409,7 @@ class AccessSurface:
                         "citation": sec.citation,
                         "modality": sec.modality,
                         "blob_uri": sec.blob_uri,
-                        "media_metadata": dict(sec.media_metadata),
+                        "media_metadata": thaw_mapping(sec.media_metadata),
                     }
                     hits.append(
                         MemoryHit(
@@ -561,6 +573,8 @@ class AccessSurface:
         """Append an episode in the caller's scope (idempotent by content hash)."""
         if len(content.encode("utf-8")) > MAX_CONTENT_BYTES:
             raise ValueError(f"content exceeds {MAX_CONTENT_BYTES} bytes")
+        if metadata:
+            _validate_metadata_size(metadata, "episode metadata")
         await self._decide(ctx, "memory_add", TargetScope(tenant_id=ctx.tenant_id, scope=scope))
         eff_domain_id = await self._enforce_domain_boundary(ctx, "memory_add", domain_id)
         merged_meta: dict[str, Any] = {
@@ -694,6 +708,10 @@ class AccessSurface:
             and standing_preferences.get("department_focus")
             else None
         )
+        if standing_preferences:
+            _validate_metadata_size(standing_preferences, "standing_preferences")
+        if brain_config:
+            _validate_metadata_size(brain_config, "brain_config")
         if domain_id is not None and pref_dept is not None and pref_dept != domain_id:
             await self._enforce_domain_boundary(ctx, "agent_profile_upsert", pref_dept)
         eff_domain = await self._enforce_domain_boundary(
@@ -701,10 +719,10 @@ class AccessSurface:
         )
         existing = await self._repo.get_agent_profile(ctx.agent_id, tenant_id=ctx.tenant_id)
         merged_prefs: dict[str, Any] = (
-            dict(existing.standing_preferences) if existing is not None else {}
+            thaw_mapping(existing.standing_preferences) if existing is not None else {}
         )
         if standing_preferences:
-            merged_prefs.update(dict(standing_preferences))
+            merged_prefs.update(thaw_mapping(standing_preferences))
         if eff_domain is None and pref_dept is not None:
             merged_prefs.pop("department_focus", None)
         eff_agent_type = (
@@ -723,7 +741,7 @@ class AccessSurface:
             )
         if brain_config is not None:
             prev_cfg = (
-                dict(merged_prefs["brain_config"])
+                thaw_mapping(merged_prefs["brain_config"])
                 if isinstance(merged_prefs.get("brain_config"), Mapping)
                 else {}
             )
@@ -950,7 +968,7 @@ class AccessSurface:
             )
             raise GovernedWriteRejected(str(exc)) from exc
 
-        new_prov = dict(source.provenance)
+        new_prov = thaw_mapping(source.provenance)
         new_prov.update(
             {
                 "promoted_from_memory_id": memory_id,
@@ -983,6 +1001,15 @@ class AccessSurface:
                 if vecs and len(vecs[0]) == 1536:
                     vec = vecs[0]
                     emb_dims = 1536
+                    emb_model = next(
+                        (
+                            str(val).strip()
+                            for attr in ("embed_model", "_embed_model", "_default_embed_model")
+                            if isinstance((val := getattr(self._llm, attr, None)), str)
+                            and val.strip()
+                        ),
+                        source.embedding_model,
+                    )
             except Exception:  # noqa: BLE001  # reason: fallback to copying source embedding when LLM embed fails
                 vec = None
 
@@ -1130,7 +1157,8 @@ class AccessSurface:
         )
         total_redactions += r_disp
         clean_prefs, r_prefs = sanitize_portable_value(
-            dict(profile.standing_preferences or {}), redact_terms=base_terms
+            thaw_mapping(profile.standing_preferences) if profile.standing_preferences else {},
+            redact_terms=base_terms,
         )
         total_redactions += r_prefs
         raw_bcfg = clean_prefs.get("brain_config") if isinstance(clean_prefs, Mapping) else {}
@@ -1261,14 +1289,18 @@ class AccessSurface:
         if not isinstance(existing_profile, AgentProfile):
             existing_profile = None
         existing_prefs = (
-            dict(existing_profile.standing_preferences) if existing_profile is not None else {}
+            thaw_mapping(existing_profile.standing_preferences)
+            if existing_profile is not None
+            else {}
         )
         target_agent_type = (
             str(existing_prefs.get("agent_type") or existing_prefs.get("role") or "").strip()
             or None
         )
         raw_pass_prefs = passport.get("standing_preferences")
-        pass_prefs_dict = dict(raw_pass_prefs) if isinstance(raw_pass_prefs, Mapping) else {}
+        pass_prefs_dict = (
+            thaw_mapping(raw_pass_prefs) if isinstance(raw_pass_prefs, Mapping) else {}
+        )
         passport_agent_type = (
             str(
                 passport.get("agent_type")
@@ -1679,26 +1711,42 @@ class AccessSurface:
             "winner": winner,
         }
         if query and query.strip():
-            hits_a = await self.memory_search(
-                ctx,
-                query,
-                scope=scope,
+            levels = _granted_levels(scope, ctx.scopes)
+            max_hits = max(1, min(k, MAX_K))
+            query_vec: Sequence[float] | None = None
+            if self._llm is not None:
+                try:
+                    vecs = await self._llm.embed(texts=[query])
+                    if vecs and len(vecs[0]) == 1536:
+                        query_vec = vecs[0]
+                except Exception:  # noqa: BLE001  # reason: compare falls back to lexical/recency retrieval
+                    query_vec = None
+            mems_a = await self._repo.get_memories(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
                 domain_id=eff_domain,
+                k=max_hits,
+                query=query,
+                query_vec=query_vec,
+                scopes=levels,
                 brain_variant=variant_a,
                 specialization=specialization,
-                k=k,
             )
-            hits_b = await self.memory_search(
-                ctx,
-                query,
-                scope=scope,
+            mems_b = await self._repo.get_memories(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
                 domain_id=eff_domain,
+                k=max_hits,
+                query=query,
+                query_vec=query_vec,
+                scopes=levels,
                 brain_variant=variant_b,
                 specialization=specialization,
-                k=k,
             )
-            summaries_a = {h.summary for h in hits_a}
-            summaries_b = {h.summary for h in hits_b}
+            summaries_a = {m.summary for m in mems_a}
+            summaries_b = {m.summary for m in mems_b}
             union_cnt = len(summaries_a | summaries_b)
             overlap_ratio = (
                 round(len(summaries_a & summaries_b) / union_cnt, 4) if union_cnt > 0 else 0.0
@@ -1706,12 +1754,10 @@ class AccessSurface:
             result["query_comparison"] = {
                 "query": query,
                 "variant_a_hits": [
-                    {"memory_id": h.memory_id, "summary": h.summary, "score": h.score}
-                    for h in hits_a
+                    {"memory_id": m.id, "summary": m.summary, "score": m.confidence} for m in mems_a
                 ],
                 "variant_b_hits": [
-                    {"memory_id": h.memory_id, "summary": h.summary, "score": h.score}
-                    for h in hits_b
+                    {"memory_id": m.id, "summary": m.summary, "score": m.confidence} for m in mems_b
                 ],
                 "overlap_ratio": overlap_ratio,
             }
@@ -1920,8 +1966,9 @@ class AccessSurface:
                 target=doc_id,
             )
             if media_metadata:
+                _validate_metadata_size(media_metadata, "media_metadata")
                 inspect_memory_write(
-                    json.dumps(dict(media_metadata), sort_keys=True),
+                    json.dumps(thaw_mapping(media_metadata), sort_keys=True),
                     tenant_id=ctx.tenant_id,
                     writer_agent_id=ctx.agent_id,
                     target=doc_id,
@@ -2002,8 +2049,9 @@ class AccessSurface:
                     target=s.doc_id,
                 )
                 if s.media_metadata:
+                    _validate_metadata_size(s.media_metadata, "media_metadata")
                     inspect_memory_write(
-                        json.dumps(dict(s.media_metadata), sort_keys=True),
+                        json.dumps(thaw_mapping(s.media_metadata), sort_keys=True),
                         tenant_id=ctx.tenant_id,
                         writer_agent_id=ctx.agent_id,
                         target=s.doc_id,
@@ -2117,7 +2165,7 @@ class AccessSurface:
             "query_vec": eff_vec,
             "scope": scope,
             "allowed_scopes": sorted(ctx.scopes),
-            "limit": limit,
+            "limit": max(1, min(limit, MAX_K)),
         }
         if modality is not None:
             search_kwargs["modality"] = modality
@@ -2153,7 +2201,7 @@ class AccessSurface:
 
             if neighbors_by_id:
                 new_meta = {
-                    **dict(sec.media_metadata),
+                    **thaw_mapping(sec.media_metadata),
                     "graph_context": list(neighbors_by_id.values()),
                 }
                 enriched.append(dataclasses.replace(sec, media_metadata=new_meta))
@@ -2182,9 +2230,10 @@ class AccessSurface:
             raise RuntimeError("StoragePort adapter is not configured on AccessSurface")
 
         if metadata:
+            _validate_metadata_size(metadata, "blob metadata")
             try:
                 inspect_memory_write(
-                    json.dumps(dict(metadata), sort_keys=True),
+                    json.dumps(thaw_mapping(metadata), sort_keys=True),
                     tenant_id=ctx.tenant_id,
                     writer_agent_id=ctx.agent_id,
                     target=key or str(file_path or "blob"),
@@ -2275,7 +2324,7 @@ class AccessSurface:
             "storage_tier": blob.storage_tier,
             "status": blob.status,
             "blob_uri": f"pgblob://{blob.tenant_id}/{blob.sha256}",
-            "metadata": dict(blob.metadata),
+            "metadata": thaw_mapping(blob.metadata),
         }
 
     async def blob_get(
@@ -2667,7 +2716,7 @@ class AccessSurface:
             )
             if doc.frontmatter:
                 inspect_memory_write(
-                    json.dumps(dict(doc.frontmatter), sort_keys=True, default=str),
+                    json.dumps(thaw_mapping(doc.frontmatter), sort_keys=True, default=str),
                     tenant_id=ctx.tenant_id,
                     writer_agent_id=ctx.agent_id,
                     target=doc.doc_id,

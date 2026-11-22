@@ -4,11 +4,26 @@
 # Usage: make smoke   (honors POSTGRES_HOST_PORT / POSTGRES_* from .env)
 set -euo pipefail
 
+if [ -f .env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  . ./.env
+  set +a
+fi
+
 PORT="${POSTGRES_HOST_PORT:-5432}"
 USER="${POSTGRES_USER:-engramory}"
 PASS="${POSTGRES_PASSWORD:-change_me}"
 DB="${POSTGRES_DB:-engramory}"
-DSN="postgresql://${USER}:${PASS}@localhost:${PORT}/${DB}"
+DSN="$(
+  PG_USER="$USER" PG_PASS="$PASS" PG_PORT="$PORT" PG_DB="$DB" python3 -c '
+import os, urllib.parse
+u = urllib.parse.quote(os.environ["PG_USER"], safe="")
+p = urllib.parse.quote(os.environ["PG_PASS"], safe="")
+d = urllib.parse.quote(os.environ["PG_DB"], safe="")
+print(f"postgresql://{u}:{p}@localhost:{os.environ[\"PG_PORT\"]}/{d}")
+'
+)"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT

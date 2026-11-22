@@ -14,13 +14,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import weakref
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
-from typing import Any, LiteralString
+from typing import Any, LiteralString, cast
 
 import psycopg
 from psycopg import sql
 from psycopg.rows import dict_row
+from psycopg_pool import AsyncConnectionPool, PoolTimeout
 
 from engramory.core.models import (
     AUTONOMY_TIERS,
@@ -33,6 +35,7 @@ from engramory.core.models import (
     KBSection,
     Memory,
     ValidationError,
+    thaw_mapping,
 )
 
 # memory_retrievals.feedback CHECK domain (migration 0003) — enforced here so a
@@ -386,14 +389,73 @@ def _escape_ilike(val: str) -> str:
 
 
 class Repository:
-    """Typed data access over the canonical Postgres schema (migrations 0001..0003)."""
+    """Typed data access over the canonical Postgres schema (migrations 0001..0013)."""
 
-    def __init__(self, dsn: str) -> None:
+    def __init__(
+        self,
+        dsn: str,
+        *,
+        min_size: int = 1,
+        max_size: int = 10,
+        open_timeout: float = 5.0,
+    ) -> None:
         self._dsn = dsn
+        self._min_size = max(0, int(min_size))
+        self._max_size = max(1, int(max_size))
+        self._open_timeout = max(0.05, float(open_timeout))
+        self._pools: weakref.WeakKeyDictionary[
+            asyncio.AbstractEventLoop,
+            AsyncConnectionPool[psycopg.AsyncConnection[dict[str, Any]]],
+        ] = weakref.WeakKeyDictionary()
+        self._pool_locks: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = (
+            weakref.WeakKeyDictionary()
+        )
 
     @property
     def dsn(self) -> str:
         return self._dsn
+
+    async def _get_pool(self) -> AsyncConnectionPool[psycopg.AsyncConnection[dict[str, Any]]]:
+        """Lazily initialize and return the AsyncConnectionPool bound to the running loop."""
+        loop = asyncio.get_running_loop()
+        pool = self._pools.get(loop)
+        if pool is not None:
+            return pool
+        lock = self._pool_locks.get(loop)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._pool_locks[loop] = lock
+        async with lock:
+            pool = self._pools.get(loop)
+            if pool is not None:
+                return pool
+            candidate = cast(
+                AsyncConnectionPool[psycopg.AsyncConnection[dict[str, Any]]],
+                AsyncConnectionPool(
+                    conninfo=self._dsn,
+                    min_size=self._min_size,
+                    max_size=self._max_size,
+                    open=False,
+                    kwargs={"row_factory": dict_row},
+                ),
+            )
+            try:
+                await candidate.open(wait=False)
+            except Exception:
+                await candidate.close()
+                raise
+            self._pools[loop] = candidate
+            return candidate
+
+    async def close(self) -> None:
+        """Close the AsyncConnectionPool bound to the current running event loop, if any."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        pool = self._pools.pop(loop, None)
+        if pool is not None:
+            await pool.close()
 
     @asynccontextmanager
     async def _conn(
@@ -402,27 +464,23 @@ class Repository:
         tenant_id: str | None = None,
         worker_sweep: bool = False,
     ) -> AsyncIterator[psycopg.AsyncConnection[dict[str, Any]]]:
+        pool = await self._get_pool()
         try:
-            conn = await psycopg.AsyncConnection.connect(self._dsn, row_factory=dict_row)
-        except psycopg.OperationalError as exc:
-            raise StoreUnavailable(str(exc)) from exc
-        try:
-            async with conn:
-                if tenant_id:
+            async with pool.connection(timeout=self._open_timeout) as conn:
+                async with conn.transaction():
                     await conn.execute(
-                        "SELECT set_config('app.tenant_id', %(tid)s, true)",
-                        {"tid": tenant_id},
+                        """
+                        SELECT set_config('app.tenant_id', %(tid)s, true),
+                               set_config('app.worker_sweep', %(sweep)s, true)
+                        """,
+                        {
+                            "tid": tenant_id or "",
+                            "sweep": "on" if worker_sweep else "",
+                        },
                     )
-                if worker_sweep:
-                    await conn.execute("SELECT set_config('app.worker_sweep', 'on', true)")
-                yield conn
-        except psycopg.OperationalError as exc:
+                    yield conn
+        except (psycopg.OperationalError, psycopg.InterfaceError, TimeoutError, PoolTimeout) as exc:
             raise StoreUnavailable(str(exc)) from exc
-        finally:
-            # psycopg's __exit__ skips close() when COMMIT itself raises —
-            # without this the connection would leak until GC.
-            if not conn.closed:
-                await conn.close()
 
     async def ping(self, *, timeout_sec: float = 2.0) -> bool:
         """Return True iff PostgreSQL executes ``SELECT 1`` within ``timeout_sec``."""
@@ -846,6 +904,39 @@ class Repository:
             ).fetchall()
             return [row["feedback"] for row in rows]
 
+    async def get_retrieval_feedback_summary(
+        self, *, tenant_id: str, memory_ids: Sequence[str]
+    ) -> dict[str, int]:
+        """Aggregate retrieval feedback counts across ``memory_ids`` in a single query."""
+        empty = {"total": 0, "useful": 0, "not_useful": 0, "harmful": 0}
+        clean_ids = [str(mid) for mid in memory_ids if mid]
+        if not clean_ids:
+            return empty
+        async with self._conn(tenant_id=tenant_id) as conn:
+            row = await (
+                await conn.execute(
+                    """
+                    SELECT
+                        COUNT(*)::integer AS total,
+                        COUNT(*) FILTER (WHERE feedback = 'useful')::integer AS useful,
+                        COUNT(*) FILTER (WHERE feedback = 'not_useful')::integer AS not_useful,
+                        COUNT(*) FILTER (WHERE feedback = 'harmful')::integer AS harmful
+                    FROM memory_retrievals
+                    WHERE tenant_id = %(tenant_id)s
+                      AND memory_id = ANY(%(memory_ids)s::uuid[])
+                    """,
+                    {"tenant_id": tenant_id, "memory_ids": clean_ids},
+                )
+            ).fetchone()
+        if row is None:
+            return empty
+        return {
+            "total": int(row["total"] or 0),
+            "useful": int(row["useful"] or 0),
+            "not_useful": int(row["not_useful"] or 0),
+            "harmful": int(row["harmful"] or 0),
+        }
+
     async def get_agent_profile(
         self, agent_id: str, *, tenant_id: str = "default"
     ) -> AgentProfile | None:
@@ -886,7 +977,7 @@ class Repository:
                     "tenant_id": profile.tenant_id,
                     "agent_id": profile.agent_id,
                     "display_name": profile.display_name,
-                    "standing_preferences": json.dumps(dict(profile.standing_preferences)),
+                    "standing_preferences": json.dumps(thaw_mapping(profile.standing_preferences)),
                 },
             )
 
@@ -1406,25 +1497,36 @@ class Repository:
         for m in mems:
             embedding_models.add(m.embedding_model)
             bm = m.provenance.get("brain_metadata")
-            if isinstance(bm, dict):
+            if isinstance(bm, Mapping):
                 dm = bm.get("distiller_model")
                 if dm:
                     distiller_models.add(str(dm))
                 rp = bm.get("rag_params")
-                if isinstance(rp, dict) and not rag_params_seen:
-                    rag_params_seen = dict(rp)
+                if isinstance(rp, Mapping) and not rag_params_seen:
+                    rag_params_seen = thaw_mapping(rp)
             elif m.provenance.get("distiller"):
                 distiller_models.add(str(m.provenance["distiller"]))
-            if m.id:
-                fbs = await self.get_retrieval_feedback(tenant_id=tenant_id, memory_id=m.id)
-                total_retrievals += len(fbs)
-                for fb in fbs:
-                    if fb == "useful":
-                        useful_count += 1
-                    elif fb == "not_useful":
-                        not_useful_count += 1
-                    elif fb == "harmful":
-                        harmful_count += 1
+        mem_ids = [m.id for m in mems if m.id]
+        if mem_ids:
+            if type(self).get_retrieval_feedback is not Repository.get_retrieval_feedback:
+                for mid in mem_ids:
+                    fbs = await self.get_retrieval_feedback(tenant_id=tenant_id, memory_id=mid)
+                    total_retrievals += len(fbs)
+                    for fb in fbs:
+                        if fb == "useful":
+                            useful_count += 1
+                        elif fb == "not_useful":
+                            not_useful_count += 1
+                        elif fb == "harmful":
+                            harmful_count += 1
+            else:
+                fb_summary = await self.get_retrieval_feedback_summary(
+                    tenant_id=tenant_id, memory_ids=mem_ids
+                )
+                total_retrievals = fb_summary["total"]
+                useful_count = fb_summary["useful"]
+                not_useful_count = fb_summary["not_useful"]
+                harmful_count = fb_summary["harmful"]
         rated = useful_count + not_useful_count + harmful_count
         useful_rate = round(useful_count / rated, 4) if rated > 0 else 0.0
         return {
@@ -1500,7 +1602,7 @@ class Repository:
                         "modality": section.modality,
                         "blob_sha256": section.blob_sha256,
                         "blob_uri": section.blob_uri,
-                        "media_metadata": json.dumps(dict(section.media_metadata)),
+                        "media_metadata": json.dumps(thaw_mapping(section.media_metadata)),
                     },
                 )
             ).fetchone()
@@ -1582,7 +1684,9 @@ class Repository:
                         "modalities": [sec.modality for sec in chunk],
                         "blob_sha256s": [sec.blob_sha256 for sec in chunk],
                         "blob_uris": [sec.blob_uri for sec in chunk],
-                        "media_metadatas": [json.dumps(dict(sec.media_metadata)) for sec in chunk],
+                        "media_metadatas": [
+                            json.dumps(thaw_mapping(sec.media_metadata)) for sec in chunk
+                        ],
                     }
                     rows = await (
                         await conn.execute(
@@ -1663,10 +1767,38 @@ class Repository:
 
         return section_id_map
 
+    async def get_max_kb_section_versions(
+        self, tenant_id: str, doc_ids: Sequence[str], *, project_id: str | None = None
+    ) -> dict[str, int]:
+        """Return highest persisted section version per doc_id within tenant/project."""
+        clean_docs = [d for d in dict.fromkeys(doc_ids) if d]
+        if not clean_docs:
+            return {}
+        async with self._conn(tenant_id=tenant_id) as conn:
+            rows = await (
+                await conn.execute(
+                    """
+                    SELECT doc_id, MAX(version)::integer AS max_ver
+                    FROM kb_sections
+                    WHERE tenant_id = %(t)s
+                      AND doc_id = ANY(%(docs)s::text[])
+                      AND (%(p)s::text IS NULL OR project_id = %(p)s)
+                    GROUP BY doc_id
+                    """,
+                    {"t": tenant_id, "docs": clean_docs, "p": project_id},
+                )
+            ).fetchall()
+        return {str(row["doc_id"]): int(row["max_ver"] or 0) for row in rows}
+
     async def delete_kb_sections_for_doc(
-        self, tenant_id: str, doc_id: str, *, project_id: str | None = None
+        self,
+        tenant_id: str,
+        doc_id: str,
+        *,
+        project_id: str | None = None,
+        exclude_version: int | None = None,
     ) -> int:
-        """Delete all kb_sections for a document within a tenant (and optional project_id)."""
+        """Delete kb_sections for a document within a tenant (optionally excluding a version)."""
         async with self._conn(tenant_id=tenant_id) as conn:
             res = await conn.execute(
                 """
@@ -1674,9 +1806,10 @@ class Repository:
                 WHERE tenant_id = %(t)s
                   AND doc_id = %(d)s
                   AND (%(p)s::text IS NULL OR project_id = %(p)s)
+                  AND (%(exclude_v)s::integer IS NULL OR version <> %(exclude_v)s)
                 RETURNING id
                 """,
-                {"t": tenant_id, "d": doc_id, "p": project_id},
+                {"t": tenant_id, "d": doc_id, "p": project_id, "exclude_v": exclude_version},
             )
             rows = await res.fetchall()
             return len(rows)
@@ -1802,7 +1935,7 @@ class Repository:
             "rrf_k": max(1, int(rrf_k)),
             "query": query,
             "qv": vector_literal(query_vec) if query_vec is not None else None,
-            "pattern": f"%{query}%",
+            "pattern": f"%{_escape_ilike(query)}%",
             **scope_flags,
         }
         async with self._conn(tenant_id=tenant_id) as conn:
@@ -1840,7 +1973,9 @@ class Repository:
                                                ) DESC,
                                                (
                                                    CASE
-                                                       WHEN citation ILIKE %(pattern)s THEN 1
+                                                       WHEN citation ILIKE %(pattern)s
+                                                            ESCAPE '\\'
+                                                       THEN 1
                                                        ELSE 0
                                                    END
                                                ) DESC,
@@ -1850,8 +1985,8 @@ class Repository:
                                 FROM scoped_kb
                                 WHERE (
                                     ts_lex @@ websearch_to_tsquery('english', %(query)s)
-                                    OR text ILIKE %(pattern)s
-                                    OR citation ILIKE %(pattern)s
+                                    OR text ILIKE %(pattern)s ESCAPE '\\'
+                                    OR citation ILIKE %(pattern)s ESCAPE '\\'
                                 )
                                 LIMIT %(candidate_pool)s
                             ),
@@ -1910,15 +2045,20 @@ class Repository:
                               AND {kb_where}
                               AND (
                                   ts_lex @@ websearch_to_tsquery('english', %(query)s)
-                                  OR text ILIKE %(pattern)s
-                                  OR citation ILIKE %(pattern)s
+                                  OR text ILIKE %(pattern)s ESCAPE '\\'
+                                  OR citation ILIKE %(pattern)s ESCAPE '\\'
                               )
                             ORDER BY
                                 ts_rank_cd(
                                     COALESCE(ts_lex, to_tsvector('english', '')),
                                     websearch_to_tsquery('english', %(query)s)
                                 ) DESC,
-                                (CASE WHEN citation ILIKE %(pattern)s THEN 1 ELSE 0 END) DESC,
+                                (
+                                    CASE
+                                        WHEN citation ILIKE %(pattern)s ESCAPE '\\' THEN 1
+                                        ELSE 0
+                                    END
+                                ) DESC,
                                 version DESC,
                                 id ASC
                             LIMIT %(limit)s
@@ -2053,7 +2193,7 @@ class Repository:
                         "domain_id": entity.domain_id,
                         "entity_type": entity.entity_type,
                         "name": entity.name,
-                        "properties": json.dumps(dict(entity.properties)),
+                        "properties": json.dumps(thaw_mapping(entity.properties)),
                     },
                 )
             ).fetchone()
@@ -2087,7 +2227,7 @@ class Repository:
                         "src_id": relation.src_id,
                         "dst_id": relation.dst_id,
                         "rel_type": relation.rel_type,
-                        "properties": json.dumps(dict(relation.properties)),
+                        "properties": json.dumps(thaw_mapping(relation.properties)),
                     },
                 )
             ).fetchone()
@@ -2187,7 +2327,9 @@ class Repository:
                                     "domains": [e.domain_id for e in chunk],
                                     "types": [e.entity_type for e in chunk],
                                     "names": [e.name for e in chunk],
-                                    "props": [json.dumps(dict(e.properties)) for e in chunk],
+                                    "props": [
+                                        json.dumps(thaw_mapping(e.properties)) for e in chunk
+                                    ],
                                 },
                             )
                         ).fetchall()
@@ -2244,7 +2386,9 @@ class Repository:
                                     "srcs": [r.src_id for r in chunk],
                                     "dsts": [r.dst_id for r in chunk],
                                     "rels": [r.rel_type for r in chunk],
-                                    "props": [json.dumps(dict(r.properties)) for r in chunk],
+                                    "props": [
+                                        json.dumps(thaw_mapping(r.properties)) for r in chunk
+                                    ],
                                 },
                             )
                         ).fetchall()
@@ -2815,7 +2959,7 @@ class Repository:
                         "namespace": doc.namespace,
                         "status": doc.status,
                         "autonomy_tier": doc.autonomy_tier,
-                        "frontmatter": json.dumps(dict(doc.frontmatter)),
+                        "frontmatter": json.dumps(thaw_mapping(doc.frontmatter)),
                         "watched_paths": list(doc.watched_paths),
                         "trigger_alerts": list(doc.trigger_alerts),
                         "last_verified": doc.last_verified,
@@ -3071,7 +3215,7 @@ class Repository:
                     {
                         "tenant_id": tenant_id,
                         "agent_id": agent_id,
-                        "stats": json.dumps(dict(stats or {})),
+                        "stats": json.dumps(thaw_mapping(stats)),
                     },
                 )
             ).fetchone()
@@ -3213,7 +3357,9 @@ class Repository:
                             "tenant_id": profile.tenant_id,
                             "agent_id": profile.agent_id,
                             "display_name": profile.display_name,
-                            "standing_preferences": json.dumps(dict(profile.standing_preferences)),
+                            "standing_preferences": json.dumps(
+                                thaw_mapping(profile.standing_preferences)
+                            ),
                         },
                     )
                 for memory, embedding in memories:
@@ -3279,7 +3425,7 @@ def _episode_params(episode: Episode) -> dict[str, Any]:
         "kind": episode.kind,
         "content_raw": episode.content_raw,
         "content_hash": episode.content_hash,
-        "metadata": json.dumps(dict(episode.metadata)),
+        "metadata": json.dumps(thaw_mapping(episode.metadata)),
         "event_id": event_id_val,
     }
 
@@ -3296,7 +3442,7 @@ def _memory_params(memory: Memory) -> dict[str, Any]:
         "summary": memory.summary,
         "embedding_model": memory.embedding_model,
         "embedding_dims": memory.embedding_dims,
-        "provenance": json.dumps(dict(memory.provenance)),
+        "provenance": json.dumps(thaw_mapping(memory.provenance)),
         "confidence": memory.confidence,
         "status": memory.status,
         "source_trust": memory.source_trust,
@@ -3309,7 +3455,7 @@ def _hydrate_memory(row: dict[str, Any]) -> Memory:
         content_raw=row["content_raw"],
         summary=row["summary"],
         type=row["type"],
-        embedding_model=row["embedding_model"],
+        embedding_model=row["embedding_model"] or "none",
         provenance=row["provenance"],
         agent_id=row["agent_id"],
         project_id=row["project_id"],

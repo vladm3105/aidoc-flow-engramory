@@ -133,3 +133,7 @@ class PgVectorAdapter:
                 "WHERE id = %(id)s AND tenant_id = %(tenant_id)s",
                 {"id": id, "tenant_id": clean_tid},
             )
+
+    async def close(self) -> None:
+        """Close underlying repository connection pool for the active event loop."""
+        await self._repo.close()

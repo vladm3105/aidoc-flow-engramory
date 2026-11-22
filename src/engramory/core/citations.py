@@ -96,9 +96,9 @@ def generate_evidence_ref(file_path: Path, git_sha: str | None = None) -> str:
     if git_sha and git_sha not in ("local-uncommitted", "unknown", ""):
         return git_sha
 
-    if file_path.exists():
-        content_bytes = file_path.read_bytes()
-        digest = hashlib.sha256(content_bytes).hexdigest()
+    if file_path.exists() and file_path.is_file():
+        with file_path.open("rb") as fh:
+            digest = hashlib.file_digest(fh, "sha256").hexdigest()
         return f"sha256:{digest}"
 
     return "local-ephemeral"

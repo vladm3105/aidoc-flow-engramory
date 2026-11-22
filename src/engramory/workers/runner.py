@@ -18,9 +18,9 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from engramory.access.poisoning_guard import MemoryPoisoningError
 from engramory.core.experience import EXPERIENCE_EVENT_KINDS, ExperienceEvent
 from engramory.core.models import ValidationError
+from engramory.core.poisoning_guard import MemoryPoisoningError
 from engramory.core.repository import Repository
 from engramory.ports import EventsPort, LLMPort, StoragePort, VectorPort
 from engramory.workers.distillation import consolidate, reflect
@@ -292,7 +292,7 @@ async def run_worker_loop(
                     if pass_ok:
                         _touch_heartbeat(heartbeat_path)
     finally:
-        for adapter in (events, storage):
+        for adapter in (events, storage, vector, repo):
             if adapter is not None and hasattr(adapter, "close"):
                 try:
                     res = adapter.close()

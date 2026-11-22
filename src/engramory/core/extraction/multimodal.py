@@ -16,11 +16,13 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import shutil
 import struct
 import subprocess  # nosec B404 # reason: hardened ffprobe/ffmpeg media inspection with protocol_whitelist and DEVNULL
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from engramory.core.extraction.types import ExtractionResult, FileCategory
@@ -31,11 +33,15 @@ logger = logging.getLogger(__name__)
 
 MAX_KEYFRAME_BYTES: int = 20 * 1024 * 1024  # 20 MiB cap per extracted keyframe
 MAX_AUDIO_WINDOW_BYTES: int = 25 * 1024 * 1024  # 25 MiB cap per audio window
+MAX_FFPROBE_STDOUT_BYTES: int = 4 * 1024 * 1024  # 4 MiB bound on ffprobe JSON metadata
 DEFAULT_SEGMENT_SECONDS: int = 60
 MAX_DEFAULT_SEGMENTS: int = 120
+_SAFE_MEDIA_FORMAT_WHITELIST = (
+    "mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,wav,mp3,ogg,flac,aac,avi,image2,image2pipe"
+)
 
 IMAGE_EXTENSIONS: frozenset[str] = frozenset(
-    {"png", "jpg", "jpeg", "webp", "gif", "bmp", "tiff", "tif"}
+    {"png", "jpg", "jpeg", "webp", "gif", "bmp", "tiff", "tif", "avif", "heic", "heif"}
 )
 AUDIO_EXTENSIONS: frozenset[str] = frozenset({"wav", "mp3", "m4a", "flac", "ogg", "aac"})
 VIDEO_EXTENSIONS: frozenset[str] = frozenset({"mp4", "mov", "webm", "mkv", "avi", "m4v"})
@@ -50,6 +56,9 @@ _EXT_TO_MIME: dict[str, tuple[str, str]] = {
     "bmp": ("image", "image/bmp"),
     "tiff": ("image", "image/tiff"),
     "tif": ("image", "image/tiff"),
+    "avif": ("image", "image/avif"),
+    "heic": ("image", "image/heic"),
+    "heif": ("image", "image/heif"),
     "wav": ("audio", "audio/wav"),
     "mp3": ("audio", "audio/mpeg"),
     "m4a": ("audio", "audio/mp4"),
@@ -94,6 +103,10 @@ def infer_media_mime_type(file_path: Path, header: bytes = b"") -> tuple[str, st
         return ("audio", "audio/ogg")
     if len(header) >= 12 and header[4:8] == b"ftyp":
         brand = header[8:12]
+        if brand in (b"avif", b"avis"):
+            return ("image", "image/avif")
+        if brand in (b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1"):
+            return ("image", "image/heic")
         if brand in (b"M4A ", b"M4B "):
             return ("audio", "audio/mp4")
         if brand == b"qt  ":
@@ -178,7 +191,7 @@ def parse_image_dimensions(header: bytes, mime_type: str = "") -> tuple[int | No
 
 
 def _validate_media_path(file_path: Path, root: Path | None = None) -> Path:
-    """Validate media path exists, has no symlink component, and lacks leading ``-``."""
+    """Validate media path exists, is a regular file, has no symlink, and lacks leading ``-``."""
     from engramory.core.docs_tools import has_symlink_component
 
     raw_str = str(file_path)
@@ -188,7 +201,75 @@ def _validate_media_path(file_path: Path, root: Path | None = None) -> Path:
         raise ValidationError(f"Symlink media paths are rejected: {file_path}")
     if not file_path.exists():
         raise FileNotFoundError(f"Media file not found: {file_path}")
-    return file_path.resolve()
+    resolved = file_path.resolve()
+    if not resolved.is_file():
+        raise ValidationError(f"Media path must resolve to a regular file: {file_path}")
+    return resolved
+
+
+def _has_recognized_media_header(resolved: Path) -> bool:
+    """Reject non-media container spoofing before spawning ffprobe/ffmpeg."""
+    with resolved.open("rb") as fh:
+        header = fh.read(32)
+    if not header:
+        return False
+    if header.startswith((b"RIFF", b"ID3", b"fLaC", b"OggS", b"\x1a\x45\xdf\xa3", b"\x89PNG")):
+        return True
+    if header.startswith((b"\xff\xfb", b"\xff\xf3", b"\xff\xd8\xff", b"GIF87a", b"GIF89a")):
+        return True
+    if len(header) >= 12 and header[4:8] in (b"ftyp", b"moov", b"mdat", b"free", b"wide", b"skip"):
+        return True
+    _, mime = infer_media_mime_type(resolved, header)
+    return mime.startswith(("audio/", "video/", "image/"))
+
+
+def _run_bounded_subprocess(
+    cmd: list[str],
+    *,
+    timeout: float,
+    max_bytes: int,
+    text: bool = False,
+) -> Any:
+    """Run subprocess while reading stdout in bounded chunks and killing on overflow/timeout."""
+    proc = subprocess.Popen(  # nosec B603 # reason: validated local path with protocol/format whitelist and DEVNULL
+        cmd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    chunks: list[bytes] = []
+    total = 0
+    deadline = time.monotonic() + timeout
+    if proc.stdout is None:
+        raise RuntimeError(f"Subprocess {cmd[0]} opened without stdout pipe")
+    try:
+        while True:
+            if time.monotonic() > deadline:
+                proc.kill()
+                proc.communicate()
+                raise subprocess.TimeoutExpired(cmd, timeout)
+            block = proc.stdout.read(min(65536, max_bytes - total + 1))
+            if not block:
+                break
+            total += len(block)
+            if total > max_bytes:
+                proc.kill()
+                proc.communicate()
+                raise ValueError(f"Subprocess output exceeded {max_bytes} bytes for {cmd[0]}")
+            chunks.append(block)
+        remaining_time = max(0.1, deadline - time.monotonic())
+        _, stderr_bytes = proc.communicate(timeout=remaining_time)
+    except Exception:
+        if proc.poll() is None:
+            proc.kill()
+            proc.communicate()
+        raise
+    raw_out = b"".join(chunks)
+    return SimpleNamespace(
+        returncode=proc.returncode,
+        stdout=raw_out.decode("utf-8", errors="replace") if text else raw_out,
+        stderr=(stderr_bytes or b"").decode("utf-8", errors="replace") if text else stderr_bytes,
+    )
 
 
 def _stream_sha256_and_header(file_path: Path, header_limit: int = 65536) -> tuple[str, int, bytes]:
@@ -412,7 +493,7 @@ class VideoAudioExtractor:
     def probe_media(self, file_path: Path) -> dict[str, Any]:
         """Run hardened ``ffprobe`` on ``file_path`` and return normalized stream metadata."""
         resolved = _validate_media_path(file_path)
-        if not self.ffprobe_available():
+        if not self.ffprobe_available() or not _has_recognized_media_header(resolved):
             return _probe_container_header_duration(resolved)
 
         cmd = [
@@ -421,6 +502,8 @@ class VideoAudioExtractor:
             "quiet",
             "-protocol_whitelist",
             "file,pipe",
+            "-format_whitelist",
+            _SAFE_MEDIA_FORMAT_WHITELIST,
             "-print_format",
             "json",
             "-show_format",
@@ -429,13 +512,11 @@ class VideoAudioExtractor:
             str(resolved),
         ]
         try:
-            proc = subprocess.run(  # nosec B603 # reason: validated local path with protocol_whitelist and DEVNULL
+            proc = _run_bounded_subprocess(
                 cmd,
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
                 timeout=30,
-                check=False,
+                max_bytes=MAX_FFPROBE_STDOUT_BYTES,
+                text=True,
             )
             if proc.returncode != 0 or not proc.stdout.strip():
                 return _probe_container_header_duration(resolved)
@@ -488,7 +569,7 @@ class VideoAudioExtractor:
     def extract_keyframe_png(self, file_path: Path, timestamp_sec: float) -> bytes | None:
         """Extract a single scaled PNG keyframe at ``timestamp_sec`` via hardened ``ffmpeg``."""
         resolved = _validate_media_path(file_path)
-        if not self.ffmpeg_available():
+        if not self.ffmpeg_available() or not _has_recognized_media_header(resolved):
             return None
 
         cmd = [
@@ -498,6 +579,8 @@ class VideoAudioExtractor:
             "quiet",
             "-protocol_whitelist",
             "file,pipe",
+            "-format_whitelist",
+            _SAFE_MEDIA_FORMAT_WHITELIST,
             "-ss",
             f"{max(0.0, timestamp_sec):.2f}",
             "-i",
@@ -515,12 +598,10 @@ class VideoAudioExtractor:
             "pipe:1",
         ]
         try:
-            proc = subprocess.run(  # nosec B603 # reason: validated local path with protocol_whitelist and -fs cap
+            proc = _run_bounded_subprocess(
                 cmd,
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
                 timeout=60,
-                check=False,
+                max_bytes=MAX_KEYFRAME_BYTES,
             )
             if proc.returncode != 0 or not proc.stdout:
                 return None
@@ -537,7 +618,7 @@ class VideoAudioExtractor:
     ) -> bytes | None:
         """Extract mono 16 kHz WAV audio for ``[start_sec, start_sec + duration_sec]``."""
         resolved = _validate_media_path(file_path)
-        if not self.ffmpeg_available():
+        if not self.ffmpeg_available() or not _has_recognized_media_header(resolved):
             return None
 
         cmd = [
@@ -547,6 +628,8 @@ class VideoAudioExtractor:
             "quiet",
             "-protocol_whitelist",
             "file,pipe",
+            "-format_whitelist",
+            _SAFE_MEDIA_FORMAT_WHITELIST,
             "-ss",
             f"{max(0.0, start_sec):.2f}",
             "-t",
@@ -565,12 +648,10 @@ class VideoAudioExtractor:
             "pipe:1",
         ]
         try:
-            proc = subprocess.run(  # nosec B603 # reason: validated local path with protocol_whitelist and -fs cap
+            proc = _run_bounded_subprocess(
                 cmd,
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
                 timeout=60,
-                check=False,
+                max_bytes=MAX_AUDIO_WINDOW_BYTES,
             )
             if proc.returncode != 0 or not proc.stdout:
                 return None
@@ -606,12 +687,13 @@ class VideoAudioExtractor:
             effective_duration = float(self.segment_seconds)
         else:
             effective_duration = float(duration_seconds)
-            total_windows = min(
-                self.max_segments,
-                max(
-                    1, int((effective_duration + self.segment_seconds - 1) // self.segment_seconds)
-                ),
-            )
+            raw_windows = max(1, math.ceil(effective_duration / self.segment_seconds))
+            total_windows = min(self.max_segments, raw_windows)
+            if raw_windows > self.max_segments:
+                warnings.append(
+                    f"Media duration truncated from {raw_windows} "
+                    f"to {self.max_segments} segment(s)."
+                )
 
         sections: list[Section] = []
         char_cursor = 0

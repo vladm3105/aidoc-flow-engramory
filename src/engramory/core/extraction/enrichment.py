@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from engramory.core.parsers.base import Section
 
 
@@ -13,8 +15,8 @@ class SemanticChunker:
         min_words: int = 30,
         max_words: int = 400,
     ) -> None:
-        self.min_words = min_words
-        self.max_words = max_words
+        self.min_words = max(0, min_words)
+        self.max_words = max(1, max_words, self.min_words if self.min_words > 0 else 1)
 
     def refine_sections(self, sections: list[Section]) -> list[Section]:
         """Refine list of sections by merging tiny fragments and splitting oversized sections."""
@@ -26,7 +28,7 @@ class SemanticChunker:
         for s in sections:
             words = s.content.split()
             if len(words) <= self.max_words:
-                split_sections.append(s)
+                split_sections.append(replace(s, metadata=dict(s.metadata)))
             else:
                 ctx_header = ""
                 body_words = words

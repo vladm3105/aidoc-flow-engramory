@@ -1032,12 +1032,22 @@ Body without any markdown headings at all.
             self.docs: dict[str, KBDocument] = {}
 
         async def delete_kb_sections_for_doc(
-            self, tenant_id: str, doc_id: str, *, project_id: str | None = None
+            self,
+            tenant_id: str,
+            doc_id: str,
+            *,
+            project_id: str | None = None,
+            exclude_version: int | None = None,
         ) -> int:
             del tenant_id, project_id
             self.deleted_doc_ids.append(doc_id)
-            removed = len(self.sections.pop(doc_id, []))
-            return removed
+            if exclude_version is None:
+                removed = len(self.sections.pop(doc_id, []))
+                return removed
+            prev = self.sections.get(doc_id, [])
+            kept = [s for s in prev if s.version == exclude_version]
+            self.sections[doc_id] = kept
+            return len(prev) - len(kept)
 
         async def upsert_kb_sections_batch(
             self, sections: list[KBSection]

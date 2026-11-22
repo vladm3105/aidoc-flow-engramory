@@ -13,8 +13,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from engramory.access.poisoning_guard import MemoryPoisoningError, inspect_memory_write
-from engramory.core.models import MEMORY_TYPES, AgentProfile, Episode, Memory
+from engramory.core.models import MEMORY_TYPES, AgentProfile, Episode, Memory, thaw_mapping
+from engramory.core.poisoning_guard import MemoryPoisoningError, inspect_memory_write
 from engramory.core.repository import Repository
 from engramory.ports import LLMPort, VectorPort
 
@@ -178,9 +178,9 @@ async def reflect(
         if hasattr(repo, "get_agent_profile")
         else None
     )
-    prefs = dict(profile.standing_preferences) if isinstance(profile, AgentProfile) else {}
+    prefs = thaw_mapping(profile.standing_preferences) if isinstance(profile, AgentProfile) else {}
     brain_cfg = (
-        dict(prefs.get("brain_config") or {})
+        thaw_mapping(prefs.get("brain_config"))
         if isinstance(prefs.get("brain_config"), Mapping)
         else {}
     )

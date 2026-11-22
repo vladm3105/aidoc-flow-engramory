@@ -28,7 +28,7 @@ import stat
 import subprocess  # nosec B404 # reason: controlled git diff invocations with validated refs
 import tomllib
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +39,23 @@ from engramory.core.kb_graph import TAG_RE
 from engramory.core.models import ValidationError
 
 MAX_SCAN_FILE_BYTES = 2 * 1024 * 1024  # 2 MiB guard against oversized file / YAML DoS
+
+_HOST_DOC_TAG_RE = re.compile(
+    r"\A(?P<prefix>BRD|PRD|EARS|BDD|ADR|SPEC|TDD|TASK|IPLAN|CHG|EVAL)[-._](?P<num>\d+)[-._].+\Z",
+    re.IGNORECASE,
+)
+
+
+def _host_doc_key(raw_key: str) -> str | None:
+    """Extract canonical host document key (`TYPE-NN`) from a 4-segment element tag."""
+    cleaned = raw_key.strip().lstrip("@").strip()
+    if ":" in cleaned:
+        cleaned = cleaned.split(":")[-1].strip()
+    m = _HOST_DOC_TAG_RE.fullmatch(cleaned)
+    if m is None:
+        return None
+    return f"{m.group('prefix').upper()}-{m.group('num')}"
+
 
 CANONICAL_LAYERS: tuple[str, ...] = (
     "BRD",
@@ -67,14 +84,14 @@ DEFAULT_ALLOWED_LAYERS: set[str] = {
     "CHG",
 }
 
-_SAFE_TOKEN_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+_SAFE_TOKEN_RE = re.compile(r"\A[A-Za-z0-9_.-]+\Z")
 _POINTER_RE = re.compile(
     r"(?<![A-Za-z0-9_])(@(?:[A-Za-z0-9_\-]+:[A-Za-z0-9_\-:.]*[A-Za-z0-9_\-]"
     r"|(?:BRD|PRD|EARS|BDD|ADR|SPEC|TDD|TASK|IPLAN|CHG|EVAL)[-._][A-Za-z0-9_.\-]*[A-Za-z0-9_\-]))",
     re.IGNORECASE,
 )
 _SDD_ID_RE = re.compile(
-    r"^(BRD|PRD|EARS|BDD|ADR|SPEC|TDD|TASK|IPLAN|CHG|EVAL)[-._]([A-Za-z0-9_.\-]+)$",
+    r"\A(BRD|PRD|EARS|BDD|ADR|SPEC|TDD|TASK|IPLAN|CHG|EVAL)[-._]([A-Za-z0-9_.\-]+)\Z",
     re.IGNORECASE,
 )
 
@@ -132,7 +149,7 @@ def normalize_layer(raw_layer: str | int | None) -> str:
 def _normalize_sdd_key_lossless(raw_token: str) -> str:
     """Normalize an SDD identifier without truncating multi-segment dotted/underscore IDs."""
     token = raw_token.strip().lstrip("@")
-    m = _SDD_ID_RE.match(token)
+    m = _SDD_ID_RE.fullmatch(token)
     if m:
         prefix = m.group(1).upper()
         rest = re.sub(r"[-._]+", "-", m.group(2).strip("-._")).upper()
@@ -150,7 +167,7 @@ def _canonical_node_key(raw_id: str) -> str:
         ):
             # @spec:SPEC-01 -> canonicalize target if it starts with an SDD prefix
             tail = parts[1]
-            if _SDD_ID_RE.match(tail):
+            if _SDD_ID_RE.fullmatch(tail):
                 return _normalize_sdd_key_lossless(tail)
             return f"{normalize_layer(parts[0])}:{tail.upper()}"
         if len(parts) == 3:
@@ -168,7 +185,7 @@ def _is_safe_token(token: str) -> bool:
         bool(token)
         and token not in (".", "..")
         and ".." not in token
-        and bool(_SAFE_TOKEN_RE.match(token))
+        and bool(_SAFE_TOKEN_RE.fullmatch(token))
     )
 
 
@@ -186,22 +203,26 @@ def _read_bounded_text(file_path: Path, *, max_bytes: int = MAX_SCAN_FILE_BYTES)
 def _validate_git_ref(ref: str) -> str:
     """Validate a git revision string to block leading `-` option injection."""
     cleaned = ref.strip()
-    if not cleaned or cleaned.startswith("-") or not _GIT_REF_RE.match(cleaned):
+    if not cleaned or cleaned.startswith("-") or not _GIT_REF_RE.fullmatch(cleaned):
         raise ValidationError(f"Invalid or unsafe git ref: {ref!r}")
     return cleaned
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class ArtifactNode:
     """Single SDD artifact node in the local/cross-project dependency DAG."""
 
     node_id: str
     layer: str  # BRD, PRD, EARS, BDD, ADR, SPEC, TDD, TASK, IPLAN, CHG, EVAL
     content: str
-    dependencies: list[str] = field(default_factory=list)
+    dependencies: Sequence[str] = ()
     title: str = ""
     file_path: str | None = None
     is_external: bool = False
+    is_sketch: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "dependencies", tuple(self.dependencies))
 
     def to_surface_dict(self) -> dict[str, Any]:
         """Serialize in a shape compatible with both `AccessSurface` and `aidoc-ctx`."""
@@ -474,8 +495,23 @@ def _extract_yaml_deps(doc: dict[str, Any]) -> list[str]:
 
     doc_ctrl = doc.get("document_control")
     if isinstance(doc_ctrl, dict):
-        for key in ("source_spec", "source_document", "authoring_chg", "architecture_decision"):
+        for key in (
+            "source_spec",
+            "source_document",
+            "authoring_chg",
+            "architecture_decision",
+            "brd_reference",
+            "prd_reference",
+            "ears_reference",
+            "bdd_reference",
+            "adr_reference",
+            "spec_reference",
+            "tdd_reference",
+        ):
             _collect_dep_scalars(doc_ctrl.get(key), deps)
+        for k, v in doc_ctrl.items():
+            if isinstance(k, str) and k.endswith("_reference"):
+                _collect_dep_scalars(v, deps)
 
     comp_ov = doc.get("component_overview")
     if isinstance(comp_ov, dict):
@@ -496,6 +532,9 @@ def _extract_yaml_deps(doc: dict[str, Any]) -> list[str]:
             for k, v in trace.items():
                 if k in _TRACEABILITY_UPSTREAM_KEYS:
                     _collect_dep_scalars(v, deps)
+            cross_links = trace.get("cross_links")
+            if isinstance(cross_links, dict):
+                _collect_dep_scalars(cross_links.get("depends"), deps)
         elif isinstance(trace, list):
             _collect_dep_scalars(trace, deps)
 
@@ -615,17 +654,27 @@ class AidocDependencyGraph:
             for dep in node.dependencies:
                 dep_node = self.get_node(dep)
                 target_keys = {dep, dep.lstrip("@"), _canonical_node_key(dep)}
+                host_dep = _host_doc_key(dep)
+                if host_dep is not None:
+                    target_keys.add(host_dep)
+                    target_keys.add(_canonical_node_key(host_dep))
                 if dep_node is not None:
                     target_keys.add(dep_node.node_id)
                     target_keys.add(dep_node.node_id.lstrip("@"))
                     target_keys.add(_canonical_node_key(dep_node.node_id))
+                    host_node = _host_doc_key(dep_node.node_id)
+                    if host_node is not None:
+                        target_keys.add(host_node)
+                        target_keys.add(_canonical_node_key(host_node))
                 for k in target_keys:
                     children_map.setdefault(k, set()).add(nid)
 
         local_nodes = [
             n
             for n in self.nodes.values()
-            if not n.is_external and not n.content.startswith("# Imported Contract Pointer:")
+            if not n.is_external
+            and not n.is_sketch
+            and not n.content.startswith("# Imported Contract Pointer:")
         ]
         ears_nodes = [n for n in local_nodes if n.layer == "EARS"]
         seed_nodes = [n for n in local_nodes if n.layer in ("BRD", "PRD")]
@@ -682,10 +731,14 @@ class AidocDependencyGraph:
 
         # GRAPH-CARD-002: Requirement realization (EARS -> PRD/BRD/ADR)
         for ears in ears_nodes:
-            traces_to_intent = any(
-                (d_node := self.get_node(d)) is not None and d_node.layer in ("BRD", "PRD", "ADR")
-                for d in ears.dependencies
-            )
+            traces_to_intent = False
+            for d in ears.dependencies:
+                d_node = self.get_node(d)
+                if d_node is None and (hk := _host_doc_key(d)) is not None:
+                    d_node = self.get_node(hk)
+                if d_node is not None and d_node.layer in ("BRD", "PRD", "ADR"):
+                    traces_to_intent = True
+                    break
             if not traces_to_intent:
                 violations.append(
                     f"GRAPH-CARD-002: EARS requirement '{ears.node_id}' "
@@ -856,6 +909,11 @@ class AidocDependencyGraph:
                         )
                         props = n.get("properties")
                         prop_title = props.get("title") if isinstance(props, dict) else None
+                        n_meta = n.get("metadata")
+                        n_status_marker = (
+                            n_meta.get("status_marker") if isinstance(n_meta, dict) else None
+                        ) or (props.get("status_marker") if isinstance(props, dict) else None)
+                        n_is_sketch = str(n_status_marker or "").strip().lower() == "sketch"
                         n_title = n.get("label") or n.get("title") or prop_title or n_id
                         deps = list(edge_map.get(n_id, []))
                         deps.extend(_extract_yaml_deps(n))
@@ -868,6 +926,7 @@ class AidocDependencyGraph:
                                 dependencies=list(dict.fromkeys(deps)),
                                 title=str(n_title),
                                 file_path=rel_path,
+                                is_sketch=n_is_sketch,
                             )
                         )
                         count += 1
@@ -878,6 +937,10 @@ class AidocDependencyGraph:
                 deps = _extract_yaml_deps(doc)
                 metadata = doc.get("metadata", {})
                 meta_layer = metadata.get("layer") if isinstance(metadata, dict) else None
+                is_sketch = (
+                    isinstance(metadata, dict)
+                    and str(metadata.get("status_marker", "")).strip().lower() == "sketch"
+                )
                 id_prefix = node_id.split(".")[0].split("-")[0].upper()
                 doc_layer = normalize_layer(
                     doc.get("layer")
@@ -898,6 +961,7 @@ class AidocDependencyGraph:
                         dependencies=deps,
                         title=title,
                         file_path=rel_path,
+                        is_sketch=is_sketch,
                     )
                 )
                 count += 1
@@ -918,6 +982,7 @@ class AidocDependencyGraph:
         fm_id: str | None = None
         fm_title: str | None = None
         fm_layer: str | None = None
+        fm_is_sketch = False
 
         lines = content.splitlines()
         if lines and lines[0].strip() == "---":
@@ -932,6 +997,11 @@ class AidocDependencyGraph:
                         fm_id = _extract_yaml_node_id(fm)
                         fm_title = str(fm["title"]) if fm.get("title") else None
                         fm_layer = str(fm["layer"]) if fm.get("layer") else None
+                        fm_meta = fm.get("metadata")
+                        status_marker = fm.get("status_marker") or (
+                            fm_meta.get("status_marker") if isinstance(fm_meta, dict) else None
+                        )
+                        fm_is_sketch = str(status_marker or "").strip().lower() == "sketch"
                         fm_deps.extend(_extract_yaml_deps(fm))
 
         tag_deps = [m.group("target") for m in TAG_RE.finditer(content)]
@@ -956,6 +1026,7 @@ class AidocDependencyGraph:
                 dependencies=all_deps,
                 title=title,
                 file_path=rel_path,
+                is_sketch=fm_is_sketch,
             )
         )
         return 1
@@ -1552,7 +1623,11 @@ class StackPolicyValidator:
                 "stack mandates uv with uv.lock (stack 09 §3.13)."
             )
 
-        if strict_allowlist and allowed_pkgs:
+        if strict_allowlist and not allowed_pkgs:
+            violations.append(
+                "strict_allowlist is enabled but dependencies.allowed_packages is empty"
+            )
+        elif strict_allowlist and allowed_pkgs:
             # 1. Check requirements.txt
             req_file = self.root_dir / "requirements.txt"
             if req_file.is_file() and _is_within_root(req_file, self.root_dir):
@@ -1596,8 +1671,19 @@ class StackPolicyValidator:
             data = tomllib.loads(content)
             toml_ok = True
             proj = data.get("project")
-            if isinstance(proj, dict) and isinstance(proj.get("dependencies"), list):
-                parsed_deps = [str(d) for d in proj["dependencies"] if isinstance(d, str)]
+            if isinstance(proj, dict):
+                if isinstance(proj.get("dependencies"), list):
+                    parsed_deps.extend(str(d) for d in proj["dependencies"] if isinstance(d, str))
+                opt_deps = proj.get("optional-dependencies")
+                if isinstance(opt_deps, dict):
+                    for group_deps in opt_deps.values():
+                        if isinstance(group_deps, list):
+                            parsed_deps.extend(str(d) for d in group_deps if isinstance(d, str))
+            dep_groups = data.get("dependency-groups")
+            if isinstance(dep_groups, dict):
+                for group_deps in dep_groups.values():
+                    if isinstance(group_deps, list):
+                        parsed_deps.extend(str(d) for d in group_deps if isinstance(d, str))
 
         if not toml_ok:
             # Fallback line scanner only when partial/non-standard TOML snippet fails tomllib

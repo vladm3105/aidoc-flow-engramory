@@ -14,11 +14,10 @@ import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
-from types import MappingProxyType
 from typing import Any
 
-from engramory.access.poisoning_guard import inspect_memory_write
-from engramory.core.models import Episode, ValidationError
+from engramory.core.models import Episode, ValidationError, _frozen_mapping, thaw_mapping
+from engramory.core.poisoning_guard import inspect_memory_write
 
 # Matches legacy aidoc-flow-interlog DATA-INTERCHANGE.md §4:
 # uuid5(NAMESPACE_URL, "https://github.com/vladm3105/aidoc-flow-interlog#experience-event")
@@ -39,16 +38,12 @@ EXPERIENCE_EVENT_KINDS: frozenset[str] = frozenset(
 )
 
 MAX_EXPERIENCE_CONTENT_BYTES = 65536
-_W3C_TRACE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+_W3C_TRACE_ID_RE = re.compile(r"\A[0-9a-f]{32}\Z")
 
 
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValidationError(message)
-
-
-def _frozen_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
-    return MappingProxyType(dict(value))
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,7 +89,7 @@ class OriginProvenance:
             )
         if self.trace_id is not None:
             _require(
-                isinstance(self.trace_id, str) and bool(_W3C_TRACE_ID_RE.match(self.trace_id)),
+                isinstance(self.trace_id, str) and bool(_W3C_TRACE_ID_RE.fullmatch(self.trace_id)),
                 "OriginProvenance.trace_id must be a 32-character lowercase hex W3C trace_id",
             )
 
@@ -300,7 +295,7 @@ class ExperienceEvent:
         body_part = (
             self.summary.strip()
             if (self.summary and self.summary.strip())
-            else json.dumps(dict(self.payload), sort_keys=True)
+            else json.dumps(thaw_mapping(self.payload), sort_keys=True)
         )
         raw_text = f"[{self.kind}] event_id={self.event_id}{repo_part} {body_part}"
         metadata_envelope = json.dumps(
@@ -308,7 +303,7 @@ class ExperienceEvent:
                 "project": self.project,
                 "producer": self.producer,
                 "payload_type": self.payload_type,
-                "payload": dict(self.payload),
+                "payload": thaw_mapping(self.payload),
                 "origin": self.origin.to_dict() if self.origin is not None else None,
             },
             sort_keys=True,
@@ -508,7 +503,11 @@ def compute_learning_health_metrics(episodes: Sequence[Episode]) -> dict[str, An
         if ep.kind == "plan.authored" and repo and plan_id:
             raw_score = payload_map.get("exec_ready_score")
             if isinstance(raw_score, (int, float)) and not isinstance(raw_score, bool):
-                ratio = float(raw_score) / 100.0 if float(raw_score) > 1.0 else float(raw_score)
+                ratio = (
+                    float(raw_score) / 100.0
+                    if (isinstance(raw_score, int) or float(raw_score) > 1.0)
+                    else float(raw_score)
+                )
                 authored_by_plan[(repo, plan_id)] = max(0.0, min(1.0, ratio))
         elif ep.kind == "execution.completed" and repo and plan_id:
             fps = payload_map.get("first_pass_success")

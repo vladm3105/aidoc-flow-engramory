@@ -2,24 +2,20 @@
 
 from __future__ import annotations
 
-import os
+from typing import Any
 
 import pytest
 
-from engramory.adapters.dev.graph_neo4j import Neo4jGraphAdapter
 from engramory.core.models import GraphEntity, GraphRelation
 from engramory.core.repository import Repository
 from engramory.workers.graph_projection import reproject_all
 
 pytestmark = pytest.mark.asyncio
 
-NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-NEO4J_AUTH = (os.getenv("NEO4J_USER", "neo4j"), os.getenv("NEO4J_PASSWORD", "change_me"))
 
-
-async def test_reproject_canonical_postgres_to_live_neo4j(pg_dsn: str) -> None:
+async def test_reproject_canonical_postgres_to_live_neo4j(pg_dsn: str, neo4j_adapter: Any) -> None:
     repo = Repository(pg_dsn)
-    graph = Neo4jGraphAdapter(uri=NEO4J_URI, auth=NEO4J_AUTH)
+    graph = neo4j_adapter
     tenant_id = "tenant-proj-test"
 
     try:
@@ -76,4 +72,4 @@ async def test_reproject_canonical_postgres_to_live_neo4j(pg_dsn: str) -> None:
         assert neighbors[0]["properties"]["tenant_id"] == tenant_id
 
     finally:
-        await graph.close()
+        await repo.close()
