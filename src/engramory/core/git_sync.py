@@ -163,12 +163,16 @@ class GitSyncEngine:
         head_sha: str | None = None,
     ) -> list[ChangedFile]:
         """Compute git differential between base_sha and head_sha (or uncommitted diff)."""
+        from engramory.core.docs_tools import _is_within_root, has_symlink_component
+
         if not (repo_path / ".git").exists():
-            # Not a git repo — treat all existing supported files as ADDED
+            # Not a git repo — treat all existing confined, non-symlink supported files as ADDED
             return [
                 ChangedFile(rel_path=str(p.relative_to(repo_path)), status=FileChangeStatus.ADDED)
                 for p in repo_path.rglob("*")
-                if p.is_file() and p.suffix.lower() in self.SUPPORTED_EXTENSIONS
+                if p.is_file()
+                and _is_within_root(p, repo_path)
+                and p.suffix.lower() in self.SUPPORTED_EXTENSIONS
             ]
 
         if not base_sha:
@@ -185,6 +189,7 @@ class GitSyncEngine:
                 ChangedFile(rel_path=f, status=FileChangeStatus.ADDED)
                 for f in files
                 if Path(f).suffix.lower() in self.SUPPORTED_EXTENSIONS
+                and not has_symlink_component(repo_path / f, repo_path)
             ]
 
         # Incremental diff between base and head
@@ -244,8 +249,10 @@ class GitSyncEngine:
         version: int = 1,
     ) -> list[KBSection]:
         """Extract sections from an added or modified file and construct KBSection records."""
+        from engramory.core.docs_tools import _is_within_root
+
         full_path = repo_path / changed_file.rel_path
-        if not full_path.exists() or not full_path.resolve().is_relative_to(repo_path.resolve()):
+        if not full_path.exists() or not _is_within_root(full_path, repo_path):
             return []
 
         doc_id = build_doc_id(project_id, changed_file.rel_path)
@@ -371,10 +378,15 @@ class GitSyncEngine:
         doc_ids_to_delete: list[str] = []
 
         async def _maybe_store_blob(cf: ChangedFile, secs: list[KBSection]) -> list[KBSection]:
+            from engramory.core.docs_tools import _is_within_root
+
             if storage is None or not secs:
                 return secs
-            fp = (repo_path / cf.rel_path).resolve()
-            if not fp.is_file() or not fp.is_relative_to(repo_path.resolve()):
+            raw_fp = repo_path / cf.rel_path
+            if not _is_within_root(raw_fp, repo_path):
+                return secs
+            fp = raw_fp.resolve()
+            if not fp.is_file():
                 return secs
             ext_cf = fp.suffix.lstrip(".").lower()
             sz = fp.stat().st_size
@@ -508,6 +520,7 @@ class GitSyncEngine:
                         )
                         await repo.set_kb_sections_embedding_batch(
                             valid_updates,
+                            tenant_id=tenant_id,
                             embedding_model=embed_model,
                         )
                 except Exception as e:
@@ -608,7 +621,9 @@ class GitSyncEngine:
                 and hasattr(repo, "upsert_kb_document")
             ):
                 full_p = repo_path / cf.rel_path
-                if full_p.is_file():
+                from engramory.core.docs_tools import _is_within_root
+
+                if full_p.is_file() and _is_within_root(full_p, repo_path):
                     try:
                         parsed = parse_markdown_document(
                             full_p,

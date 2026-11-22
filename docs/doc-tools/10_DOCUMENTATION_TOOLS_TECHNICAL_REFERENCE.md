@@ -46,7 +46,7 @@ watched_paths:
   - "src/engramory/core/portal_builder.py"
   - ".vale.ini"
   - "portal/package.json"
-last_verified: 2026-11-12
+last_verified: 2026-11-21
 ---
 
 # Documentation Tools Technical Reference: Vale, Starlight, Scalar, Docling, Engramory & Copybara Evaluation
@@ -82,12 +82,12 @@ Every documentation tool in the ecosystem is governed by `25-approved-tooling-in
    Parses YAML frontmatter and enforces `DOC-FM-000` through `DOC-FM-007` plus `DOC-REG-001` (`id`, `title`, `kind`, `domain`, `namespace`, `status`, `autonomy_tier`, non-empty `watched_paths` matching live repository files, `endpoints`, `triggers`, and `last_verified` ISO date within `review_ttl_days`).
 2. **Executable Runbook Step Extraction (`KBRunbookStep`):**
    Parses annotated code fences (` ```bash {id="..." tier="green|yellow|red" mode="read-only|mutating" expect_exit=0 timeout_sec=30} `) into structured AST records stored in `kb_runbook_steps`.
-3. **Read-Only Safety Gate (`check_green_step_safety`, `INV-STEP-01`/`02`):**
-   Verifies at lint time and pre-execution time that every `tier="green"` step has `mode="read-only"` and contains zero mutating commands (`rm`, `mv`, `dd`, `docker restart`, `kubectl delete`, `bao write`), zero shell redirections (`>`, `>>`, `| tee`), zero subshell expansions (`$(...)`, backticks, `bash -c`, `python -c`), and zero mutating HTTP flags (`POST`, `PUT`, `DELETE`, `-d`).
+3. **Read-Only Safety Gate (`check_green_step_safety` & `parse_and_validate_green_command`, `INV-STEP-01`/`02`):**
+   Verifies at lint time and pre-execution time that every `tier="green"` step has `mode="read-only"` and passes strict `shlex` allowlist validation (`shell=False` execution, loopback HTTP GET/HEAD only, zero shell wrappers/redirections/expansions), surfacing AST violations as failed probes in `smoke_run_green_steps`.
 4. **Code-to-Doc Drift & Staleness Engine (`check_repo_drift`):**
    Matches `git diff` file paths against every document's `watched_paths` globs (`WATCHED_PATH_MODIFIED`) and flags documents whose `last_verified` date exceeds `review_ttl_days` (`TTL_STALE`).
 5. **Deterministic `/llms.txt` & `/llms-full.txt` Compiler (`export_repo_llms`):**
-   Generates structured agent indexes sorted by priority (`runbook`, `playbook`, `architecture`, `specification`) with Rule D14 secret redaction.
+   Generates structured agent indexes sorted by priority (`runbook`, `playbook`, `architecture`, `specification`) with NFKC/invisible-Unicode stripping, multiline PEM key redaction, heading sanitization (`_scrub_manifest_inline`), and symlink rejection (`has_symlink_component`).
 
 ---
 
@@ -115,7 +115,7 @@ Standard Markdown linters only validate syntax (such as list indentation or head
 `Astro Starlight` (`@astrojs/starlight`, MIT License) is the static documentation portal framework configured in `portal/package.json` and `portal/astro.config.mjs`.
 
 1. **Multi-Repo Content Staging (`engramory docs build-portal`):**
-   `src/engramory/core/portal_builder.py` (`stage_portal_bundle`) scans approved ecosystem repositories (`platform-*`, `aidoc-*`, `aiops-*`), validates path confinement (`resolve_confined_repo_path` + `_is_within_root`), scrubs every Markdown file through Rule D14 (`_scrub_manifest_text`), and stages clean `.md` files into `portal/src/content/docs/reference/`.
+   `src/engramory/core/portal_builder.py` (`stage_portal_bundle`) confines scans strictly to `docs/` inside approved ecosystem repositories (`platform-*`, `aidoc-*`, `aiops-*`), validates symlink-free path confinement (`resolve_confined_repo_path` + `has_symlink_component` + `_is_within_root`), scrubs every Markdown file through Rule D14 (`_scrub_manifest_text`), and stages clean `.md` files into `portal/src/content/docs/reference/`.
 2. **Zero-JavaScript Static Output & Raw Markdown Routes:**
    Starlight compiles `portal/src/content/docs/` into static HTML assets with built-in Pagefind full-text search, native Mermaid v11 diagram rendering, and alongside raw `.md` and `/llms.txt` endpoints for LLM agents.
 3. **Why Starlight Over Alternatives:**
@@ -198,11 +198,11 @@ Google's **`Copybara`** (`google/copybara`, Apache-2.0) is a Java/Bazel tool (`c
 Inspect the live documentation tool inventory and validate all governed documentation specifications in `platform-engramory` using the read-only `green` steps below:
 
 ```bash {id="inspect-doc-tools-catalog" tier="green" mode="read-only" expect_exit=0 timeout_sec=10 service="platform-engramory"}
-uv run engramory docs tools
+engramory docs tools
 ```
 
 Execute the Tier-1 offline frontmatter, runbook safety (`INV-STEP-01`/`02`), and prose linter across `docs/doc-tools/`:
 
 ```bash {id="validate-all-platform-docs-specs" tier="green" mode="read-only" expect_exit=0 timeout_sec=15 service="platform-engramory"}
-uv run engramory docs lint --target docs/doc-tools --require-frontmatter --verify-registry
+engramory docs lint --target docs/doc-tools --require-frontmatter --verify-registry
 ```

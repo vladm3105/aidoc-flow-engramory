@@ -1,0 +1,345 @@
+# CHG-010_audit-wave-p0-security-isolation.yaml — Wave P0 Security & Tenant Isolation Remediation (PLAN-026 TASK-1)
+
+document_control:
+  project_name: platform-engramory
+  document_id: CHG-010
+  version: '1.0'
+  status: Completed
+  author: Antigravity + Operator
+  created_date: '2026-11-21'
+  last_updated: '2026-11-21'
+  framework_version: 0.96.25
+  revision_history:
+  - version: '1.0'
+    date: '2026-11-21'
+    author: Antigravity + Operator
+    description: Wave P0 (C1-C8, H9) SDD2C change record for PLAN-026 deep-audit remediation.
+id: CHG-010
+doc_id: CHG-010
+chg_id: CHG-010
+status: Completed
+title: "Wave P0 Audit Remediation — Security, Tenant RLS, Scope Isolation & FastAPI MCP (PLAN-026 TASK-1)"
+classification:
+  type: Type-F
+  weight: C2
+  flow: SDD2C
+metadata:
+  document_type: chg-document
+  layer: 9
+  purpose: governance
+  last_updated: '2026-11-21'
+  change_level:
+    value: C2
+  change_source:
+    value: sdd
+change_control:
+  chg_id: CHG-010
+  status: Completed
+  flow: sdd_to_code
+  flow_code: SDD2C
+  change_level: C2
+  change_source: sdd
+  entry_gate: GATE-SPEC
+  semver_impact: minor
+  version_action: bump
+  author: Antigravity + Operator
+  date_proposed: '2026-11-21T19:40:00'
+  date_approved: '2026-11-21T19:42:00'
+  date_implemented: '2026-11-21'
+  supersedes:
+  - docs/archive/CHG-010/EARS-01_engramory_core_v1.0.yaml
+  - docs/archive/CHG-010/SPEC-01_access_surface_v1.1.yaml
+  - docs/archive/CHG-010/SPEC-02_memory_store_v1.0.yaml
+  - docs/archive/CHG-010/SPEC-04_distillation_engine_v1.0.yaml
+  - docs/archive/CHG-010/SPEC-06_ports_portability_v1.0.yaml
+  - docs/archive/CHG-010/TDD-04_distillation_engine_v1.0.yaml
+decision:
+  decision_id: DEC-CHG-010
+  title: "Enforce PostgreSQL RLS, Scoped Graph/Vector Projection, Subprocess/Symlink Sandboxing, and Fail-Closed FastAPI MCP Auth (PLAN-026 Wave P0)"
+  status: Ratified
+  context: "AUDIT-2026-11-20_deep-review.md identified 9 Wave P0 security and isolation defects (C1-C8, H9): missing cross-tenant/agent authz on offboarding and feedback (C1, C2), single-vote harmful DoS on shared memories (C2), unconstrained Neo4j/PG graph traversals and un-scoped purge (C3), incomplete conflict predicates (C4), cross-tenant KB/runbook collisions (C5), shell=True smoke RCE (C6), spoofable stdlib HTTP / unauthenticated stdio / insecure OIDC fallback (C7), symlink traversal and poisoning-guard normalization bypasses (C8), and un-scoped VectorPort/1536-dim drift (H9)."
+  choice: "Execute PLAN-026 TASK-1 under SDD2C (C2): amend EARS.01.03.b800, SPEC-01/02/04/06, and TDD-04 first; migrate schema in 0011_wave_p0_isolation_and_rls.sql with transaction-local app.tenant_id GUC across all 14 tables and non-owner roles; replace COPY BINARY on RLS tables with parameterized INSERT; migrate MCP HTTP transport to FastAPI/Starlette/Uvicorn with fail-closed OIDC/JWKS/revocation; sandbox docs smoke execution with shlex-allowlisted shell=False; and enforce atomic symlink/poisoning confinement."
+  consequences: "Eliminates cross-tenant data leakage, shared-memory quarantine DoS, shell injection, symlink escape, and unauthenticated remote/stdio transport bypasses while preserving all documented 4-level Virtual Employee and Multimodal RAG APIs."
+  alternatives_considered:
+  - option: Application-layer-only tenant filtering without Postgres FORCE ROW LEVEL SECURITY
+    rationale_rejected: Fails defense-in-depth requirements; a single missing WHERE predicate leaks cross-tenant records.
+  - option: Retain BaseHTTPRequestHandler and manual JSON parsing in MCP server
+    rationale_rejected: Vulnerable to HTTP smuggling/Slowloris and fails FastAPI/Starlette security middleware requirements in C7.
+change_description:
+  what: "Remediate all 9 Wave P0 findings (C1, C2, C3, C4, C5, C6, C7, C8, H9) across db/migrations/, src/engramory/, docs/, docs/sdd/, pyproject.toml, and tests/ per PLAN-026 TASK-1."
+  why: "Close all critical tenant isolation, RCE, OIDC/MCP auth, graph/vector leakage, and symlink traversal vulnerabilities verified in AUDIT-2026-11-20_deep-review.md under EARS.01.03.b800, EARS.01.03.e020, EARS.01.03.a700, and EARS.01.04.c300."
+  trigger: "Operator approval of PLAN-026 Wave P0 execution."
+impact_assessment:
+  affected_layers:
+  - layer: EARS
+    artifacts:
+    - EARS-01
+    impact: Amended EARS.01.03.b800 to capture shared-scope harmful quorum and reversible applied_delta feedback dynamics.
+  - layer: SPEC
+    artifacts:
+    - SPEC-01
+    - SPEC-02
+    - SPEC-04
+    - SPEC-06
+    impact: Updated contracts for RLS, VectorPort.delete(tenant_id), GraphPort scope filters, KBSection.agent_id, FastAPI MCP, and strict smoke sandboxing.
+  - layer: TDD
+    artifacts:
+    - TDD-04
+    impact: Added TDD.04.04.c200 covering shared-scope harmful quorum and applied_delta reversal.
+  - layer: IPLAN
+    artifacts:
+    - IPLAN-10
+    impact: Created executable IPLAN-SWF and SDD-GRAPH v2.0 slice (IPLAN-10 / SLICE-10) for Wave P0.
+  cascade_direction: downstream
+  risk_level: High
+scope:
+  in_scope:
+  - "Phase-0 SDD2C amendments (EARS-01, SPEC-01/02/04/06, TDD-04, CHG-010, IPLAN-10, SLICE-10)"
+  - "Allowlisted ASGI/HTTP dependencies (fastapi, starlette, uvicorn, httpx)"
+  - "Migrations 0004-0006 idempotency + 0011 FORCE RLS, security_invoker view, composite PK, roles"
+  - "Findings C1, C2, C3, C4, C5, C6, C7, C8, H9 code remediation, docs sync, and security regression suite"
+  out_of_scope:
+  - "Wave P1 (CHG-011), Wave P2 (CHG-012), and Wave P3 (CHG-013) findings"
+  - "Remotes push or merge into dev/staging/main"
+  files_to_touch: &id001
+  - db/migrations/0004_ambient_gateway_view.sql
+  - db/migrations/0005_pin_embeddings_hnsw.sql
+  - db/migrations/0006_resize_embeddings_1536.sql
+  - db/migrations/0011_wave_p0_isolation_and_rls.sql
+  - db/migrations/down/0011_wave_p0_isolation_and_rls.sql
+  - docs/ARCHITECTURE.md
+  - docs/MULTIMODAL_AND_POSTGRES_BLOB_STORAGE.md
+  - docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md
+  - docs/doc-tools/00_INDEX.md
+  - docs/doc-tools/03_LINTING_GATES_AND_DRIFT_ENGINE.md
+  - docs/doc-tools/07_PORTAL_API_CONTRACTS_AND_DEPLOYMENT_RUNBOOK.md
+  - docs/doc-tools/10_DOCUMENTATION_TOOLS_TECHNICAL_REFERENCE.md
+  - docs/sdd/03_EARS/EARS-01_engramory_core.yaml
+  - docs/archive/CHG-010/EARS-01_engramory_core_v1.0.yaml
+  - docs/sdd/06_SPEC/SPEC-01_access_surface.yaml
+  - docs/sdd/06_SPEC/SPEC-02_memory_store.yaml
+  - docs/sdd/06_SPEC/SPEC-04_distillation_engine.yaml
+  - docs/sdd/06_SPEC/SPEC-06_ports_portability.yaml
+  - docs/archive/CHG-010/SPEC-01_access_surface_v1.1.yaml
+  - docs/archive/CHG-010/SPEC-02_memory_store_v1.0.yaml
+  - docs/archive/CHG-010/SPEC-04_distillation_engine_v1.0.yaml
+  - docs/archive/CHG-010/SPEC-06_ports_portability_v1.0.yaml
+  - docs/sdd/07_TDD/TDD-04_distillation_engine.yaml
+  - docs/archive/CHG-010/TDD-04_distillation_engine_v1.0.yaml
+  - docs/sdd/08_IPLAN/IPLAN-00_index.yaml
+  - docs/sdd/08_IPLAN/IPLAN-10_audit-wave-p0-security-isolation.swf.yaml
+  - docs/sdd/09_CHG/CHG-010_audit-wave-p0-security-isolation.yaml
+  - docs/sdd/graph/SLICE-10_audit-wave-p0-security-isolation.graph.yaml
+  - plans/PLAN-025_paperclip-centralized-backlog-and-audit-governance.md
+  - pyproject.toml
+  - src/engramory/access/jwt_auth.py
+  - src/engramory/access/poisoning_guard.py
+  - src/engramory/access/surface.py
+  - src/engramory/adapters/dev/graph_neo4j.py
+  - src/engramory/adapters/dev/storage_pg.py
+  - src/engramory/adapters/dev/vector_pg.py
+  - src/engramory/cli.py
+  - src/engramory/core/chunking.py
+  - src/engramory/core/docs_tools.py
+  - src/engramory/core/git_sync.py
+  - src/engramory/core/kb_graph.py
+  - src/engramory/core/knowledge.py
+  - src/engramory/core/models.py
+  - src/engramory/core/portal_builder.py
+  - src/engramory/core/repository.py
+  - src/engramory/mcp/server.py
+  - src/engramory/ports/graph.py
+  - src/engramory/ports/vector.py
+  - src/engramory/workers/distillation.py
+  - src/engramory/workers/graph_projection.py
+  - tests/conftest.py
+  - tests/conformance/test_adapters.py
+  - tests/integration/test_access_surface.py
+  - tests/integration/test_adr_knowledge_graph.py
+  - tests/integration/test_distillation_embedding.py
+  - tests/integration/test_doc_ingest.py
+  - tests/integration/test_multiproject_sdd.py
+  - tests/integration/test_repository.py
+  - tests/security/test_wave_p0_security_remediation.py
+  - tests/test_docs_tools.py
+  - tests/test_migrations.py
+  - tests/test_plan017_remediation.py
+  - tests/test_storage_pg_blob_cas.py
+  - tests/test_virtual_employee_lifecycle.py
+  - tests/unit/test_graph_neo4j.py
+  - tests/unit/test_jwt_auth.py
+  - tests/unit/test_mcp_server.py
+  - uv.lock
+implementation:
+  steps:
+  - step: Archive EARS-01 v1.0 and update EARS-01 v1.1 (EARS.01.03.b800)
+    phase: sdd_lifecycle
+    artifact: EARS-01
+    archive_path: docs/archive/CHG-010/EARS-01_engramory_core_v1.0.yaml
+    current_version: '1.0'
+    new_version: '1.1'
+    status: Completed
+  - step: Archive SPEC-01 v1.1 and update SPEC-01 v1.2
+    phase: sdd_lifecycle
+    artifact: SPEC-01
+    archive_path: docs/archive/CHG-010/SPEC-01_access_surface_v1.1.yaml
+    current_version: '1.1'
+    new_version: '1.2'
+    status: Completed
+  - step: Archive SPEC-02 v1.0 and update SPEC-02 v1.1
+    phase: sdd_lifecycle
+    artifact: SPEC-02
+    archive_path: docs/archive/CHG-010/SPEC-02_memory_store_v1.0.yaml
+    current_version: '1.0'
+    new_version: '1.1'
+    status: Completed
+  - step: Archive SPEC-04 v1.0 and update SPEC-04 v1.1
+    phase: sdd_lifecycle
+    artifact: SPEC-04
+    archive_path: docs/archive/CHG-010/SPEC-04_distillation_engine_v1.0.yaml
+    current_version: '1.0'
+    new_version: '1.1'
+    status: Completed
+  - step: Archive SPEC-06 v1.0 and update SPEC-06 v1.1
+    phase: sdd_lifecycle
+    artifact: SPEC-06
+    archive_path: docs/archive/CHG-010/SPEC-06_ports_portability_v1.0.yaml
+    current_version: '1.0'
+    new_version: '1.1'
+    status: Completed
+  - step: Archive TDD-04 v1.0 and update TDD-04 v1.1
+    phase: sdd_lifecycle
+    artifact: TDD-04
+    archive_path: docs/archive/CHG-010/TDD-04_distillation_engine_v1.0.yaml
+    current_version: '1.0'
+    new_version: '1.1'
+    status: Completed
+  - step: Create IPLAN-10 (IPLAN-10_audit-wave-p0-security-isolation.swf.yaml) and SLICE-10_audit-wave-p0-security-isolation.graph.yaml
+    phase: iplan_creation
+    artifact: IPLAN-10
+    status: Completed
+  - step: Synchronize IPLAN-00_index.yaml and watched_paths documentation with Wave P0 changes
+    phase: documentation_sync
+    artifact: IPLAN-00_index and docs/
+    status: Completed
+  artifacts_modified:
+  - id: EARS-01
+    file: docs/sdd/03_EARS/EARS-01_engramory_core.yaml
+    change_type: modified
+  - id: SPEC-01
+    file: docs/sdd/06_SPEC/SPEC-01_access_surface.yaml
+    change_type: modified
+  - id: SPEC-02
+    file: docs/sdd/06_SPEC/SPEC-02_memory_store.yaml
+    change_type: modified
+  - id: SPEC-04
+    file: docs/sdd/06_SPEC/SPEC-04_distillation_engine.yaml
+    change_type: modified
+  - id: SPEC-06
+    file: docs/sdd/06_SPEC/SPEC-06_ports_portability.yaml
+    change_type: modified
+  - id: TDD-04
+    file: docs/sdd/07_TDD/TDD-04_distillation_engine.yaml
+    change_type: modified
+  - id: IPLAN-10
+    file: docs/sdd/08_IPLAN/IPLAN-10_audit-wave-p0-security-isolation.swf.yaml
+    change_type: created
+  rollback_steps:
+  - step: Reset feature/plan-026-v030-deep-audit-remediation to b760e3a and downgrade 0011
+    phase: rollback
+    artifact: codebase
+verification:
+  pre_implementation_validation:
+  - description: Verify CHG-010, IPLAN-10, and SLICE-10 3-way parity before code edits
+    command: uv --project ${AIOPS_HARNESS_ROOT} run aiops-harness chg verify docs/sdd/09_CHG/CHG-010_audit-wave-p0-security-isolation.yaml
+  post_implementation_validation:
+  - description: Full quality, unit, integration, conformance, security, and strict docs gates
+    command: uv run --extra dev ruff check src tests && uv run --extra dev mypy src && uv run --extra dev pytest -q
+  exit_criteria:
+    all_tests_pass: true
+    no_regressions: true
+    zero_security_downgrade: true
+gate_approval:
+  gate: GATE-SPEC
+  approved: true
+  approver: Operator + Antigravity Orchestrator
+  role: Judge (C2)
+  approval_date: '2026-11-21'
+  evidence: Approved PLAN-026 Wave P0 execution after Pass 3 convergence (check_plan.py --v2 96.0%)
+  approved_scope_files: *id001
+rollback_plan:
+  strategy: branch-reset-and-migration-down
+  steps:
+  - Apply db/migrations/down/0011_wave_p0_isolation_and_rls.sql if DB migrated
+  - git reset --hard b760e3a
+  estimated_effort: 5m
+emergency_change:
+  emergency_id: null
+  incident_severity: null
+  fix_deployed: null
+  post_mortem_due: null
+  post_mortem_completed: false
+  post_hoc_gate: null
+glossary:
+  terms:
+  - term: Tenant RLS Boundary
+    definition: Mandatory Postgres FORCE ROW LEVEL SECURITY policy scoping all 14 core tables via transaction-local app.tenant_id GUC across non-owner engramory_app and dedicated engramory_worker roles.
+  - term: Shared Harmful Quorum
+    definition: Anti-DoS rule requiring at least two distinct agent_id harmful feedback votes on project, domain, or space memories before transitioning status to quarantined.
+creation_checklist:
+  checks:
+  - id: 1
+    check: Read every file you reference
+    status: Pass
+  - id: 2
+    check: Verify the architectural claim
+    status: Pass
+  - id: 3
+    check: Check existing struct/type signatures
+    status: Pass
+  - id: 4
+    check: Check existing INSERT/SELECT queries
+    status: Pass
+  - id: 5
+    check: Cross-reference upstream requirements
+    status: Pass
+  - id: 6
+    check: Check for existing handlers/webhooks
+    status: Pass
+  - id: 7
+    check: Couple dependent issues
+    status: Pass
+  - id: 8
+    check: Add automated test specifications
+    status: Pass
+  - id: 9
+    check: Document rollback strategy
+    status: Pass
+  - id: 10
+    check: Verify archive paths
+    status: Pass
+  - id: 11
+    check: Verify supersedes list
+    status: Pass
+  - id: 12
+    check: Verify version bumps
+    status: Pass
+  - id: 13
+    check: SDD-first implementation order
+    status: Pass
+  - id: 14
+    check: 'CHG scope: governance, not implementation plan'
+    status: Pass
+  - id: 15
+    check: Mandatory formal decision block
+    status: Pass
+validation:
+  document_structure:
+  - id_match: Verified CHG-010 matches filename
+  decision_block:
+  - decision_present: Verified DEC-CHG-010 present
+  scope:
+  - governance_only: Verified only sdd_lifecycle, iplan_creation, and documentation_sync steps present
+diff:
+  diff_stat: "68 files across PLAN-026 TASK-1 (Wave P0)"
+  breaking_changes: false

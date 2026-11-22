@@ -94,31 +94,70 @@ async def test_context_slice_layers_and_topological_sort(
     ctx = _ctx(tenant)
 
     # Insert chain: IPLAN-01 -> SPEC-01 -> ADR-01 -> BRD-01
+    proj_props = {"project_id": ctx.project_id}
     await repo.upsert_graph_entity(
-        GraphEntity(id="BRD-01", entity_type="BRD", name="Business Goals", tenant_id=tenant)
-    )
-    await repo.upsert_graph_entity(
-        GraphEntity(id="ADR-01", entity_type="ADR", name="Architecture", tenant_id=tenant)
-    )
-    await repo.upsert_graph_entity(
-        GraphEntity(id="SPEC-01", entity_type="SPEC", name="Specification", tenant_id=tenant)
+        GraphEntity(
+            id="BRD-01",
+            entity_type="BRD",
+            name="Business Goals",
+            tenant_id=tenant,
+            properties=proj_props,
+        )
     )
     await repo.upsert_graph_entity(
         GraphEntity(
-            id="IPLAN-01", entity_type="IPLAN", name="Implementation Plan", tenant_id=tenant
+            id="ADR-01",
+            entity_type="ADR",
+            name="Architecture",
+            tenant_id=tenant,
+            properties=proj_props,
+        )
+    )
+    await repo.upsert_graph_entity(
+        GraphEntity(
+            id="SPEC-01",
+            entity_type="SPEC",
+            name="Specification",
+            tenant_id=tenant,
+            properties=proj_props,
+        )
+    )
+    await repo.upsert_graph_entity(
+        GraphEntity(
+            id="IPLAN-01",
+            entity_type="IPLAN",
+            name="Implementation Plan",
+            tenant_id=tenant,
+            properties=proj_props,
         )
     )
 
     await repo.upsert_graph_relation(
-        GraphRelation(src_id="IPLAN-01", dst_id="SPEC-01", rel_type="IMPLEMENTS", tenant_id=tenant)
-    )
-    await repo.upsert_graph_relation(
         GraphRelation(
-            src_id="SPEC-01", dst_id="ADR-01", rel_type="CONSTRAINED_BY", tenant_id=tenant
+            src_id="IPLAN-01",
+            dst_id="SPEC-01",
+            rel_type="IMPLEMENTS",
+            tenant_id=tenant,
+            properties=proj_props,
         )
     )
     await repo.upsert_graph_relation(
-        GraphRelation(src_id="ADR-01", dst_id="BRD-01", rel_type="SATISFIES", tenant_id=tenant)
+        GraphRelation(
+            src_id="SPEC-01",
+            dst_id="ADR-01",
+            rel_type="CONSTRAINED_BY",
+            tenant_id=tenant,
+            properties=proj_props,
+        )
+    )
+    await repo.upsert_graph_relation(
+        GraphRelation(
+            src_id="ADR-01",
+            dst_id="BRD-01",
+            rel_type="SATISFIES",
+            tenant_id=tenant,
+            properties=proj_props,
+        )
     )
 
     # 1. Unfiltered slice: all 3 ancestors

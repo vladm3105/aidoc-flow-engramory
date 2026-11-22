@@ -26,7 +26,7 @@ endpoints:
   container_gateway: "http://10.250.0.1:8000"
 watched_paths:
   - "docs/**"
-last_verified: 2026-11-13
+last_verified: 2026-11-21
 ---
 
 # Platform Docs Documentation Index & Architecture Map
@@ -103,5 +103,5 @@ flowchart TD
 6. **Warrant-Governed Runbook Execution (`INV-DOC-06`):** Every executable fenced code block in a runbook (`kind: runbook | playbook`) must declare `{id, tier, mode}`. `aiops-harness` executes `tier="green" mode="read-only"` blocks autonomously, but hard-blocks `tier="yellow"` and `tier="red"` blocks unless accompanied by a valid Ed25519 `X-Agent-Warrant` and verified human `consent_id`.
 7. **Deterministic Code-to-Doc Drift Blocking (`INV-DOC-07`):** When a PR modifies files matching a document's `watched_paths` (or alters CLI commands/ports in `aiops-harness` / `compose.yaml`) without updating the corresponding `docs/*.md` or bumping `last_verified`, `platform-docs check-drift` fails the CI gate or dispatches a tracked `DOC2C` task in `platform-paperclip`.
 8. **Disjoint Namespace Isolation (`INV-DOC-08`):** Documentation and runbooks carry an explicit `namespace` attribute (`ns:platform`, `ns:aidoc`, `ns:b-local`) enforced by `platform_security.authz` Layer 1 Cedar policies across Kùzu queries, Engramory vector pre-filters, and the Starlight portal.
-9. **Rule D14 Secret Scrubbing & CaMeL Fencing (`INV-DOC-09`):** All generated `/llms.txt` files, Kùzu graph nodes, and Engramory chunks pass `redact_for_d14()` fail-closed prior to persistence, and all external defect/feedback inputs are wrapped in 96-bit CaMeL nonce fences (`fence_untrusted()`).
-10. **Live Smoke Verification of Green Runbook Probes (`INV-DOC-10`):** Read-only diagnostic blocks (`tier="green" mode="read-only" expect_exit=0`) in `platform-*` operational runbooks are continuously validated against live staging endpoints by `unified-test-suite` (`uts`) and Tier-3 scheduled sweeps, ensuring operational playbooks never rot.
+9. **Rule D14 Secret Scrubbing, Unicode & Symlink Confinement (`INV-DOC-09`):** All generated `/llms.txt` files, portal bundles, Kùzu graph nodes, and Engramory chunks strip invisible Bidi/control/variation characters, redact multiline PEM keys and secrets prior to persistence (`redact_hard_secrets`), reject symlink escapes via pre-resolution `has_symlink_component` checks, and fence external feedback in 96-bit CaMeL nonces.
+10. **Live Smoke Verification of Allowlisted Green Runbook Probes (`INV-DOC-10`):** Read-only diagnostic blocks (`tier="green" mode="read-only" expect_exit=0`) execute via strict `shlex` allowlist parsing (`shell=False`, minimal environment allowlist, optional gVisor `runsc --network=none`) against live staging endpoints with blocked AST diagnostics reported as hard failures.

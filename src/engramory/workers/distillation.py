@@ -124,9 +124,16 @@ async def reflect(
             emb_model = model_name if has_vector else INTERIM_EMBEDDING_MODEL
 
             raw_scope = str((episode.metadata or {}).get("scope") or "agent")
-            target_scope = (
-                raw_scope if raw_scope in {"agent", "project", "domain", "space"} else "agent"
-            )
+            if raw_scope == "project" and episode.project_id:
+                target_scope = "project"
+            elif raw_scope == "domain" and episode.domain_id:
+                target_scope = "domain"
+            elif raw_scope == "space" and bool(
+                (episode.metadata or {}).get("_verified_space_scope")
+            ):
+                target_scope = "space"
+            else:
+                target_scope = "agent"
             ep_meta_variant = str((episode.metadata or {}).get("brain_variant") or "").strip()
             ep_variant = (
                 (brain_variant or str(brain_cfg.get("active_brain_variant") or "")).strip()

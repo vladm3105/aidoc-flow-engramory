@@ -218,7 +218,7 @@ async def ingest_file(
         if embed and adapters is not None and getattr(adapters, "llm", None) is not None:
             try:
                 embeddings = await adapters.llm.embed(texts=[text])
-                if embeddings:
+                if embeddings and len(embeddings[0]) == 1536:
                     embed_model = next(
                         (
                             val
@@ -230,6 +230,7 @@ async def ingest_file(
                     )
                     await repo.set_kb_sections_embedding_batch(
                         [(sec_id, embeddings[0])],
+                        tenant_id=ctx.tenant_id,
                         embedding_model=embed_model,
                     )
             except Exception as exc:

@@ -31,6 +31,8 @@ class GraphPort(Protocol):
         depth: int = 1,
         tenant_id: str = "default",
         project_id: str | None = None,
+        domain_id: str | None = None,
+        allowed_scopes: Sequence[str] | None = None,
     ) -> Sequence[Mapping[str, Any]]:
         """Return nodes reachable from `id` within `depth` hops (bounded traversal)."""
         ...
@@ -43,6 +45,8 @@ class GraphPort(Protocol):
         depth: int = 6,
         tenant_id: str = "default",
         project_id: str | None = None,
+        domain_id: str | None = None,
+        allowed_scopes: Sequence[str] | None = None,
     ) -> Sequence[Mapping[str, Any]]:
         """Return upstream ancestor nodes reachable from `id` along directed out-edges."""
         ...
@@ -55,6 +59,8 @@ class GraphPort(Protocol):
         depth: int = 6,
         tenant_id: str = "default",
         project_id: str | None = None,
+        domain_id: str | None = None,
+        allowed_scopes: Sequence[str] | None = None,
     ) -> Sequence[Mapping[str, Any]]:
         """Return downstream descendant nodes reachable from `id` along directed in-edges."""
         ...
@@ -75,6 +81,7 @@ class GraphPort(Protocol):
         tenant_id: str,
         active_ids: Sequence[str],
         project_id: str | None = None,
+        exclude_kb_labels: bool = True,
     ) -> int:
         """Delete any nodes belonging to tenant_id (and optional project_id)
         whose IDs are not in active_ids.

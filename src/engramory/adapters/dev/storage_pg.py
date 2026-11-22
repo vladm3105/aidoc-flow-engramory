@@ -92,7 +92,13 @@ class PgBlobStorageAdapter:
         """Close any held resources (connections are scoped per stream operation)."""
 
     @asynccontextmanager
-    async def _conn(self, *, autocommit: bool = False) -> AsyncIterator[Any]:
+    async def _conn(
+        self,
+        *,
+        tenant_id: str | None = None,
+        autocommit: bool = False,
+        worker_sweep: bool = False,
+    ) -> AsyncIterator[Any]:
         if self._conn_factory is not None:
             async with self._conn_factory() as c:
                 yield c
@@ -106,13 +112,21 @@ class PgBlobStorageAdapter:
         except psycopg.Error as exc:
             raise StorageError(f"PostgreSQL blob store unavailable: {exc}") from exc
         try:
+            if not autocommit:
+                if tenant_id:
+                    await conn.execute(
+                        "SELECT set_config('app.tenant_id', %(tid)s, true)",
+                        {"tid": tenant_id},
+                    )
+                if worker_sweep:
+                    await conn.execute("SELECT set_config('app.worker_sweep', 'on', true)")
             yield conn
         finally:
             await conn.close()
 
     async def head(self, *, key: str, tenant_id: str = "default") -> KBBlob | None:
         sha256 = _normalize_sha256_key(key)
-        async with self._conn() as conn:
+        async with self._conn(tenant_id=tenant_id) as conn:
             row = await (
                 await conn.execute(
                     """
@@ -370,7 +384,7 @@ class PgBlobStorageAdapter:
         meta_json = json.dumps(dict(metadata or {}), sort_keys=True)
 
         async with self._semaphore:
-            async with self._conn() as conn:
+            async with self._conn(tenant_id=tenant_id) as conn:
                 # 1. Upsert manifest in 'uploading' state and clear any partial chunks
                 await conn.execute(
                     """
@@ -413,6 +427,12 @@ class PgBlobStorageAdapter:
                     {"tenant_id": tenant_id, "sha256": sha256},
                 )
                 await conn.commit()
+                # SET LOCAL is transaction-scoped; re-apply immediately after commit so
+                # subsequent chunk INSERTs satisfy FORCE ROW LEVEL SECURITY.
+                await conn.execute(
+                    "SELECT set_config('app.tenant_id', %(tid)s, true)",
+                    {"tid": tenant_id},
+                )
 
                 whole_hasher = hashlib.sha256()
                 buffer = bytearray()
@@ -421,68 +441,88 @@ class PgBlobStorageAdapter:
 
                 try:
                     if expected_chunks > 0:
-                        async with conn.cursor() as cur:
-                            copy_sql = (
-                                f"COPY {table} (tenant_id, blob_sha256, chunk_index, "
-                                f"chunk_sha256, byte_size, data) FROM STDIN WITH (FORMAT BINARY)"
+                        insert_chunk_sql = (
+                            """
+                            INSERT INTO kb_blob_chunks_large (
+                                tenant_id, blob_sha256, chunk_index, chunk_sha256, byte_size, data
                             )
-                            async with cur.copy(copy_sql) as copy:
-                                if hasattr(copy, "set_types"):
-                                    copy.set_types(
-                                        ["text", "text", "int4", "bytea", "int4", "bytea"]
+                            VALUES (
+                                %(tenant_id)s, %(sha256)s, %(chunk_index)s,
+                                %(chunk_sha256)s, %(byte_size)s, %(data)s
+                            )
+                            ON CONFLICT (tenant_id, blob_sha256, chunk_index) DO UPDATE SET
+                                chunk_sha256 = EXCLUDED.chunk_sha256,
+                                byte_size = EXCLUDED.byte_size,
+                                data = EXCLUDED.data
+                            """
+                            if table == "kb_blob_chunks_large"
+                            else """
+                            INSERT INTO kb_blob_chunks (
+                                tenant_id, blob_sha256, chunk_index, chunk_sha256, byte_size, data
+                            )
+                            VALUES (
+                                %(tenant_id)s, %(sha256)s, %(chunk_index)s,
+                                %(chunk_sha256)s, %(byte_size)s, %(data)s
+                            )
+                            ON CONFLICT (tenant_id, blob_sha256, chunk_index) DO UPDATE SET
+                                chunk_sha256 = EXCLUDED.chunk_sha256,
+                                byte_size = EXCLUDED.byte_size,
+                                data = EXCLUDED.data
+                            """
+                        )
+
+                        async def _write_chunk(c_bytes: bytes) -> None:
+                            nonlocal chunk_index
+                            c_sha = hashlib.sha256(c_bytes).digest()
+                            await conn.execute(
+                                insert_chunk_sql,
+                                {
+                                    "tenant_id": tenant_id,
+                                    "sha256": sha256,
+                                    "chunk_index": chunk_index,
+                                    "chunk_sha256": c_sha,
+                                    "byte_size": len(c_bytes),
+                                    "data": c_bytes,
+                                },
+                            )
+                            chunk_index += 1
+
+                        if isinstance(stream, AsyncIterator):
+                            async for piece in stream:
+                                if not piece:
+                                    continue
+                                total_bytes += len(piece)
+                                if total_bytes > self._max_blob_bytes:
+                                    max_b = self._max_blob_bytes
+                                    raise BlobTooLargeError(
+                                        f"Stream exceeded maximum {max_b} bytes"
                                     )
-
-                                async def _write_chunk(c_bytes: bytes) -> None:
-                                    nonlocal chunk_index
-                                    c_sha = hashlib.sha256(c_bytes).digest()
-                                    await copy.write_row(
-                                        (
-                                            tenant_id,
-                                            sha256,
-                                            chunk_index,
-                                            c_sha,
-                                            len(c_bytes),
-                                            c_bytes,
-                                        )
+                                whole_hasher.update(piece)
+                                buffer.extend(piece)
+                                while len(buffer) >= self._chunk_size:
+                                    blk = bytes(buffer[: self._chunk_size])
+                                    del buffer[: self._chunk_size]
+                                    await _write_chunk(blk)
+                        else:
+                            for piece in stream:
+                                if not piece:
+                                    continue
+                                total_bytes += len(piece)
+                                if total_bytes > self._max_blob_bytes:
+                                    max_b = self._max_blob_bytes
+                                    raise BlobTooLargeError(
+                                        f"Stream exceeded maximum {max_b} bytes"
                                     )
-                                    chunk_index += 1
+                                whole_hasher.update(piece)
+                                buffer.extend(piece)
+                                while len(buffer) >= self._chunk_size:
+                                    blk = bytes(buffer[: self._chunk_size])
+                                    del buffer[: self._chunk_size]
+                                    await _write_chunk(blk)
 
-                                if isinstance(stream, AsyncIterator):
-                                    async for piece in stream:
-                                        if not piece:
-                                            continue
-                                        total_bytes += len(piece)
-                                        if total_bytes > self._max_blob_bytes:
-                                            max_b = self._max_blob_bytes
-                                            raise BlobTooLargeError(
-                                                f"Stream exceeded maximum {max_b} bytes"
-                                            )
-                                        whole_hasher.update(piece)
-                                        buffer.extend(piece)
-                                        while len(buffer) >= self._chunk_size:
-                                            blk = bytes(buffer[: self._chunk_size])
-                                            del buffer[: self._chunk_size]
-                                            await _write_chunk(blk)
-                                else:
-                                    for piece in stream:
-                                        if not piece:
-                                            continue
-                                        total_bytes += len(piece)
-                                        if total_bytes > self._max_blob_bytes:
-                                            max_b = self._max_blob_bytes
-                                            raise BlobTooLargeError(
-                                                f"Stream exceeded maximum {max_b} bytes"
-                                            )
-                                        whole_hasher.update(piece)
-                                        buffer.extend(piece)
-                                        while len(buffer) >= self._chunk_size:
-                                            blk = bytes(buffer[: self._chunk_size])
-                                            del buffer[: self._chunk_size]
-                                            await _write_chunk(blk)
-
-                                if buffer:
-                                    await _write_chunk(bytes(buffer))
-                                    buffer.clear()
+                        if buffer:
+                            await _write_chunk(bytes(buffer))
+                            buffer.clear()
 
                     computed_sha256 = whole_hasher.hexdigest()
                     if computed_sha256 != sha256:
@@ -506,9 +546,17 @@ class PgBlobStorageAdapter:
                         {"tenant_id": tenant_id, "sha256": sha256},
                     )
                     await conn.commit()
+                    await conn.execute(
+                        "SELECT set_config('app.tenant_id', %(tid)s, true)",
+                        {"tid": tenant_id},
+                    )
                 except Exception:
                     await conn.rollback()
                     try:
+                        await conn.execute(
+                            "SELECT set_config('app.tenant_id', %(tid)s, true)",
+                            {"tid": tenant_id},
+                        )
                         await conn.execute(
                             delete_chunks_sql,
                             {"tenant_id": tenant_id, "sha256": sha256},
@@ -565,7 +613,7 @@ class PgBlobStorageAdapter:
         next_idx = 0
         yielded = 0
 
-        async with self._conn() as conn:
+        async with self._conn(tenant_id=tenant_id) as conn:
             fetch_sql = (
                 """
                 SELECT chunk_index, chunk_sha256, data
@@ -630,7 +678,7 @@ class PgBlobStorageAdapter:
 
     async def delete(self, *, key: str, tenant_id: str = "default") -> None:
         sha256 = _normalize_sha256_key(key)
-        async with self._conn() as conn:
+        async with self._conn(tenant_id=tenant_id) as conn:
             await conn.execute(
                 "DELETE FROM kb_blob_chunks "
                 "WHERE tenant_id = %(tenant_id)s AND blob_sha256 = %(sha256)s",
@@ -650,7 +698,7 @@ class PgBlobStorageAdapter:
     async def reconcile_truncated_blobs(self, *, tenant_id: str | None = None) -> int:
         """Startup & periodic check marking status='failed' on any 'ready' UNLOGGED blob
         whose chunks were truncated by PostgreSQL after an unclean crash."""
-        async with self._conn() as conn:
+        async with self._conn(tenant_id=tenant_id, worker_sweep=(tenant_id is None)) as conn:
             cur = await conn.execute(
                 """
                 UPDATE kb_blobs b
@@ -673,7 +721,7 @@ class PgBlobStorageAdapter:
 
     async def gc_orphan_chunks(self, *, older_than_seconds: int = 7200) -> int:
         """Delete stale 'uploading'/'failed' manifests and any orphaned chunk rows."""
-        async with self._conn() as conn:
+        async with self._conn(worker_sweep=True) as conn:
             c1 = await conn.execute(
                 """
                 DELETE FROM kb_blobs

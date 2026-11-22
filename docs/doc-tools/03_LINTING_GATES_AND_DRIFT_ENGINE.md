@@ -25,7 +25,7 @@ endpoints:
   container_gateway: "http://10.250.0.1:8000"
 watched_paths:
   - "docs/doc-tools/03_LINTING_GATES_AND_DRIFT_ENGINE.md"
-last_verified: 2026-11-06
+last_verified: 2026-11-21
 ---
 
 # Tier-1/2/3 Linting Gates, `Vale` AI-Chunking Rules, Drift Engine & Smoke Runner
@@ -130,10 +130,10 @@ Any document exceeding its `review_ttl_days` (default: `90` days) triggers a `DO
 To guarantee that diagnostic health checks in `platform-*` operational runbooks never rot:
 
 ```bash {id="run-green-smoke-probes" tier="green" mode="read-only" expect_exit=0 timeout_sec=60}
-uv run platform-docs smoke-run --target $WORKSPACE_ROOT --tier green --json
+platform-docs smoke-run --target . --tier green --json
 ```
 
 1. **AST Extraction:** Scans all `status: active` documents with `kind: runbook` or `kind: playbook` and extracts code blocks annotated with `{tier="green" mode="read-only"}`.
-2. **Safety Gate Verification:** Confirms via `INV-STEP-02` AST check and `platform_security.authz` that every extracted command is strictly read-only.
-3. **Sandboxed Execution:** Executes each probe inside a read-only runner with `timeout_sec` enforced and asserts `exit_code == expect_exit`.
+2. **Safety Gate Verification:** Confirms via `parse_and_validate_green_command` (`INV-STEP-01`/`02` strict `shell=False` allowlist) and `platform_security.authz` that every extracted command is strictly read-only, reporting blocked AST diagnostics as hard probe failures.
+3. **Sandboxed Execution:** Executes each allowlisted probe directly via `shell=False` (or gVisor `runsc --network=none do --` when `ENGRAMORY_SMOKE_SANDBOX=gvisor`) with a minimal allowlisted environment and `timeout_sec` enforced, asserting `exit_code == expect_exit`.
 4. **Auto-Verification:** When all `tier="green"` probes in a runbook pass on staging, `platform-docs` records the verification receipt in ClickHouse (`otel_logs`) and `unified-test-suite` (`uts`).

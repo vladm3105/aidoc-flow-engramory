@@ -18,6 +18,7 @@ import os
 import socket
 import subprocess
 import time
+import urllib.parse
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
@@ -34,12 +35,54 @@ def _free_port() -> int:
         return int(s.getsockname()[1])
 
 
+def _ensure_rls_roles(dsn: str) -> None:
+    """Create non-superuser NOBYPASSRLS roles for live RLS testing when connected as superuser."""
+    import psycopg
+
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        conn.execute(
+            """
+            DO $$
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'engramory_app') THEN
+                    CREATE ROLE engramory_app NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT
+                        NOBYPASSRLS LOGIN PASSWORD 'it_app_pw';
+                ELSE
+                    ALTER ROLE engramory_app WITH NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT
+                        NOBYPASSRLS LOGIN PASSWORD 'it_app_pw';
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'engramory_worker') THEN
+                    CREATE ROLE engramory_worker NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT
+                        NOBYPASSRLS LOGIN PASSWORD 'it_worker_pw';
+                ELSE
+                    ALTER ROLE engramory_worker WITH NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT
+                        NOBYPASSRLS LOGIN PASSWORD 'it_worker_pw';
+                END IF;
+            END $$;
+            """
+        )
+
+
+def _replace_dsn_credentials(dsn: str, username: str, password: str) -> str:
+    parsed = urllib.parse.urlparse(dsn)
+    host = parsed.hostname or "127.0.0.1"
+    port = f":{parsed.port}" if parsed.port else ""
+    u_enc = urllib.parse.quote(username, safe="")
+    p_enc = urllib.parse.quote(password, safe="")
+    netloc = f"{u_enc}:{p_enc}@{host}{port}"
+    return urllib.parse.urlunparse(parsed._replace(netloc=netloc))
+
+
 def _apply_migrations(dsn: str) -> None:
     import psycopg
 
     paths = sorted(MIGRATIONS.glob("*.sql"))
     if not paths:  # a broken path must fail loudly, not yield an empty schema
         raise RuntimeError(f"no migrations found at {MIGRATIONS} — fixture path broken")
+    try:
+        _ensure_rls_roles(dsn)
+    except psycopg.Error:
+        pass
     with psycopg.connect(dsn, autocommit=True) as conn:
         for path in paths:
             conn.execute(path.read_text())  # type: ignore[arg-type]
@@ -129,6 +172,22 @@ def pg_dsn() -> Iterator[str]:
                 f"leaked container {name}: {rm.stderr.decode(errors='replace')}",
                 stacklevel=1,
             )
+
+
+@pytest.fixture(scope="session")
+def pg_app_dsn(pg_dsn: str) -> str:
+    """Non-superuser NOBYPASSRLS DSN bound to the `engramory_app` role."""
+    _ensure_rls_roles(pg_dsn)
+    app_dsn = _replace_dsn_credentials(pg_dsn, "engramory_app", "it_app_pw")
+    return app_dsn
+
+
+@pytest.fixture(scope="session")
+def pg_worker_dsn(pg_dsn: str) -> str:
+    """Non-superuser NOBYPASSRLS DSN bound to the `engramory_worker` sweep role."""
+    _ensure_rls_roles(pg_dsn)
+    worker_dsn = _replace_dsn_credentials(pg_dsn, "engramory_worker", "it_worker_pw")
+    return worker_dsn
 
 
 def _neo4j_reachable(host: str = "127.0.0.1", port: int = 7687) -> bool:

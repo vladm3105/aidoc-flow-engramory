@@ -15,9 +15,9 @@ title: "Ports & Portability"
 
 document_control:
   status: Draft
-  version: "1.0"
+  version: "1.1"
   date_created: "2026-06-22T00:00:00"
-  last_updated: "2026-06-22T00:00:00"
+  last_updated: "2026-11-21T00:00:00"
   author: "Engramory team"
   component: "PortsAndAdapters"
   tdd_ready_score: "[Pending]/100"
@@ -49,12 +49,12 @@ interfaces:
     - name: "VectorPort"
       type: "class"
       signature: "class VectorPort(Protocol): ..."
-      description: "Vector index (rebuildable projection)."
+      description: "Vector index (rebuildable projection). Enforces explicit tenant_id on upsert/search/delete, validates 1536-dim vectors in PgVectorAdapter, and filters active non-expired rows (valid_to IS NULL AND status = 'active')."
       errors: []
     - name: "GraphPort"
       type: "class"
       signature: "class GraphPort(Protocol): ..."
-      description: "Dual-engine graph traversal (Neo4j Adopt via Neo4jGraphAdapter per Decision D17 with PostgreSQL 18 recursive CTE fallback)."
+      description: "Dual-engine graph traversal (Neo4j Adopt via Neo4jGraphAdapter per Decision D17 with PostgreSQL 18 recursive CTE fallback). Enforces tenant_id + allowed_scopes + project_id/domain_id + exclude_kb_labels filtering on all traversals and strict tenant_id scoping on purge_stale_nodes."
       errors: []
     - name: "CachePort"
       type: "class"

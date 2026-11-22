@@ -1196,7 +1196,24 @@ def _cmd_sdd_lint_policy(args: argparse.Namespace) -> int:
 
 def _cmd_mcp_serve(args: argparse.Namespace) -> int:
     """Run the MCP Gateway JSON-RPC server over stdio or SSE (SPEC-01 / ADR-10)."""
-    from engramory.mcp.server import McpServer
+    from engramory.mcp.server import McpServer, is_loopback_host
+
+    auth_env = os.environ.get("AUTHENTIK_ENABLED", "").lower() in ("1", "true", "yes")
+    auth_enabled = bool(getattr(args, "auth", False) or auth_env)
+    transport = getattr(args, "transport", "stdio")
+    host = getattr(args, "host", "127.0.0.1")
+    port = getattr(args, "port", 8000)
+
+    if auth_enabled and transport != "sse":
+        raise PermissionError(
+            "MCP stdio transport cannot be used with --auth enabled (ADR-10); "
+            "pass '--transport sse'"
+        )
+    if transport == "sse" and not auth_enabled and not is_loopback_host(host):
+        raise PermissionError(
+            f"Refusing to bind unauthenticated MCP SSE server to non-loopback host '{host}'; "
+            "pass --auth or bind to 127.0.0.1"
+        )
 
     config = _load_config(getattr(args, "config", None))
     adapters = dev_adapters(config.dsn)
@@ -1219,9 +1236,6 @@ def _cmd_mcp_serve(args: argparse.Namespace) -> int:
             project_id=project_id,
             reconcile=reconcile,
         )
-
-    auth_env = os.environ.get("AUTHENTIK_ENABLED", "").lower() in ("1", "true", "yes")
-    auth_enabled = bool(getattr(args, "auth", False) or auth_env)
 
     token_validator = None
     security_gate_url = os.environ.get("SECURITY_GATE_URL")
@@ -1247,11 +1261,8 @@ def _cmd_mcp_serve(args: argparse.Namespace) -> int:
         auth_enabled=auth_enabled,
         security_gate_url=security_gate_url,
     )
-    transport = getattr(args, "transport", "stdio")
     try:
         if transport == "sse":
-            host = getattr(args, "host", "127.0.0.1")
-            port = getattr(args, "port", 8000)
             server.run_sse(host=host, port=port)
         else:
             asyncio.run(server.run_stdio())

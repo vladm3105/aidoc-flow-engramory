@@ -111,6 +111,33 @@ class _FakeConn:
             self._store.checkpoints += 1
             return _FakeResult([])
 
+        if "SELECT set_config('app.tenant_id'" in norm:
+            return _FakeResult([])
+
+        if norm.startswith("INSERT INTO kb_blob_chunks_large"):
+            key_c = (str(p["tenant_id"]), str(p["sha256"]), int(p["chunk_index"]))
+            self._store.chunks_large[key_c] = {
+                "tenant_id": str(p["tenant_id"]),
+                "blob_sha256": str(p["sha256"]),
+                "chunk_index": int(p["chunk_index"]),
+                "chunk_sha256": bytes(p["chunk_sha256"]),
+                "byte_size": int(p["byte_size"]),
+                "data": bytes(p["data"]),
+            }
+            return _FakeResult([], rowcount=1)
+
+        if norm.startswith("INSERT INTO kb_blob_chunks"):
+            key_c = (str(p["tenant_id"]), str(p["sha256"]), int(p["chunk_index"]))
+            self._store.chunks_logged[key_c] = {
+                "tenant_id": str(p["tenant_id"]),
+                "blob_sha256": str(p["sha256"]),
+                "chunk_index": int(p["chunk_index"]),
+                "chunk_sha256": bytes(p["chunk_sha256"]),
+                "byte_size": int(p["byte_size"]),
+                "data": bytes(p["data"]),
+            }
+            return _FakeResult([], rowcount=1)
+
         if "INSERT INTO kb_blobs" in norm:
             key = (str(p["tenant_id"]), str(p["sha256"]))
             self._store.blobs[key] = {
@@ -217,7 +244,13 @@ class _FakePgBlobStorageAdapter(PgBlobStorageAdapter):
         self.state = _FakePgState()
 
     @asynccontextmanager
-    async def _conn(self, *, autocommit: bool = False) -> AsyncIterator[Any]:
+    async def _conn(
+        self,
+        *,
+        tenant_id: str | None = None,
+        autocommit: bool = False,
+        worker_sweep: bool = False,
+    ) -> AsyncIterator[Any]:
         yield _FakeConn(self.state)
 
 

@@ -44,7 +44,7 @@ endpoints:
 watched_paths:
   - "compose.platform.yaml"
   - "docs/doc-tools/07_PORTAL_API_CONTRACTS_AND_DEPLOYMENT_RUNBOOK.md"
-last_verified: 2026-11-13
+last_verified: 2026-11-21
 ---
 
 # Multi-Repo Starlight & Scalar Portal, Deployment Architecture & Operations Runbook
@@ -113,7 +113,7 @@ xh --check-status GET http://127.0.0.1:8005/healthz
 Verify that the embedded Kùzu runbook graph and `/llms.txt` index are loaded and report zero schema errors:
 
 ```bash {id="probe-platform-docs-graph-status" tier="green" mode="read-only" expect_exit=0 timeout_sec=15 service="platform-docs"}
-uv run platform-docs status --endpoint http://127.0.0.1:8005 --json
+platform-docs status --endpoint http://127.0.0.1:8005 --json
 ```
 
 ### 3.2 Run Tier-1 Offline Lint & Registry Verification Across a Spoke Repository
@@ -121,7 +121,7 @@ uv run platform-docs status --endpoint http://127.0.0.1:8005 --json
 When validating documentation changes in any `platform-*`, `aidoc-*`, or `aiops-*` repository before commit, execute the offline Tier-1 gate (`< 1s`):
 
 ```bash {id="probe-spoke-docs-lint" tier="green" mode="read-only" expect_exit=0 timeout_sec=10 service="platform-docs"}
-uv run platform-docs lint --target . --verify-registry --json
+platform-docs lint --target . --verify-registry --json
 ```
 
 ### 3.3 Compile `/llms.txt`, `/llms-full.txt` & Sync Embedded Kùzu Graph

@@ -58,6 +58,17 @@ DEFAULT_TOKEN_BUDGET = 2000
 # an unbounded amount of store work.
 MAX_K = 100
 MAX_CONTENT_BYTES = 65536
+_RESERVED_EPISODE_METADATA_KEYS: frozenset[str] = frozenset(
+    {
+        "scope",
+        "effectiveness_score",
+        "producer",
+        "origin",
+        "agent_type",
+        "calibration_delta",
+        "_verified_space_scope",
+    }
+)
 
 # Ladder order (ADR-07): a request at level L may see L and every narrower
 # level the caller holds — never a level the caller was not granted.
@@ -161,6 +172,17 @@ class AccessSurface:
         self._llm = llm
         self._storage = storage
 
+    async def audit_denial(self, ctx: ActorContext, action: str, reason: str) -> None:
+        """Emit an explicit security denial AuditRecord (SPEC-01 / EARS.01.03.b050)."""
+        await self._repo.record_audit(
+            tenant_id=ctx.tenant_id,
+            agent_id=ctx.agent_id,
+            project_id=ctx.project_id,
+            action=action,
+            allowed=False,
+            reason=reason,
+        )
+
     async def _expand_neighbors_with_fallback(
         self,
         *,
@@ -169,6 +191,8 @@ class AccessSurface:
         rel: str | None = None,
         depth: int = 1,
         project_id: str | None = None,
+        domain_id: str | None = None,
+        allowed_scopes: Sequence[str] | None = None,
     ) -> Sequence[Mapping[str, Any]]:
         """Query Neo4j primary graph adapter and fall back to PostgreSQL recursive CTE."""
         hits: Sequence[Mapping[str, Any]] = []
@@ -180,6 +204,8 @@ class AccessSurface:
                     depth=depth,
                     tenant_id=tenant_id,
                     project_id=project_id,
+                    domain_id=domain_id,
+                    allowed_scopes=allowed_scopes,
                 )
             except Exception as exc:
                 logger.debug("Graph adapter neighbors query failed for %s: %s", id, exc)
@@ -191,6 +217,8 @@ class AccessSurface:
                     rel=rel,
                     depth=depth,
                     project_id=project_id,
+                    domain_id=domain_id,
+                    allowed_scopes=allowed_scopes,
                 )
             except StoreUnavailable:
                 raise
@@ -320,6 +348,8 @@ class AccessSurface:
                     tenant_id=target.tenant_id,
                     depth=1,
                     project_id=ctx.project_id,
+                    domain_id=eff_domain_id,
+                    allowed_scopes=levels,
                 )
                 if neighbors:
                     prov["related_entities"] = [n.get("id") for n in neighbors]
@@ -390,10 +420,12 @@ class AccessSurface:
         rel: str | None = None,
         depth: int = 1,
         scope: str = "project",
+        domain_id: str | None = None,
     ) -> Sequence[Mapping[str, Any]]:
         """Retrieve connected graph neighbors for an entity (ADR-03 / GraphPort + PG fallback)."""
         target = TargetScope(tenant_id=ctx.tenant_id, scope=scope)
         await self._decide(ctx, "graph_neighbors", target)
+        eff_domain_id = await self._enforce_domain_boundary(ctx, "graph_neighbors", domain_id)
         eff_project_id = ctx.project_id if scope in ("agent", "project") else None
         return await self._expand_neighbors_with_fallback(
             id=id,
@@ -401,6 +433,8 @@ class AccessSurface:
             rel=rel,
             depth=depth,
             project_id=eff_project_id,
+            domain_id=eff_domain_id,
+            allowed_scopes=sorted(ctx.scopes),
         )
 
     async def context_slice(
@@ -410,13 +444,16 @@ class AccessSurface:
         task_id: str,
         depth: int = 6,
         scope: str = "project",
+        domain_id: str | None = None,
         layers: Sequence[str] | None = None,
         max_tokens: int = 2000,
     ) -> Sequence[Mapping[str, Any]]:
         """Retrieve upstream contract closure (ancestors) for an SDD task node."""
         target = TargetScope(tenant_id=ctx.tenant_id, scope=scope)
         await self._decide(ctx, "context_slice", target)
+        eff_domain_id = await self._enforce_domain_boundary(ctx, "context_slice", domain_id)
         eff_project_id = ctx.project_id if scope in ("agent", "project") else None
+        allowed = sorted(ctx.scopes)
         hits: Sequence[Mapping[str, Any]] = []
         if self._graph is not None:
             try:
@@ -425,6 +462,8 @@ class AccessSurface:
                     depth=depth,
                     tenant_id=ctx.tenant_id,
                     project_id=eff_project_id,
+                    domain_id=eff_domain_id,
+                    allowed_scopes=allowed,
                 )
             except Exception:
                 logger.debug("Graph adapter ancestors query failed, falling back to PostgreSQL CTE")
@@ -434,6 +473,8 @@ class AccessSurface:
                 tenant_id=ctx.tenant_id,
                 depth=depth,
                 project_id=eff_project_id,
+                domain_id=eff_domain_id,
+                allowed_scopes=allowed,
             )
 
         # 1. Filter by requested layers if specified
@@ -471,11 +512,14 @@ class AccessSurface:
         doc_id: str,
         depth: int = 6,
         scope: str = "project",
+        domain_id: str | None = None,
     ) -> Sequence[Mapping[str, Any]]:
         """Retrieve downstream dependent nodes (descendants) affected by a change."""
         target = TargetScope(tenant_id=ctx.tenant_id, scope=scope)
         await self._decide(ctx, "blast_radius", target)
+        eff_domain_id = await self._enforce_domain_boundary(ctx, "blast_radius", domain_id)
         eff_project_id = ctx.project_id if scope in ("agent", "project") else None
+        allowed = sorted(ctx.scopes)
         if self._graph is not None:
             try:
                 hits = await self._graph.descendants(
@@ -483,6 +527,8 @@ class AccessSurface:
                     depth=depth,
                     tenant_id=ctx.tenant_id,
                     project_id=eff_project_id,
+                    domain_id=eff_domain_id,
+                    allowed_scopes=allowed,
                 )
                 if hits:
                     return hits
@@ -495,6 +541,8 @@ class AccessSurface:
             tenant_id=ctx.tenant_id,
             depth=depth,
             project_id=eff_project_id,
+            domain_id=eff_domain_id,
+            allowed_scopes=allowed,
         )
 
     async def memory_add(
@@ -514,9 +562,14 @@ class AccessSurface:
             raise ValueError(f"content exceeds {MAX_CONTENT_BYTES} bytes")
         await self._decide(ctx, "memory_add", TargetScope(tenant_id=ctx.tenant_id, scope=scope))
         eff_domain_id = await self._enforce_domain_boundary(ctx, "memory_add", domain_id)
-        merged_meta: dict[str, Any] = dict(metadata) if metadata else {}
-        if scope != "agent":
-            merged_meta["scope"] = scope
+        merged_meta: dict[str, Any] = {
+            k: v
+            for k, v in (dict(metadata) if metadata else {}).items()
+            if k not in _RESERVED_EPISODE_METADATA_KEYS
+        }
+        merged_meta["scope"] = scope
+        if scope == "space":
+            merged_meta["_verified_space_scope"] = True
         if specializations is not None:
             specs_clean = list(
                 dict.fromkeys(str(s).strip() for s in specializations if str(s).strip())
@@ -540,14 +593,7 @@ class AccessSurface:
                     target="episodes:metadata",
                 )
         except MemoryPoisoningError as exc:
-            await self._repo.record_audit(
-                tenant_id=ctx.tenant_id,
-                agent_id=ctx.agent_id,
-                project_id=ctx.project_id,
-                action="memory_add",
-                allowed=False,
-                reason=f"poisoning_rejected: {exc}",
-            )
+            await self.audit_denial(ctx, "memory_add", f"poisoning_rejected: {exc}")
             raise GovernedWriteRejected(str(exc)) from exc
         episode = Episode(
             agent_id=ctx.agent_id,
@@ -561,9 +607,8 @@ class AccessSurface:
         return await self._repo.add_episode(episode)
 
     async def memory_feedback(self, ctx: ActorContext, retrieval_id: str, outcome: str) -> None:
-        """Record a retrieval outcome (useful | not_useful | harmful) — the
-        signal for the SPEC-04 confidence-update rule. Bound to the caller's
-        tenant; a foreign retrieval_id raises KeyError like a missing one."""
+        """Record a retrieval outcome (useful | not_useful | harmful) — enforces ownership
+        and shared-scope quorum."""
         await self._decide(
             ctx, "memory_feedback", TargetScope(tenant_id=ctx.tenant_id, scope="agent")
         )
@@ -571,19 +616,38 @@ class AccessSurface:
             raise ValidationError(
                 "memory_feedback requires an L2 memory retrieval_id, not a kb_section hit"
             )
-        await self._repo.record_feedback(retrieval_id, outcome, tenant_id=ctx.tenant_id)
+        try:
+            await self._repo.record_feedback(
+                retrieval_id,
+                outcome,
+                tenant_id=ctx.tenant_id,
+                caller_agent_id=ctx.agent_id,
+                allow_space_override=("space" in ctx.scopes),
+            )
+        except PermissionError as exc:
+            await self.audit_denial(ctx, "memory_feedback", f"out_of_scope: {exc}")
+            raise AuthzError(f"memory_feedback: {exc}") from exc
 
     async def memory_forget(self, ctx: ActorContext, memory_id: str, *, reason: str) -> None:
-        """Retire a memory (soft: end-date + supersede status; audited with the
-        caller's reason). A foreign memory_id raises KeyError like a missing
-        one — existence never crosses the tenant wall."""
+        """Retire a memory in the caller's authorized scope/ownership boundary."""
         await self._decide(
             ctx,
             "memory_forget",
             TargetScope(tenant_id=ctx.tenant_id, scope="agent"),
             note=reason,
         )
-        await self._repo.retire_memory(memory_id, tenant_id=ctx.tenant_id)
+        try:
+            await self._repo.retire_memory(
+                memory_id,
+                tenant_id=ctx.tenant_id,
+                caller_agent_id=ctx.agent_id,
+                caller_project_id=ctx.project_id,
+                caller_domain_id=ctx.domain_id,
+                allowed_scopes=sorted(ctx.scopes),
+            )
+        except PermissionError as exc:
+            await self.audit_denial(ctx, "memory_forget", f"out_of_scope: {exc}")
+            raise AuthzError(f"memory_forget: {exc}") from exc
 
     async def agent_profile_get(self, ctx: ActorContext) -> AgentProfile:
         """Load the caller's own L3 identity profile — never another agent's.
@@ -699,9 +763,11 @@ class AccessSurface:
         await self._decide(
             ctx, "agent_roster_list", TargetScope(tenant_id=ctx.tenant_id, scope=req_scope)
         )
+        eff_domain_id = await self._enforce_domain_boundary(ctx, "agent_roster_list", domain_id)
+        query_domain = domain_id if "space" in ctx.scopes and domain_id is None else eff_domain_id
         return await self._repo.list_agent_profiles(
             tenant_id=ctx.tenant_id,
-            domain_id=domain_id,
+            domain_id=query_domain,
             agent_type=agent_type,
             role=role,
             specialization=specialization,
@@ -1565,38 +1631,34 @@ class AccessSurface:
         ctx: ActorContext,
         *,
         evidence_ref: str | None,
+        target_agent_id: str | None = None,
         reason: str = "cross_tenant_reassignment",
         purge_episodes: bool = True,
         retire_memories: bool = True,
     ) -> dict[str, Any]:
         """Governed transactional offboarding of a Virtual Employee's private
         scope='agent' space on the caller's tenant."""
+        offboard_agent = target_agent_id or ctx.agent_id
+        req_scope = "space" if offboard_agent != ctx.agent_id else "agent"
         await self._decide(
             ctx,
             "agent_space_offboard",
-            TargetScope(tenant_id=ctx.tenant_id, scope="agent"),
+            TargetScope(tenant_id=ctx.tenant_id, scope=req_scope),
             note=reason,
         )
         if not evidence_ref:
-            await self._repo.record_audit(
-                tenant_id=ctx.tenant_id,
-                agent_id=ctx.agent_id,
-                project_id=ctx.project_id,
-                action="agent_space_offboard",
-                allowed=False,
-                reason="missing_evidence_ref",
-            )
+            await self.audit_denial(ctx, "agent_space_offboard", "missing_evidence_ref")
             raise GovernedWriteRejected("agent_space_offboard requires evidence_ref")
 
         counts = await self._repo.offboard_agent_space(
             tenant_id=ctx.tenant_id,
-            agent_id=ctx.agent_id,
+            agent_id=offboard_agent,
             reason=reason,
             purge_episodes=purge_episodes,
             retire_memories=retire_memories,
         )
         return {
-            "agent_id": ctx.agent_id,
+            "agent_id": offboard_agent,
             "tenant_id": ctx.tenant_id,
             "reason": reason,
             "evidence_ref": evidence_ref,
@@ -1777,13 +1839,16 @@ class AccessSurface:
                 reason=f"poisoning_rejected: {exc}",
             )
             raise GovernedWriteRejected(str(exc)) from exc
+        eff_domain = await self._enforce_domain_boundary(ctx, "knowledge_ingest", None)
         section = KBSection(
             doc_id=doc_id,
             citation=citation,
             text=vetted_text,
-            project_id=ctx.project_id,
+            project_id=None if scope in ("domain", "space") else ctx.project_id,
+            domain_id=eff_domain if scope == "domain" else None,
             tenant_id=ctx.tenant_id,
             scope=scope,
+            agent_id=ctx.agent_id,
             version=version,
             modality=modality,
             blob_sha256=blob_sha256,
@@ -1862,10 +1927,11 @@ class AccessSurface:
                     doc_id=s.doc_id,
                     citation=s.citation,
                     text=vetted_text,
-                    project_id=ctx.project_id,
+                    project_id=None if target_scope in ("domain", "space") else ctx.project_id,
                     tenant_id=ctx.tenant_id,
                     domain_id=eff_sec_dom,
                     scope=target_scope,
+                    agent_id=ctx.agent_id,
                     version=s.version,
                     modality=s.modality,
                     blob_sha256=s.blob_sha256,
@@ -1909,7 +1975,9 @@ class AccessSurface:
                 ]
                 if updates and hasattr(self._repo, "set_kb_sections_embedding_batch"):
                     await self._repo.set_kb_sections_embedding_batch(
-                        updates, embedding_model=model_name
+                        updates,
+                        tenant_id=ctx.tenant_id,
+                        embedding_model=model_name,
                     )
             except Exception as exc:  # noqa: BLE001  # reason: offline/degraded LLM must not fail canonical section ingestion
                 logger.debug("Skipping section embedding in knowledge_ingest_batch: %s", exc)
@@ -1948,8 +2016,10 @@ class AccessSurface:
             "tenant_id": ctx.tenant_id,
             "project_id": ctx.project_id,
             "domain_id": eff_domain_id,
+            "agent_id": ctx.agent_id,
             "query_vec": eff_vec,
             "scope": scope,
+            "allowed_scopes": sorted(ctx.scopes),
             "limit": limit,
         }
         if modality is not None:
@@ -1976,6 +2046,8 @@ class AccessSurface:
                     tenant_id=ctx.tenant_id,
                     depth=safe_depth,
                     project_id=eff_project_id,
+                    domain_id=eff_domain_id,
+                    allowed_scopes=sorted(ctx.scopes),
                 )
                 for hit in hits:
                     nid = str(hit.get("id", ""))
@@ -2210,11 +2282,22 @@ class AccessSurface:
         steps: Sequence[KBRunbookStep],
         evidence_ref: str | None,
         scope: str = "project",
+        _preauthorized: bool = False,
     ) -> dict[str, Any]:
         """Governed write of L0 kb_documents and kb_runbook_steps (ADR-06)."""
-        await self._decide(
-            ctx, "docs_ingest_runbook", TargetScope(tenant_id=ctx.tenant_id, scope=scope)
-        )
+        if not _preauthorized:
+            await self._decide(
+                ctx, "docs_ingest_runbook", TargetScope(tenant_id=ctx.tenant_id, scope=scope)
+            )
+        else:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="docs_ingest_runbook",
+                allowed=True,
+                reason=f"allowed: preauthorized scope {scope!r}",
+            )
         if not evidence_ref:
             await self._repo.record_audit(
                 tenant_id=ctx.tenant_id,
@@ -2318,10 +2401,11 @@ class AccessSurface:
             last_verified=doc.last_verified,
             review_ttl_days=doc.review_ttl_days,
             git_commit_sha=evidence_ref,
-            project_id=ctx.project_id,
+            project_id=None if eff_scope in ("domain", "space") else ctx.project_id,
             domain_id=eff_doc_dom,
             tenant_id=ctx.tenant_id,
             scope=eff_scope,
+            agent_id=ctx.agent_id,
         )
         try:
             await self._repo.upsert_kb_document(locked_doc)
@@ -2368,7 +2452,9 @@ class AccessSurface:
             tenant_id=ctx.tenant_id,
             project_id=ctx.project_id,
             domain_id=eff_slice_dom,
+            agent_id=ctx.agent_id,
             scope=scope,
+            allowed_scopes=sorted(ctx.scopes),
             doc_id=doc_id,
             alert_id=alert_id,
             max_tier=max_tier,

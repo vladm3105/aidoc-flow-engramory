@@ -8,17 +8,29 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from collections.abc import Sequence
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# P14 Control chars, Bidi overrides, Zero-Width chars, and Unicode Tag block
+# P14 Control chars, Bidi overrides, Zero-Width chars, Variation Selectors
+# (excluding U+FE0F emoji VS16), and Unicode Tag block
 _CTRL_AND_BIDI_RE = re.compile(
     r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f"
-    r"\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff"
-    r"\U000e0000-\U000e007f]"
+    r"\u00ad\u034f\u061c\u200b-\u200f\u202a-\u202e\u2060\u2066-\u2069"
+    r"\ufe00-\ufe0e\ufeff"
+    r"\U000e0000-\U000e007f\U000e0100-\U000e01ef]"
 )
+_VARIATION_SELECTOR_16_RE = re.compile(r"\ufe0f")
+
+
+def _normalize_for_match(text: str) -> str:
+    """Strip invisible evasion characters and apply NFKC normalization before matching."""
+    stripped = _CTRL_AND_BIDI_RE.sub("", text)
+    stripped = _VARIATION_SELECTOR_16_RE.sub("", stripped)
+    return unicodedata.normalize("NFKC", stripped)
+
 
 # OWASP ASI03: Indirect prompt injection patterns in shared memory
 _INJECTION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
@@ -56,9 +68,35 @@ _SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ),
     ("secret_openbao_token", re.compile(r"\bhvs\.[A-Za-z0-9_-]{24,255}\b")),
     ("secret_llm_api_key", re.compile(r"\bsk-(?:proj-|ant-)?[A-Za-z0-9_-]{24,255}\b")),
+    (
+        "secret_bearer_auth",
+        re.compile(r"(?i)\bAuthorization\s*:\s*Bearer\s+[A-Za-z0-9._~+/=-]{8,}"),
+    ),
+    (
+        "secret_basic_auth",
+        re.compile(r"(?i)\bAuthorization\s*:\s*Basic\s+[A-Za-z0-9+/=]{8,}"),
+    ),
+    (
+        "secret_jwt",
+        re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"),
+    ),
+    (
+        "secret_dsn_credentials",
+        re.compile(
+            r"\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|rediss|amqp|nats)"
+            r"://[^:\s/@]+:[^@\s]+@[^\s]+"
+        ),
+    ),
 ]
 
+_PRIVATE_KEY_BLOCK_RE = re.compile(
+    r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP |ENCRYPTED |PRIVATE )?PRIVATE KEY-----"
+    r"[\s\S]*?"
+    r"(?:-----END (?:RSA |EC |OPENSSH |DSA |PGP |ENCRYPTED |PRIVATE )?PRIVATE KEY-----|$)"
+)
+
 _PORTABLE_REDACT_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("[REDACTED_SECRET]", _PRIVATE_KEY_BLOCK_RE),
     *_SECRET_PATTERNS,
     (
         "[REDACTED_EMAIL]",
@@ -86,7 +124,7 @@ def sanitize_portable_text(text: str, *, redact_terms: Sequence[str] = ()) -> tu
 
     Returns (sanitized_text, redaction_count).
     """
-    cleaned = text
+    cleaned = _normalize_for_match(text)
     total_redactions = 0
     for replacement, pattern in _PORTABLE_REDACT_PATTERNS:
         label = replacement if replacement.startswith("[REDACTED_") else "[REDACTED_SECRET]"
@@ -143,20 +181,36 @@ def has_dangerous_unicode(text: str) -> bool:
 
 def detect_prompt_injection(text: str) -> list[str]:
     """Return list of matched prompt injection pattern IDs."""
+    norm_text = _normalize_for_match(text)
     matches: list[str] = []
     for pid, pattern in _INJECTION_PATTERNS:
-        if pattern.search(text):
+        if pattern.search(norm_text):
             matches.append(pid)
     return matches
 
 
 def detect_hard_secrets(text: str) -> list[str]:
     """Return list of matched hard secret pattern IDs."""
+    norm_text = _normalize_for_match(text)
     matches: list[str] = []
     for sid, pattern in _SECRET_PATTERNS:
-        if pattern.search(text):
+        if pattern.search(norm_text):
             matches.append(sid)
     return matches
+
+
+def redact_hard_secrets(text: str, *, replacement: str = "[REDACTED-BY-D14]") -> str:
+    """Scrub forbidden control/bidi characters and redact multiline PEM keys and secrets."""
+    cleaned = _CTRL_AND_BIDI_RE.sub("", text)
+    cleaned = _PRIVATE_KEY_BLOCK_RE.sub(replacement, cleaned)
+    for _sid, pattern in _SECRET_PATTERNS:
+        cleaned = pattern.sub(replacement, cleaned)
+    if detect_hard_secrets(cleaned):
+        cleaned = _normalize_for_match(cleaned)
+        cleaned = _PRIVATE_KEY_BLOCK_RE.sub(replacement, cleaned)
+        for _sid, pattern in _SECRET_PATTERNS:
+            cleaned = pattern.sub(replacement, cleaned)
+    return cleaned
 
 
 def inspect_memory_write(
@@ -188,10 +242,8 @@ def inspect_memory_write(
             "Memory poisoning blocked: forbidden Unicode control/bidi/tag characters (P14)"
         )
 
-    # 2. OWASP ASI03 Indirect Prompt Injection (normalized with NFKC to defeat fullwidth homoglyphs)
-    import unicodedata
-
-    norm_content = unicodedata.normalize("NFKC", content)
+    # 2. OWASP ASI03 Indirect Prompt Injection (normalized with NFKC + invisible strip)
+    norm_content = _normalize_for_match(content)
     injections = detect_prompt_injection(norm_content)
     if injections:
         raise MemoryPoisoningError(

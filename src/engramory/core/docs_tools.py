@@ -18,8 +18,10 @@ import fnmatch
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess  # nosec B404 # reason: controlled CLI invocations for vale, git diff, and green smoke probes
+import urllib.parse
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -29,10 +31,8 @@ from typing import Any
 import yaml
 
 from engramory.access.poisoning_guard import (
-    _CTRL_AND_BIDI_RE,
-    _SECRET_PATTERNS,
     detect_hard_secrets,
-    has_dangerous_unicode,
+    redact_hard_secrets,
 )
 from engramory.core.citations import build_doc_id, generate_evidence_ref
 from engramory.core.models import (
@@ -316,11 +316,23 @@ _AMBIGUOUS_SUBJECT_RE = re.compile(
 )
 _BARE_LOCALHOST_RE = re.compile(r"\bhttps?://localhost:\d+\b")
 
-_SENSITIVE_ENV_RE = re.compile(
-    r"(?:SECRET|TOKEN|PASSWORD|PASSWD|PRIVATE_KEY|API_KEY|DATABASE_URL|DSN|CREDENTIAL|AUTH"
-    r"|AWS_ACCESS_KEY_ID|GOOGLE_APPLICATION_CREDENTIALS|SSH_AUTH_SOCK|KUBECONFIG)",
-    re.IGNORECASE,
+_ALLOWED_SMOKE_ENV_KEYS = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "TERM",
+        "TZ",
+        "TMPDIR",
+        "USER",
+        "VIRTUAL_ENV",
+        "UV_CACHE_DIR",
+        "UV_PYTHON",
+    }
 )
+_SHELL_META_RE = re.compile(r"[`$|;&><\r\n\x00]|\$\(|\$\{")
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 _FENCE_OPEN_RE = re.compile(r"^(`{3,}|~{3,})([^\n`~]*)$")
 _ATTR_BLOCK_RE = re.compile(r"\{([^}]+)\}\s*$")
@@ -359,9 +371,45 @@ class ParsedMarkdownDocument:
     body_text: str = ""
 
 
+def has_symlink_component(file_path: Path, root: Path | None = None) -> bool:
+    """Return True if `file_path` or any component below `root` is a symlink before `.resolve()`."""
+    if file_path.is_symlink():
+        return True
+    if root is None:
+        return False
+
+    rel: Path | None = None
+    base_dir: Path | None = None
+    if not file_path.is_absolute():
+        base_dir = root
+        rel = file_path
+    else:
+        for candidate_root in (root, root.resolve()):
+            try:
+                rel = file_path.relative_to(candidate_root)
+                base_dir = candidate_root
+                break
+            except ValueError:
+                continue
+
+    if rel is None or base_dir is None:
+        return False
+
+    cur = base_dir
+    for part in rel.parts:
+        if part in ("", "."):
+            continue
+        cur = cur / part
+        if cur.is_symlink():
+            return True
+    return False
+
+
 def _is_within_root(file_path: Path, root: Path) -> bool:
-    """Verify resolved `file_path` stays inside resolved `root` (blocks symlink escape)."""
+    """Verify `file_path` has no symlink components under `root` and resolves within `root`."""
     try:
+        if has_symlink_component(file_path, root):
+            return False
         return file_path.resolve().is_relative_to(root.resolve())
     except OSError:
         return False
@@ -385,11 +433,14 @@ def resolve_confined_repo_path(
     """Resolve `path` and verify it stays within `allowed_root` (or workspace boundary)."""
     if allowed_root is None:
         env_root = os.environ.get("ENGRAMORY_ALLOWED_DOCS_ROOT", "").strip()
-        base = Path(env_root).resolve() if env_root else Path.cwd().resolve()
+        raw_base = Path(env_root) if env_root else Path.cwd()
+        base = raw_base.resolve()
     else:
+        raw_base = allowed_root
         base = allowed_root.resolve()
 
     effective_base = base
+    raw_effective_base = raw_base
     if enforce_project_boundary:
         if (
             not project_id
@@ -400,42 +451,418 @@ def resolve_confined_repo_path(
         ):
             raise ValidationError("Valid project_id is required when enforce_project_boundary=True")
         clean_proj = project_id.strip()
-        effective_base = base if base.name == clean_proj else (base / clean_proj).resolve()
+        if base.name == clean_proj:
+            effective_base = base
+            raw_effective_base = raw_base
+        else:
+            raw_effective_base = raw_base / clean_proj
+            effective_base = (base / clean_proj).resolve()
         if not effective_base.is_relative_to(base):
             raise ValidationError(f"Path '{path}' is outside allowed boundary")
 
     raw = Path(path)
     if raw.is_absolute():
+        raw_lexical = raw
         candidate = raw.resolve()
     elif enforce_project_boundary and effective_base != base:
         if raw.parts and raw.parts[0] == effective_base.name:
+            raw_lexical = raw_base / raw
             candidate = (base / raw).resolve()
         else:
+            raw_lexical = raw_effective_base / raw
             candidate = (effective_base / raw).resolve()
     else:
+        raw_cwd = Path.cwd() / raw
         cwd_candidate = (Path.cwd().resolve() / raw).resolve()
         if allowed_root is not None and not cwd_candidate.is_relative_to(base):
+            raw_lexical = raw_base / raw
             candidate = (base / raw).resolve()
         else:
+            raw_lexical = raw_cwd
             candidate = cwd_candidate
 
-    if not candidate.is_relative_to(base) or not candidate.is_relative_to(effective_base):
+    symlink_root = raw_effective_base if enforce_project_boundary else raw_base
+    if has_symlink_component(raw_lexical, symlink_root) or (
+        not candidate.is_relative_to(base) or not candidate.is_relative_to(effective_base)
+    ):
         raise ValidationError("Requested path is outside allowed boundary")
     return candidate
+
+
+def _is_loopback_http_url(url_str: str) -> bool:
+    """Return True iff `url_str` is an http/https URL without credentials targeting loopback."""
+    parsed = urllib.parse.urlparse(url_str)
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    if parsed.username or parsed.password:
+        return False
+    host = (parsed.hostname or "").strip("[]").lower()
+    return host in _LOOPBACK_HOSTS
+
+
+def _has_parent_traversal(token: str) -> bool:
+    """Return True if a CLI argument contains `..` path traversal or control bytes."""
+    return ".." in Path(token).parts or "\x00" in token
+
+
+def _validate_curl_argv(argv: list[str]) -> list[str]:
+    violations: list[str] = []
+    banned_flags = {
+        "-d",
+        "--data",
+        "--data-raw",
+        "--data-binary",
+        "--data-urlencode",
+        "--data-ascii",
+        "-F",
+        "--form",
+        "--form-string",
+        "-T",
+        "--upload-file",
+        "--json",
+        "-K",
+        "--config",
+        "-o",
+        "--output",
+        "-O",
+        "--remote-name",
+        "-L",
+        "--location",
+        "-D",
+        "--dump-header",
+        "-c",
+        "--cookie-jar",
+    }
+    urls: list[str] = []
+    idx = 1
+    while idx < len(argv):
+        tok = argv[idx]
+        if tok.startswith("@"):
+            violations.append(f"Disallowed curl @file argument '{tok}' in tier='green'")
+            idx += 1
+            continue
+        if tok in banned_flags or any(tok.startswith(f"{bf}=") for bf in banned_flags):
+            violations.append(
+                f"Mutating or file-writing curl flag '{tok}' is prohibited in tier='green'"
+            )
+            idx += 1
+            continue
+        if tok in {"-X", "--request"}:
+            if idx + 1 >= len(argv):
+                violations.append("Missing HTTP method after curl -X/--request")
+                break
+            method = argv[idx + 1].upper()
+            if method not in {"GET", "HEAD"}:
+                violations.append(f"HTTP method '{method}' is prohibited in tier='green'")
+            idx += 2
+            continue
+        if tok.startswith("-X") and len(tok) > 2:
+            method = tok[2:].upper()
+            if method not in {"GET", "HEAD"}:
+                violations.append(f"HTTP method '{method}' is prohibited in tier='green'")
+            idx += 1
+            continue
+        if tok.startswith("--request="):
+            method = tok.split("=", 1)[1].upper()
+            if method not in {"GET", "HEAD"}:
+                violations.append(f"HTTP method '{method}' is prohibited in tier='green'")
+            idx += 1
+            continue
+        if tok in {"-m", "--max-time", "--connect-timeout"}:
+            if idx + 1 >= len(argv):
+                violations.append(f"Missing numeric value for '{tok}'")
+                break
+            try:
+                if float(argv[idx + 1]) <= 0:
+                    violations.append(f"Timeout for '{tok}' must be positive")
+            except ValueError:
+                violations.append(f"Invalid numeric timeout '{argv[idx + 1]}'")
+            idx += 2
+            continue
+        if tok in {"-w", "--write-out", "-H", "--header"}:
+            if idx + 1 >= len(argv):
+                violations.append(f"Missing argument after '{tok}'")
+                break
+            idx += 2
+            continue
+        if tok in {"--silent", "--show-error", "--fail", "--head"}:
+            idx += 1
+            continue
+        if (
+            tok.startswith("-")
+            and not tok.startswith("--")
+            and len(tok) > 1
+            and set(tok[1:]) <= {"s", "S", "f", "I"}
+        ):
+            idx += 1
+            continue
+        if tok.startswith("-"):
+            violations.append(f"Unallowlisted curl flag '{tok}' in tier='green'")
+            idx += 1
+            continue
+        urls.append(tok)
+        idx += 1
+
+    if not urls:
+        violations.append("curl probe in tier='green' must specify a loopback http(s) URL")
+    for url in urls:
+        if not _is_loopback_http_url(url):
+            violations.append(f"curl URL '{url}' must target loopback (127.0.0.1/localhost/::1)")
+    return violations
+
+
+def _validate_xh_argv(argv: list[str]) -> list[str]:
+    violations: list[str] = []
+    allowed_flags = {"--check-status", "--headers", "--body", "--quiet", "-q"}
+    value_flags = {"--timeout"}
+    urls: list[str] = []
+    saw_method = False
+    idx = 1
+    while idx < len(argv):
+        tok = argv[idx]
+        if tok in allowed_flags:
+            idx += 1
+            continue
+        if tok in value_flags:
+            if idx + 1 >= len(argv):
+                violations.append(f"Missing value after '{tok}'")
+                break
+            idx += 2
+            continue
+        if tok.startswith("--timeout="):
+            idx += 1
+            continue
+        if tok.startswith("-"):
+            violations.append(f"Unallowlisted xh flag '{tok}' in tier='green'")
+            idx += 1
+            continue
+        if not saw_method and tok.upper() in {"GET", "HEAD", "POST", "PUT", "DELETE", "PATCH"}:
+            saw_method = True
+            if tok.upper() not in {"GET", "HEAD"}:
+                violations.append(f"HTTP method '{tok.upper()}' is prohibited in tier='green'")
+            idx += 1
+            continue
+        urls.append(tok)
+        idx += 1
+
+    if not urls:
+        violations.append("xh probe in tier='green' must specify a loopback http(s) URL")
+    for url in urls:
+        if not _is_loopback_http_url(url):
+            violations.append(f"xh URL '{url}' must target loopback (127.0.0.1/localhost/::1)")
+    return violations
+
+
+def _validate_docs_cli_argv(argv: list[str], tool_name: str) -> list[str]:
+    violations: list[str] = []
+    rest = argv[1:]
+    if "--json" in rest:
+        rest = [tok for tok in rest if tok != "--json"]
+
+    for tok in rest:
+        if tok in {"-c", "-m", "--eval", "--write", "--write-files"} or tok.startswith("--output"):
+            violations.append(f"Disallowed flag '{tok}' in tier='green'")
+        if _has_parent_traversal(tok):
+            violations.append(f"Path traversal '{tok}' is prohibited in tier='green'")
+
+    if tool_name == "engramory":
+        if rest[:1] == ["status"] and len(rest) == 1:
+            return violations
+        if len(rest) >= 2 and rest[0] == "docs":
+            sub = rest[1]
+            if sub not in {"tools", "lint", "check-drift", "slice-runbook", "smoke-run"}:
+                violations.append(
+                    f"Subcommand 'engramory docs {sub}' is not allowed in tier='green'"
+                )
+                return violations
+            if (
+                sub == "smoke-run"
+                and "--dry-run" not in rest
+                and not ("--tier" in rest and "green" in rest)
+            ):
+                violations.append(
+                    "engramory docs smoke-run in tier='green' requires --tier green or --dry-run"
+                )
+            return violations
+        if len(rest) >= 2 and rest[0] == "sdd":
+            sub = rest[1]
+            if sub not in {
+                "validate-graph",
+                "check-invariants",
+                "lint-policy",
+                "slice",
+                "blast-radius",
+            }:
+                violations.append(
+                    f"Subcommand 'engramory sdd {sub}' is not allowed in tier='green'"
+                )
+            return violations
+        violations.append(
+            f"Command '{' '.join(argv)}' is not an allowlisted read-only engramory probe"
+        )
+        return violations
+
+    # platform-docs
+    if not rest or rest[0] not in {"status", "lint", "tools", "check-drift", "smoke-run"}:
+        violations.append(
+            f"Subcommand '{' '.join(argv)}' is not an allowlisted read-only platform-docs probe"
+        )
+        return violations
+    if rest[0] == "smoke-run":
+        tier_bad = any(
+            (tok.startswith("--tier=") and tok.split("=", 1)[1] != "green") for tok in rest
+        )
+        if "--tier" in rest:
+            t_idx = rest.index("--tier")
+            if t_idx + 1 >= len(rest) or rest[t_idx + 1] != "green":
+                tier_bad = True
+        if tier_bad or (
+            "--dry-run" not in rest
+            and "--tier" not in rest
+            and not any(t == "--tier=green" for t in rest)
+        ):
+            violations.append(
+                "platform-docs smoke-run in tier='green' must restrict to --tier green or --dry-run"
+            )
+    for idx, tok in enumerate(rest):
+        if tok == "--endpoint" and idx + 1 < len(rest) and not _is_loopback_http_url(rest[idx + 1]):
+            violations.append(f"platform-docs endpoint '{rest[idx + 1]}' must target loopback")
+        if tok.startswith("--endpoint=") and not _is_loopback_http_url(tok.split("=", 1)[1]):
+            violations.append("platform-docs --endpoint must target loopback")
+    return violations
+
+
+def _validate_git_argv(argv: list[str]) -> list[str]:
+    violations: list[str] = []
+    if len(argv) < 2:
+        return ["git probe in tier='green' requires a read-only subcommand"]
+    sub = argv[1]
+    if sub not in {"status", "rev-parse", "diff", "log", "ls-files", "branch"}:
+        return [f"git subcommand '{sub}' is prohibited in tier='green'"]
+    for tok in argv[2:]:
+        if (
+            tok
+            in {
+                "-c",
+                "--git-dir",
+                "--work-tree",
+                "--exec-path",
+                "--upload-pack",
+                "--ext-diff",
+                "--textconv",
+                "--exec",
+            }
+            or tok.startswith(
+                ("--output", "--upload-pack=", "--git-dir=", "--work-tree=", "--exec=")
+            )
+            or _has_parent_traversal(tok)
+        ):
+            violations.append(f"Disallowed git option '{tok}' in tier='green'")
+    if sub == "branch" and argv[2:] != ["--show-current"]:
+        violations.append("git branch in tier='green' is restricted to --show-current")
+    return violations
+
+
+def parse_and_validate_green_command(command_body: str) -> tuple[list[str] | None, list[str]]:
+    """Parse and strictly allowlist-validate a `tier='green'` probe command for `shell=False`."""
+    unwrapped = re.sub(r"\\\r?\n\s*", " ", command_body)
+    active_lines = [
+        ln.strip()
+        for ln in unwrapped.splitlines()
+        if ln.strip() and not ln.lstrip().startswith("#")
+    ]
+    if not active_lines:
+        return None, ["Empty tier='green' command"]
+    if len(active_lines) != 1:
+        return None, ["Multi-line or compound commands are prohibited in tier='green'"]
+
+    cleaned = active_lines[0]
+    if _SHELL_META_RE.search(cleaned):
+        return None, [
+            "Shell metacharacters, pipes, redirections, or variable expansions "
+            "are prohibited in tier='green'"
+        ]
+
+    try:
+        argv = shlex.split(cleaned, posix=True)
+    except ValueError as exc:
+        return None, [f"Malformed shell quoting in tier='green': {exc}"]
+    if not argv:
+        return None, ["Empty command after tokenization"]
+
+    cmd = argv[0]
+    disallowed_cmds = {
+        "bash",
+        "sh",
+        "zsh",
+        "dash",
+        "env",
+        "uv",
+        "python",
+        "python3",
+        "perl",
+        "ruby",
+        "node",
+        "eval",
+        "exec",
+        "source",
+    }
+    if cmd in disallowed_cmds or "/" in cmd:
+        return None, [f"Command or wrapper '{cmd}' is prohibited in tier='green'"]
+
+    if cmd in {"engramory", "platform-docs"}:
+        violations = _validate_docs_cli_argv(argv, cmd)
+    elif cmd == "curl":
+        violations = _validate_curl_argv(argv)
+    elif cmd == "xh":
+        violations = _validate_xh_argv(argv)
+    elif cmd == "git":
+        violations = _validate_git_argv(argv)
+    elif cmd in {"true", "pwd"}:
+        violations = (
+            [] if len(argv) == 1 else [f"Command '{cmd}' accepts no arguments in tier='green'"]
+        )
+    elif cmd == "echo":
+        violations = []
+    elif cmd == "printenv":
+        if len(argv) > 2 or (
+            len(argv) == 2 and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", argv[1])
+        ):
+            violations = ["printenv in tier='green' accepts 0 or 1 valid variable name"]
+        else:
+            violations = []
+    elif cmd == "test":
+        if (
+            len(argv) != 3
+            or argv[1] not in {"-z", "-n", "-e", "-f", "-d", "-r"}
+            or _has_parent_traversal(argv[2])
+            or argv[2].startswith("/")
+        ):
+            violations = [
+                "test in tier='green' is restricted to unary relative checks (-z|-n|-e|-f|-d|-r)"
+            ]
+        else:
+            violations = []
+    else:
+        violations = [f"Command '{cmd}' is not on the strict tier='green' read-only allowlist"]
+
+    return (None if violations else argv), violations
 
 
 def check_green_step_safety(command_body: str) -> list[str]:
     """Verify Google SRE defense-in-depth INV-STEP-02 on a tier='green' command body."""
     violations: list[str] = []
-    # Collapse backslash line-continuations first so split tokens cannot bypass regexes
     unwrapped = re.sub(r"\\\r?\n\s*", " ", command_body)
-    # Strip full-line comments before checking patterns
     active_lines = [
         ln for ln in unwrapped.splitlines() if ln.strip() and not ln.lstrip().startswith("#")
     ]
     cleaned = "\n".join(active_lines)
     for pattern, reason in _GREEN_BANNED_PATTERNS:
         if pattern.search(cleaned):
+            violations.append(reason)
+    _, allowlist_violations = parse_and_validate_green_command(command_body)
+    for reason in allowlist_violations:
+        if reason not in violations:
             violations.append(reason)
     return violations
 
@@ -492,6 +919,11 @@ def parse_markdown_document(
     scope: str = "project",
 ) -> ParsedMarkdownDocument:
     """Parse a Markdown file's YAML frontmatter and annotated executable runbook code blocks."""
+    if file_path.is_symlink() or (
+        repo_root is not None and not _is_within_root(file_path, repo_root)
+    ):
+        raise ValidationError("Requested path is outside allowed boundary")
+
     resolved_file = file_path.resolve()
     if repo_root is not None:
         try:
@@ -1288,6 +1720,8 @@ def lint_repo(
     verify_registry: bool = False,
 ) -> dict[str, Any]:
     """Lint a single Markdown file or all governed docs in a repository."""
+    if target_path.is_symlink():
+        raise ValidationError("Requested path is outside allowed boundary")
     resolved = target_path.resolve()
     repo_root = resolved if resolved.is_dir() else resolved.parent
     for parent in [repo_root, *repo_root.parents]:
@@ -1296,6 +1730,8 @@ def lint_repo(
             break
 
     if resolved.is_file():
+        if not _is_within_root(target_path, repo_root):
+            raise ValidationError("Requested path is outside allowed boundary")
         files = [resolved]
     else:
         if (resolved / "docs").is_dir():
@@ -1390,13 +1826,8 @@ def run_governed_lint(
 
 
 def _build_scrubbed_env() -> dict[str, str]:
-    """Return a copy of os.environ with all secret/token/DB variables stripped."""
-    clean: dict[str, str] = {}
-    for k, v in os.environ.items():
-        if _SENSITIVE_ENV_RE.search(k):
-            continue
-        clean[k] = v
-    return clean
+    """Return a minimal environment allowlist stripped of secrets, tokens, and DSNs."""
+    return {k: v for k, v in os.environ.items() if k in _ALLOWED_SMOKE_ENV_KEYS}
 
 
 def smoke_run_green_steps(
@@ -1405,11 +1836,15 @@ def smoke_run_green_steps(
     doc_id: str | None = None,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    """Verify and execute (or syntax-check in dry_run) only tier='green' mode='read-only' steps."""
+    """Verify and run (or allowlist-check in dry_run) tier='green' mode='read-only' steps."""
+    if repo_path.is_symlink():
+        raise ValidationError("Requested path is outside allowed boundary")
+    if repo_path.is_symlink():
+        raise ValidationError("Requested path is outside allowed boundary")
     root = repo_path.resolve()
     bound_root = root if root.is_dir() else root.parent
     raw_files = (
-        [root]
+        [repo_path]
         if root.is_file()
         else sorted((root / "docs").rglob("*.md"))
         if (root / "docs").is_dir()
@@ -1436,12 +1871,30 @@ def smoke_run_green_steps(
         ):
             continue
 
+        resolved_doc_id = parsed.kb_document.doc_id if parsed.kb_document else f.stem
+        for diag in parsed.diagnostics:
+            if diag.rule_id in {"INV-STEP-01", "INV-STEP-02"}:
+                failed += 1
+                results.append(
+                    {
+                        "step_uid": f"{resolved_doc_id}#diag-L{diag.line}",
+                        "doc_id": resolved_doc_id,
+                        "mode": "ast_guard",
+                        "status": "blocked_by_ast_guard",
+                        "rule_id": diag.rule_id,
+                        "line": diag.line,
+                        "violations": [diag.message],
+                    }
+                )
+
         for step in parsed.steps:
             if step.tier != "green" or step.mode != "read-only":
                 continue
 
-            safety_issues = check_green_step_safety(step.command_body)
-            if safety_issues:
+            argv, allow_issues = parse_and_validate_green_command(step.command_body)
+            safety_issues = check_green_step_safety(step.command_body) if allow_issues else []
+            all_issues = list(dict.fromkeys([*safety_issues, *allow_issues]))
+            if argv is None or all_issues:
                 failed += 1
                 results.append(
                     {
@@ -1449,41 +1902,34 @@ def smoke_run_green_steps(
                         "step_id": step.step_id,
                         "doc_id": step.doc_id,
                         "status": "blocked_by_ast_guard",
-                        "violations": safety_issues,
+                        "violations": all_issues,
                     }
                 )
                 continue
 
             if dry_run:
-                proc = subprocess.run(  # nosec B603 B607 # reason: bash -n syntax-only dry run with scrubbed env and INV-STEP-02 guard
-                    ["bash", "-n"],
-                    input=step.command_body,
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                    env=scrubbed_env,
-                    check=False,
-                )
-                ok = proc.returncode == 0
-                if ok:
-                    passed += 1
-                else:
-                    failed += 1
+                passed += 1
                 results.append(
                     {
                         "step_uid": step.step_uid,
                         "step_id": step.step_id,
                         "doc_id": step.doc_id,
-                        "mode": "dry_run_syntax_check",
-                        "status": "ok" if ok else "failed",
-                        "exit_code": proc.returncode,
-                        "stderr": proc.stderr[:MAX_SMOKE_OUTPUT_BYTES],
+                        "mode": "dry_run_allowlist_check",
+                        "status": "ok",
+                        "exit_code": 0,
+                        "argv": argv,
                     }
                 )
             else:
+                exec_argv = (
+                    ["runsc", "--network=none", "do", "--", *argv]
+                    if os.environ.get("ENGRAMORY_SMOKE_SANDBOX", "").lower() == "gvisor"
+                    else argv
+                )
                 try:
-                    proc = subprocess.run(  # nosec B603 B607 # reason: read-only tier=green probe verified by check_green_step_safety with scrubbed env
-                        ["bash", "-c", step.command_body],
+                    proc = subprocess.run(  # nosec B603 # reason: shell=False allowlisted argv probe verified by parse_and_validate_green_command with minimal env allowlist
+                        exec_argv,
+                        shell=False,
                         capture_output=True,
                         text=True,
                         timeout=step.timeout_sec,
@@ -1521,6 +1967,18 @@ def smoke_run_green_steps(
                             "timeout_sec": step.timeout_sec,
                         }
                     )
+                except OSError as exc:
+                    failed += 1
+                    results.append(
+                        {
+                            "step_uid": step.step_uid,
+                            "step_id": step.step_id,
+                            "doc_id": step.doc_id,
+                            "mode": "live_green_probe",
+                            "status": "failed",
+                            "stderr": str(exc)[:MAX_SMOKE_OUTPUT_BYTES],
+                        }
+                    )
 
     return {
         "status": "failed" if failed > 0 else "ok",
@@ -1551,6 +2009,8 @@ def check_repo_drift(
     today: date | None = None,
 ) -> dict[str, Any]:
     """Detect code-to-doc drift against `watched_paths` globs and `last_verified` TTL expiry."""
+    if repo_path.is_symlink():
+        raise ValidationError("Requested path is outside allowed boundary")
     root = repo_path.resolve()
     ref_date = today or date.today()
     safe_base = _validate_git_ref(base_ref, "base_ref")
@@ -1686,13 +2146,16 @@ def check_repo_drift(
 
 
 def _scrub_manifest_text(text: str) -> str:
-    """Scrub P14 control/bidi/tag characters and redact all D14 secret classes before export."""
-    if has_dangerous_unicode(text):
-        text = _CTRL_AND_BIDI_RE.sub("", text)
-    if detect_hard_secrets(text):
-        for _sid, pattern in _SECRET_PATTERNS:
-            text = pattern.sub("[REDACTED-BY-D14]", text)
-    return text
+    """Scrub P14 control/bidi/tag chars and redact multiline PEM keys & secrets before export."""
+    return redact_hard_secrets(text, replacement="[REDACTED-BY-D14]")
+
+
+def _scrub_manifest_inline(text: str) -> str:
+    """Scrub inline manifest metadata (doc_id, title, rel_path) against injection and newlines."""
+    cleaned = _scrub_manifest_text(text)
+    cleaned = re.sub(r"[\r\n\t]+", " ", cleaned)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+    return cleaned.lstrip("#").strip() if cleaned.startswith("#") else cleaned
 
 
 def export_repo_llms(
@@ -1702,15 +2165,19 @@ def export_repo_llms(
     include_full: bool = True,
 ) -> dict[str, Any]:
     """Generate deterministic, prompt-cache friendly `/llms.txt` and `/llms-full.txt` manifests."""
+    if repo_path.is_symlink():
+        raise ValidationError("Requested path is outside allowed boundary")
+    if repo_path.is_symlink():
+        raise ValidationError("Requested path is outside allowed boundary")
     root = repo_path.resolve()
-    repo_name = root.name
+    repo_name = _scrub_manifest_inline(root.name) or "repo"
 
     candidates: list[Path] = []
     for root_doc in ("README.md", "AGENTS.md", "portal/README.md"):
         p = root / root_doc
         if p.is_file() and _is_within_root(p, root):
             candidates.append(p)
-    if (root / "docs").is_dir():
+    if (root / "docs").is_dir() and not (root / "docs").is_symlink():
         candidates.extend(
             f
             for f in sorted((root / "docs").rglob("*.md"))
@@ -1718,16 +2185,20 @@ def export_repo_llms(
         )
     seen_yaml: set[Path] = set()
     for sdd_dir in (root / "docs" / "sdd", root / "sdd"):
-        if sdd_dir.is_dir():
+        if sdd_dir.is_dir() and not has_symlink_component(sdd_dir, root):
             for f in sorted(sdd_dir.rglob("*.yaml")):
+                if not _is_within_root(f, root):
+                    continue
                 resolved_yaml = f.resolve()
-                if _is_within_root(f, root) and resolved_yaml not in seen_yaml:
+                if resolved_yaml not in seen_yaml:
                     seen_yaml.add(resolved_yaml)
                     candidates.append(f)
 
     entries: list[tuple[str, str, str, str, str, str, str]] = []
     # tuple: (sort_group, kind, doc_id, rel_path, title, summary, body_clean)
     for f in candidates:
+        if not _is_within_root(f, root):
+            continue
         if f.suffix.lower() == ".yaml":
             try:
                 rel_path = str(f.resolve().relative_to(root))
@@ -1743,32 +2214,37 @@ def export_repo_llms(
             yaml_status = str(loaded_yaml.get("status", "active")).lower()
             if yaml_status not in {"active", "accepted", "approved"}:
                 continue
-            doc_id = str(loaded_yaml.get("id") or build_doc_id(repo_name, rel_path))
-            title = str(loaded_yaml.get("title") or loaded_yaml.get("name") or f.stem)
-            kind = str(loaded_yaml.get("kind") or "sdd")
+            doc_id = _scrub_manifest_inline(
+                str(loaded_yaml.get("id") or build_doc_id(repo_name, rel_path))
+            )
+            title = _scrub_manifest_inline(
+                str(loaded_yaml.get("title") or loaded_yaml.get("name") or f.stem)
+            )
+            kind = _scrub_manifest_inline(str(loaded_yaml.get("kind") or "sdd"))
+            clean_rel = _scrub_manifest_inline(rel_path)
             summary = f"{title} (`id: {doc_id}`, `kind: {kind}`)"
             entries.append(
                 (
                     "2_sdd",
                     kind,
                     doc_id,
-                    rel_path,
+                    clean_rel,
                     title,
-                    _scrub_manifest_text(summary),
+                    _scrub_manifest_inline(summary),
                     _scrub_manifest_text(raw_yaml.strip()),
                 )
             )
             continue
 
         parsed = parse_markdown_document(f, repo_root=root)
-        rel_path = parsed.rel_path
+        rel_path = _scrub_manifest_inline(parsed.rel_path)
         if parsed.kb_document is not None:
             if parsed.kb_document.status != "active":
                 continue
-            doc_id = parsed.kb_document.doc_id
-            title = parsed.kb_document.title
-            kind = parsed.kb_document.kind
-            tier = parsed.kb_document.autonomy_tier
+            doc_id = _scrub_manifest_inline(parsed.kb_document.doc_id)
+            title = _scrub_manifest_inline(parsed.kb_document.title)
+            kind = _scrub_manifest_inline(parsed.kb_document.kind)
+            tier = _scrub_manifest_inline(parsed.kb_document.autonomy_tier)
             summary = f"{title} (`id: {doc_id}`, `kind: {kind}`, `tier: {tier}`)"
             sort_group = (
                 f"0_{kind}" if rel_path not in ("README.md", "AGENTS.md") else f"00_{rel_path}"
@@ -1777,14 +2253,14 @@ def export_repo_llms(
             fm_status = str(parsed.frontmatter.get("status", "active")).lower()
             if fm_status != "active":
                 continue
-            doc_id = build_doc_id(repo_name, rel_path)
-            kind = str(parsed.frontmatter.get("kind", "doc"))
-            title = resolved_title = f.stem
+            doc_id = _scrub_manifest_inline(build_doc_id(repo_name, rel_path))
+            kind = _scrub_manifest_inline(str(parsed.frontmatter.get("kind", "doc")))
+            resolved_title = f.stem
             for ln in parsed.body_text.splitlines():
                 if ln.startswith("# "):
                     resolved_title = ln[2:].strip()
                     break
-            title = resolved_title
+            title = _scrub_manifest_inline(resolved_title)
             summary = f"{title} (`id: {doc_id}`)"
             sort_group = "00_root" if rel_path in ("README.md", "AGENTS.md") else "1_docs"
 
@@ -1796,7 +2272,7 @@ def export_repo_llms(
                 doc_id,
                 rel_path,
                 title,
-                _scrub_manifest_text(summary),
+                _scrub_manifest_inline(summary),
                 clean_body,
             )
         )
@@ -1832,9 +2308,13 @@ def export_repo_llms(
     llms_full_txt = ("\n".join(full_lines) + "\n") if include_full else ""
 
     if write_files:
-        (root / "llms.txt").write_text(llms_txt, encoding="utf-8")
-        if include_full:
-            (root / "llms-full.txt").write_text(llms_full_txt, encoding="utf-8")
+        for out_name, out_body in (("llms.txt", llms_txt), ("llms-full.txt", llms_full_txt)):
+            if out_name == "llms-full.txt" and not include_full:
+                continue
+            out_path = root / out_name
+            if out_path.is_symlink() or has_symlink_component(out_path, root):
+                raise ValidationError(f"Refusing to write symlinked output path: {out_name}")
+            out_path.write_text(out_body, encoding="utf-8")
 
     return {
         "status": "ok",
@@ -1936,6 +2416,8 @@ def slice_local_runbooks(
     output_format: str = "json",
 ) -> dict[str, Any]:
     """Slice executable runbook steps directly from local Markdown files (Tier-1 offline mode)."""
+    if repo_path.is_symlink():
+        raise ValidationError("Requested path is outside allowed boundary")
     root = repo_path.resolve()
     bound_root = root if root.is_dir() else root.parent
     raw_files = (

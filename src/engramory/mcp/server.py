@@ -18,19 +18,26 @@ Tools:
 from __future__ import annotations
 
 import asyncio
-import http.server
 import json
 import logging
+import socket
 import sys
-import urllib.parse
-from collections.abc import Callable, Coroutine, Mapping, Sequence
+import threading
+import uuid
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from typing import Any
+
+import uvicorn
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from engramory.access.authz import ActorContext
 from engramory.access.jwt_auth import (
     AuthenticationError,
     JWKSValidator,
-    check_token_revocation,
+    RevocationCache,
+    check_token_revocation_async,
     claims_to_actor_context,
 )
 from engramory.access.surface import AccessSurface, AuthzError, GovernedWriteRejected
@@ -622,12 +629,17 @@ TOOLS_SCHEMA: list[dict[str, Any]] = [
                     "description": "Project identifier",
                     "default": "core",
                 },
+                "evidence_ref": {
+                    "type": "string",
+                    "description": "Approved change/evidence reference (ADR-06 required)",
+                },
                 "reconcile": {
                     "type": "boolean",
                     "description": "Purge stale nodes/edges not in corpus (default: true)",
                     "default": True,
                 },
             },
+            "required": ["evidence_ref"],
         },
     },
     {
@@ -750,6 +762,84 @@ def format_context_slice_markdown(task_id: str, ancestors: Sequence[Mapping[str,
     return "\n".join(lines).strip()
 
 
+def is_loopback_host(host: str) -> bool:
+    """Return True iff `host` binds only to a loopback address."""
+    cleaned = host.strip().strip("[]").lower()
+    return cleaned in {"127.0.0.1", "localhost", "::1"}
+
+
+class _ThreadUvicornServer(uvicorn.Server):
+    """Uvicorn Server subclass that disables OS signal registration in worker threads."""
+
+    @contextmanager
+    def capture_signals(self) -> Iterator[None]:
+        yield
+
+
+class _UvicornMCPServer:
+    """Thread-safe lifecycle wrapper around pre-bound TCP socket + uvicorn.Server."""
+
+    def __init__(
+        self,
+        app: FastAPI,
+        host: str,
+        port: int,
+    ) -> None:
+        family = socket.AF_INET6 if ":" in host else socket.AF_INET
+        sock = socket.socket(family, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((host, port))
+            sock.listen(128)
+        except OSError:
+            sock.close()
+            raise
+        self._sock = sock
+        self.app = app
+        self.server_address = sock.getsockname()
+        config = uvicorn.Config(
+            app,
+            host=self.server_address[0],
+            port=self.server_address[1],
+            log_level="error",
+            access_log=False,
+            lifespan="off",
+            timeout_graceful_shutdown=1,
+        )
+        self._server = _ThreadUvicornServer(config)
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._stopped = threading.Event()
+
+    async def _serve_async(self) -> None:
+        self._loop = asyncio.get_running_loop()
+        self.app.state.shutdown_event = asyncio.Event()
+        try:
+            await self._server.serve(sockets=[self._sock])
+        finally:
+            self._stopped.set()
+
+    def serve_forever(self) -> None:
+        asyncio.run(self._serve_async())
+
+    def shutdown(self) -> None:
+        self._server.should_exit = True
+        if self._loop is not None and not self._loop.is_closed():
+            shutdown_ev = getattr(self.app.state, "shutdown_event", None)
+            if isinstance(shutdown_ev, asyncio.Event):
+                try:
+                    self._loop.call_soon_threadsafe(shutdown_ev.set)
+                except RuntimeError:
+                    pass
+        self._stopped.wait(timeout=3.0)
+
+    def server_close(self) -> None:
+        self._server.should_exit = True
+        try:
+            self._sock.close()
+        except OSError:
+            pass
+
+
 class McpServer:
     """Async JSON-RPC stdio MCP Gateway over AccessSurface."""
 
@@ -771,6 +861,7 @@ class McpServer:
         self._auth_enabled = auth_enabled
         self._security_gate_url = security_gate_url
         self._revoked_identifiers = revoked_identifiers
+        self._revocation_cache = RevocationCache()
 
     def _resolve_call_ctx(
         self, arguments: dict[str, Any], ctx: ActorContext | None = None
@@ -1150,28 +1241,14 @@ class McpServer:
                         return {"content": [{"type": "text", "text": str(local_res["digest"])}]}
                     ancestors: Sequence[Mapping[str, Any]] = local_res["ancestors"]
                 else:
-                    try:
-                        ancestors = await self._surface.context_slice(
-                            call_ctx,
-                            task_id=arguments["task_id"],
-                            depth=depth,
-                            scope=scope,
-                            layers=layers,
-                            max_tokens=max_tokens,
-                        )
-                    except StoreUnavailable:
-                        if not ws_dir:
-                            raise
-                        from engramory.access.authz import authorize
-
-                        decision = authorize(
-                            call_ctx,
-                            "context_slice",
-                            TargetScope(tenant_id=call_ctx.tenant_id, scope=scope),
-                        )
-                        if not decision.allowed:
-                            raise AuthzError(decision.reason) from None
-                        ancestors = []
+                    ancestors = await self._surface.context_slice(
+                        call_ctx,
+                        task_id=arguments["task_id"],
+                        depth=depth,
+                        scope=scope,
+                        layers=layers,
+                        max_tokens=max_tokens,
+                    )
                     if not ancestors and (ws_dir or not self._auth_enabled):
                         confined_ws = resolve_confined_repo_path(
                             str(ws_dir or "."),
@@ -1226,26 +1303,12 @@ class McpServer:
                     )
                     descendants: Sequence[Mapping[str, Any]] = local_blast["descendants"]
                 else:
-                    try:
-                        descendants = await self._surface.blast_radius(
-                            call_ctx,
-                            doc_id=arguments["doc_id"],
-                            depth=depth,
-                            scope=scope,
-                        )
-                    except StoreUnavailable:
-                        if not ws_dir:
-                            raise
-                        from engramory.access.authz import authorize
-
-                        decision = authorize(
-                            call_ctx,
-                            "blast_radius",
-                            TargetScope(tenant_id=call_ctx.tenant_id, scope=scope),
-                        )
-                        if not decision.allowed:
-                            raise AuthzError(decision.reason) from None
-                        descendants = []
+                    descendants = await self._surface.blast_radius(
+                        call_ctx,
+                        doc_id=arguments["doc_id"],
+                        depth=depth,
+                        scope=scope,
+                    )
                     if not descendants and (ws_dir or not self._auth_enabled):
                         confined_ws = resolve_confined_repo_path(
                             str(ws_dir or "."),
@@ -1276,6 +1339,19 @@ class McpServer:
                     "sdd_ingest",
                     TargetScope(tenant_id=call_ctx.tenant_id, scope=scope),
                 )
+                evidence_ref = str(arguments.get("evidence_ref") or "").strip()
+                if not evidence_ref:
+                    repo_obj = getattr(self._surface, "_repo", None)
+                    if repo_obj is not None and hasattr(repo_obj, "record_audit"):
+                        await repo_obj.record_audit(
+                            tenant_id=call_ctx.tenant_id,
+                            agent_id=call_ctx.agent_id,
+                            project_id=call_ctx.project_id,
+                            action="sdd_ingest",
+                            allowed=False,
+                            reason="missing_evidence_ref",
+                        )
+                    raise GovernedWriteRejected("sdd_ingest requires evidence_ref")
                 if not self._ingest_fn:
                     return {
                         "isError": True,
@@ -1375,212 +1451,251 @@ class McpServer:
                 "error": {"code": -32601, "message": f"Method not found: {method}"},
             }
 
-    def create_http_server(
-        self, host: str = "127.0.0.1", port: int = 8000
-    ) -> http.server.ThreadingHTTPServer:
-        """Create a ThreadingHTTPServer for MCP SSE and HTTP transports."""
-        import threading
-
+    def create_http_app(self, *, max_body_bytes: int = 4 * 1024 * 1024) -> FastAPI:
+        """Build FastAPI ASGI application for MCP Streamable HTTP & persistent SSE transports."""
         server_instance = self
-        max_body_bytes = 4 * 1024 * 1024
-        bg_loop = asyncio.new_event_loop()
-        loop_ready = threading.Event()
+        app = FastAPI(
+            title="engramory-mcp",
+            version="0.3.0",
+            docs_url=None,
+            redoc_url=None,
+            openapi_url=None,
+        )
+        sessions: dict[str, tuple[asyncio.Queue[str], str | None]] = {}
+        app.state.sessions = sessions
 
-        def _run_bg_loop() -> None:
-            asyncio.set_event_loop(bg_loop)
-            loop_ready.set()
-            bg_loop.run_forever()
-            bg_loop.close()
+        async def _authenticate_http_request(request: Request) -> ActorContext:
+            if "token" in request.query_params:
+                raise AuthenticationError(
+                    "Query-string tokens are forbidden; use Authorization: Bearer header"
+                )
+            if server_instance._auth_enabled:
+                auth_hdr = request.headers.get("authorization")
+                if not auth_hdr or auth_hdr.strip()[:7].lower() != "bearer ":
+                    raise AuthenticationError("Missing Bearer token")
+                if server_instance._token_validator is None:
+                    raise AuthenticationError("Token validator not configured")
+                claims = server_instance._token_validator.validate_token(auth_hdr)
+                await check_token_revocation_async(
+                    claims,
+                    security_gate_url=server_instance._security_gate_url,
+                    revoked_identifiers=server_instance._revoked_identifiers,
+                    cache=server_instance._revocation_cache,
+                )
+                return claims_to_actor_context(claims)
 
-        loop_thread = threading.Thread(target=_run_bg_loop, daemon=True, name="engramory-mcp-loop")
-        loop_thread.start()
-        loop_ready.wait(timeout=5.0)
+            req_ctx = server_instance._ctx
+            tenant_hdr = request.headers.get("x-tenant-id")
+            project_hdr = request.headers.get("x-project-id")
+            domain_hdr = request.headers.get("x-domain-id")
+            if tenant_hdr or project_hdr or domain_hdr:
+                return ActorContext(
+                    agent_id=req_ctx.agent_id,
+                    tenant_id=tenant_hdr or req_ctx.tenant_id,
+                    project_id=project_hdr or req_ctx.project_id,
+                    scopes=req_ctx.scopes,
+                    domain_id=domain_hdr or req_ctx.domain_id,
+                )
+            return req_ctx
 
-        class MCPRequestHandler(http.server.BaseHTTPRequestHandler):
-            def log_message(self, format: str, *args: Any) -> None:
-                # Suppress noisy default console access logs
-                pass
-
-            def do_GET(self) -> None:
-                parsed = urllib.parse.urlparse(self.path)
-                if parsed.path in ("/sse", "/sse/"):
-                    if server_instance._auth_enabled:
-                        extracted_bearer = ""
-                        auth_hdr = self.headers.get("Authorization")
-                        if auth_hdr and auth_hdr.strip().startswith("Bearer "):
-                            extracted_bearer = auth_hdr.strip()[7:].strip()
-                        else:
-                            query_params = urllib.parse.parse_qs(parsed.query)
-                            token_vals = query_params.get("token")
-                            if token_vals:
-                                extracted_bearer = token_vals[0].strip()
-
-                        if not extracted_bearer:
-                            self.send_response(401)
-                            self.send_header("Content-Type", "application/json")
-                            self.end_headers()
-                            err_resp = {"error": "Unauthorized: Missing Bearer token"}
-                            self.wfile.write(json.dumps(err_resp).encode("utf-8"))
-                            return
-
-                        try:
-                            if server_instance._token_validator is None:
-                                raise AuthenticationError("Token validator not configured")
-                            claims = server_instance._token_validator.validate_token(
-                                extracted_bearer
-                            )
-                            check_token_revocation(
-                                claims,
-                                security_gate_url=server_instance._security_gate_url,
-                                revoked_identifiers=server_instance._revoked_identifiers,
-                            )
-                        except AuthenticationError as exc:
-                            self.send_response(401)
-                            self.send_header("Content-Type", "application/json")
-                            self.end_headers()
-                            err_resp = {"error": f"Unauthorized: {exc}"}
-                            self.wfile.write(json.dumps(err_resp).encode("utf-8"))
-                            return
-
-                    self.send_response(200)
-                    self.send_header("Content-Type", "text/event-stream")
-                    self.send_header("Cache-Control", "no-cache")
-                    self.send_header("Connection", "keep-alive")
-                    self.end_headers()
-                    endpoint_event = "event: endpoint\ndata: /messages\n\n"
-                    self.wfile.write(endpoint_event.encode("utf-8"))
-                    self.wfile.flush()
-                elif parsed.path in ("/", "/health", "/healthz"):
-                    self.send_response(200)
-                    self.send_header("Content-Type", "application/json")
-                    self.end_headers()
-                    resp = {"status": "ok", "service": "engramory-mcp", "version": "0.3.0"}
-                    self.wfile.write(json.dumps(resp).encode("utf-8"))
-                else:
-                    self.send_response(404)
-                    self.end_headers()
-
-            def do_POST(self) -> None:
-                if self.path not in ("/messages", "/messages/"):
-                    self.send_response(404)
-                    self.end_headers()
-                    return
-
-                content_length = int(self.headers.get("Content-Length", 0))
+        async def _read_bounded_body(request: Request) -> bytes:
+            raw_cl = request.headers.get("content-length")
+            if raw_cl is not None:
+                try:
+                    content_length = int(raw_cl)
+                except ValueError as exc:
+                    raise ValueError(f"Invalid Content-Length header: {raw_cl}") from exc
                 if content_length < 0 or content_length > max_body_bytes:
-                    self.send_response(413)
-                    self.send_header("Content-Type", "application/json")
-                    self.end_headers()
-                    err = {
+                    raise OverflowError("Request payload too large")
+            buf = bytearray()
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                if len(buf) + len(chunk) > max_body_bytes:
+                    raise OverflowError("Request payload too large")
+                buf.extend(chunk)
+            return bytes(buf)
+
+        @app.get("/")
+        @app.get("/health")
+        @app.get("/healthz")
+        async def health() -> JSONResponse:
+            return JSONResponse(
+                content={"status": "ok", "service": "engramory-mcp", "version": "0.3.0"},
+                status_code=200,
+            )
+
+        @app.get("/sse")
+        @app.get("/sse/")
+        async def sse_endpoint(request: Request) -> Response:
+            try:
+                req_ctx = await _authenticate_http_request(request)
+            except AuthenticationError as exc:
+                return JSONResponse(
+                    content={"error": f"Unauthorized: {exc}"},
+                    status_code=401,
+                )
+
+            session_id = uuid.uuid4().hex
+            queue: asyncio.Queue[str] = asyncio.Queue(maxsize=64)
+            owner = req_ctx.agent_id if server_instance._auth_enabled else None
+            sessions[session_id] = (queue, owner)
+
+            async def event_generator() -> AsyncIterator[str]:
+                try:
+                    yield f"event: endpoint\ndata: /messages?session_id={session_id}\n\n"
+                    while True:
+                        shutdown_ev = getattr(app.state, "shutdown_event", None)
+                        if isinstance(shutdown_ev, asyncio.Event) and shutdown_ev.is_set():
+                            break
+                        if await request.is_disconnected():
+                            break
+                        get_task: asyncio.Task[str] = asyncio.create_task(queue.get())
+                        stop_task: asyncio.Task[bool] | None = (
+                            asyncio.create_task(shutdown_ev.wait())
+                            if isinstance(shutdown_ev, asyncio.Event)
+                            else None
+                        )
+                        try:
+                            tasks: list[asyncio.Task[Any]] = [get_task]
+                            if stop_task is not None:
+                                tasks.append(stop_task)
+                            done, pending = await asyncio.wait(
+                                tasks, timeout=0.1, return_when=asyncio.FIRST_COMPLETED
+                            )
+                            for pending_task in pending:
+                                pending_task.cancel()
+                                try:
+                                    await pending_task
+                                except asyncio.CancelledError:
+                                    pass
+                            if stop_task is not None and stop_task in done:
+                                break
+                            if get_task in done:
+                                payload = get_task.result()
+                                yield f"event: message\ndata: {payload}\n\n"
+                        except BaseException:
+                            for task in (get_task, stop_task):
+                                if task is not None and not task.done():
+                                    task.cancel()
+                            raise
+                finally:
+                    sessions.pop(session_id, None)
+
+            return StreamingResponse(
+                event_generator(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
+        @app.post("/messages")
+        @app.post("/messages/")
+        @app.post("/mcp")
+        @app.post("/mcp/")
+        async def messages_endpoint(request: Request) -> Response:
+            # Authenticate BEFORE reading or parsing request body.
+            try:
+                req_ctx = await _authenticate_http_request(request)
+            except AuthenticationError as auth_exc:
+                return JSONResponse(
+                    content={
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {"code": -32001, "message": f"Unauthorized: {auth_exc}"},
+                    },
+                    status_code=401,
+                )
+
+            try:
+                raw_body = await _read_bounded_body(request)
+            except OverflowError:
+                return JSONResponse(
+                    content={
                         "jsonrpc": "2.0",
                         "id": None,
                         "error": {"code": -32600, "message": "Request payload too large"},
-                    }
-                    self.wfile.write(json.dumps(err).encode("utf-8"))
-                    return
-
-                body = self.rfile.read(content_length).decode("utf-8")
-                req_id: Any = None
-                try:
-                    try:
-                        req = json.loads(body)
-                    except json.JSONDecodeError as parse_exc:
-                        self.send_response(400)
-                        self.send_header("Content-Type", "application/json")
-                        self.end_headers()
-                        err = {
-                            "jsonrpc": "2.0",
-                            "id": None,
-                            "error": {"code": -32700, "message": f"Parse error: {parse_exc}"},
-                        }
-                        self.wfile.write(json.dumps(err).encode("utf-8"))
-                        return
-
-                    if isinstance(req, dict):
-                        req_id = req.get("id")
-
-                    if server_instance._auth_enabled:
-                        auth_hdr = self.headers.get("Authorization")
-                        if not auth_hdr or not auth_hdr.strip().startswith("Bearer "):
-                            self.send_response(401)
-                            self.send_header("Content-Type", "application/json")
-                            self.end_headers()
-                            err = {
-                                "jsonrpc": "2.0",
-                                "id": req_id,
-                                "error": {
-                                    "code": -32001,
-                                    "message": "Unauthorized: Missing Bearer token",
-                                },
-                            }
-                            self.wfile.write(json.dumps(err).encode("utf-8"))
-                            return
-
-                        if server_instance._token_validator is None:
-                            raise AuthenticationError("Token validator not configured")
-                        claims = server_instance._token_validator.validate_token(auth_hdr)
-                        check_token_revocation(
-                            claims,
-                            security_gate_url=server_instance._security_gate_url,
-                            revoked_identifiers=server_instance._revoked_identifiers,
-                        )
-                        req_ctx = claims_to_actor_context(claims)
-                    else:
-                        req_ctx = server_instance._ctx
-                        tenant_hdr = self.headers.get("X-Tenant-ID")
-                        project_hdr = self.headers.get("X-Project-ID")
-                        domain_hdr = self.headers.get("X-Domain-ID")
-                        if tenant_hdr or project_hdr or domain_hdr:
-                            req_ctx = ActorContext(
-                                agent_id=req_ctx.agent_id,
-                                tenant_id=tenant_hdr or req_ctx.tenant_id,
-                                project_id=project_hdr or req_ctx.project_id,
-                                scopes=req_ctx.scopes,
-                                domain_id=domain_hdr or req_ctx.domain_id,
-                            )
-
-                    fut = asyncio.run_coroutine_threadsafe(
-                        server_instance.handle_request(req, ctx=req_ctx), bg_loop
-                    )
-                    res = fut.result(timeout=60.0)
-                    if res is None:
-                        self.send_response(204)
-                        self.end_headers()
-                    else:
-                        self.send_response(200)
-                        self.send_header("Content-Type", "application/json")
-                        self.end_headers()
-                        self.wfile.write(json.dumps(res).encode("utf-8"))
-                except AuthenticationError as auth_exc:
-                    self.send_response(401)
-                    self.send_header("Content-Type", "application/json")
-                    self.end_headers()
-                    err = {
+                    },
+                    status_code=413,
+                )
+            except ValueError as cl_exc:
+                return JSONResponse(
+                    content={
                         "jsonrpc": "2.0",
-                        "id": req_id,
-                        "error": {"code": -32001, "message": f"Unauthorized: {auth_exc}"},
-                    }
-                    self.wfile.write(json.dumps(err).encode("utf-8"))
-                except Exception as exc:  # noqa: BLE001  # reason: HTTP server must return JSON-RPC error
-                    self.send_response(500)
-                    self.send_header("Content-Type", "application/json")
-                    self.end_headers()
-                    err = {
+                        "id": None,
+                        "error": {"code": -32600, "message": str(cl_exc)},
+                    },
+                    status_code=400,
+                )
+
+            try:
+                req = json.loads(raw_body.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as parse_exc:
+                return JSONResponse(
+                    content={
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {"code": -32700, "message": f"Parse error: {parse_exc}"},
+                    },
+                    status_code=400,
+                )
+
+            req_id: Any = req.get("id") if isinstance(req, dict) else None
+            session_id = request.query_params.get("session_id")
+            session_entry = sessions.get(session_id) if session_id else None
+            if session_entry is not None:
+                _, owner = session_entry
+                if (
+                    server_instance._auth_enabled
+                    and owner is not None
+                    and owner != req_ctx.agent_id
+                ):
+                    return JSONResponse(
+                        content={
+                            "jsonrpc": "2.0",
+                            "id": req_id,
+                            "error": {
+                                "code": -32003,
+                                "message": "Forbidden: SSE session belongs to another principal",
+                            },
+                        },
+                        status_code=403,
+                    )
+
+            try:
+                res = await server_instance.handle_request(req, ctx=req_ctx)
+                if session_entry is not None and res is not None:
+                    try:
+                        session_entry[0].put_nowait(json.dumps(res))
+                    except asyncio.QueueFull:
+                        pass
+                if res is None:
+                    return Response(status_code=204)
+                return JSONResponse(content=res, status_code=200)
+            except Exception as exc:  # noqa: BLE001  # reason: HTTP server must return JSON-RPC error
+                return JSONResponse(
+                    content={
                         "jsonrpc": "2.0",
                         "id": req_id,
                         "error": {"code": -32603, "message": str(exc)},
-                    }
-                    self.wfile.write(json.dumps(err).encode("utf-8"))
+                    },
+                    status_code=500,
+                )
 
-        class _ManagedMCPHTTPServer(http.server.ThreadingHTTPServer):
-            def server_close(self) -> None:
-                try:
-                    if bg_loop.is_running():
-                        bg_loop.call_soon_threadsafe(bg_loop.stop)
-                finally:
-                    super().server_close()
+        return app
 
-        return _ManagedMCPHTTPServer((host, port), MCPRequestHandler)
+    def create_http_server(self, host: str = "127.0.0.1", port: int = 8000) -> _UvicornMCPServer:
+        """Create a uvicorn-backed HTTP/SSE server with pre-bound socket for MCP transports."""
+        if not self._auth_enabled and not is_loopback_host(host):
+            raise PermissionError(
+                f"Refusing to bind unauthenticated MCP HTTP server to non-loopback host '{host}'; "
+                f"enable --auth or bind to 127.0.0.1"
+            )
+        app = self.create_http_app()
+        return _UvicornMCPServer(app, host=host, port=port)
 
     def run_sse(self, host: str = "127.0.0.1", port: int = 8000) -> None:
         """Run MCP HTTP/SSE server loop over TCP host:port."""
@@ -1589,10 +1704,17 @@ class McpServer:
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:
+            httpd.shutdown()
+        finally:
             httpd.server_close()
 
     async def run_stdio(self) -> None:
-        """Run MCP JSON-RPC server loop over stdin/stdout."""
+        """Run MCP JSON-RPC server loop over stdin/stdout (dev unauthenticated only)."""
+        if self._auth_enabled:
+            raise PermissionError(
+                "MCP stdio transport cannot be used with --auth enabled (ADR-10); "
+                "use '--transport sse' with Bearer token verification"
+            )
         loop = asyncio.get_running_loop()
         reader = asyncio.StreamReader()
         protocol = asyncio.StreamReaderProtocol(reader)
@@ -1644,6 +1766,24 @@ class McpServer:
         if name == "docs_ingest_runbook":
             from engramory.core.docs_tools import parse_markdown_document
 
+            await self._surface._decide(
+                call_ctx,
+                "docs_ingest_runbook",
+                TargetScope(tenant_id=call_ctx.tenant_id, scope=scope),
+            )
+            evidence_ref = str(arguments.get("evidence_ref") or "").strip()
+            if not evidence_ref:
+                repo_obj = getattr(self._surface, "_repo", None)
+                if repo_obj is not None and hasattr(repo_obj, "record_audit"):
+                    await repo_obj.record_audit(
+                        tenant_id=call_ctx.tenant_id,
+                        agent_id=call_ctx.agent_id,
+                        project_id=call_ctx.project_id,
+                        action="docs_ingest_runbook",
+                        allowed=False,
+                        reason="missing_evidence_ref",
+                    )
+                raise GovernedWriteRejected("docs_ingest_runbook requires evidence_ref")
             target = resolve_confined_repo_path(
                 str(arguments["path"]),
                 project_id=call_ctx.project_id,
@@ -1652,7 +1792,9 @@ class McpServer:
             parsed = parse_markdown_document(
                 target,
                 tenant_id=call_ctx.tenant_id,
-                project_id=call_ctx.project_id,
+                project_id=None if scope in ("domain", "space") else call_ctx.project_id,
+                domain_id=call_ctx.domain_id,
+                scope=scope,
             )
             if parsed.kb_document is None:
                 raise ValueError(
@@ -1662,8 +1804,9 @@ class McpServer:
                 call_ctx,
                 doc=parsed.kb_document,
                 steps=parsed.steps,
-                evidence_ref=arguments.get("evidence_ref"),
+                evidence_ref=evidence_ref,
                 scope=scope,
+                _preauthorized=True,
             )
             return {"content": [{"type": "text", "text": json.dumps(ing_res, indent=2)}]}
 

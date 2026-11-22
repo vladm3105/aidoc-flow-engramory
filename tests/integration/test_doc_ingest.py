@@ -62,7 +62,7 @@ All inbound ingress must pass through the edge gateway.
     )
     assert cnt == 3  # preamble, context, decision
 
-    async with repo._conn() as conn:
+    async with repo._conn(tenant_id="t-doc-ingest") as conn:
         rows = await (
             await conn.execute(
                 """

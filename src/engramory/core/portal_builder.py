@@ -16,6 +16,7 @@ from engramory.core.docs_tools import (
     _is_sdd_doc_path,
     _is_within_root,
     _scrub_manifest_text,
+    has_symlink_component,
     parse_markdown_document,
     resolve_confined_repo_path,
 )
@@ -65,18 +66,21 @@ def stage_portal_bundle(
             ) from exc
 
     docs_dir = confined_repo / "docs"
-    scan_root = docs_dir if docs_dir.is_dir() else confined_repo
-    raw_md_files = sorted(scan_root.rglob("*.md")) if scan_root.is_dir() else []
+    if docs_dir.is_symlink():
+        raise ValidationError("Documentation directory escapes repository boundary")
+    raw_md_files = sorted(docs_dir.rglob("*.md")) if docs_dir.is_dir() else []
     md_files = [f for f in raw_md_files if not _is_sdd_doc_path(f, confined_repo)]
 
     staged_files: list[str] = []
     scrubbed_count = 0
 
     for md_file in md_files:
-        # Prevent recursive self-staging if target_dir sits inside scan_root
+        # Prevent recursive self-staging if target_dir sits inside docs_dir
         if _is_within_root(md_file, target_dir):
             continue
-        if not _is_within_root(md_file, confined_repo):
+        if has_symlink_component(md_file, confined_repo) or not _is_within_root(
+            md_file, confined_repo
+        ):
             raise ValidationError(f"Markdown file escapes repository boundary: {md_file}")
 
         parsed = parse_markdown_document(md_file, repo_root=confined_repo)
@@ -95,9 +99,13 @@ def stage_portal_bundle(
         if clean_text != with_fm:
             scrubbed_count += 1
 
-        rel_under_docs = md_file.relative_to(scan_root)
+        rel_under_docs = md_file.relative_to(docs_dir)
         dest = target_dir / rel_under_docs
-        if dest.is_symlink() or not _is_within_root(dest, target_dir):
+        if (
+            dest.is_symlink()
+            or has_symlink_component(dest, target_dir)
+            or not _is_within_root(dest, target_dir)
+        ):
             raise ValidationError(f"Destination path escapes output boundary: {dest}")
 
         if not dry_run:

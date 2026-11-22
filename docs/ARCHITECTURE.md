@@ -12,7 +12,7 @@ watched_paths:
   - "src/engramory/ports/vector.py"
   - "src/engramory/access/surface.py"
   - "db/migrations/0001_init_memory.sql"
-last_verified: "2026-11-13"
+last_verified: "2026-11-21"
 ---
 
 # Engramory — Target Architecture
@@ -196,7 +196,7 @@ agent_profiles(
 consolidation_runs(id, agent_id, started_at, finished_at, stats jsonb)
 ```
 
-(The block above is the memory core across migrations `0001`–`0010`. Migration `0003` adds `episodes.content_hash`, `memories.status/source_trust/ts_lex`, `memory_retrievals`, `audit_records`, and L0 `kb_sections`; migration `0009` scopes `agent_profiles` by `(tenant_id, agent_id)`; migration `0010` adds `kb_blobs`, `kb_blob_chunks`, `kb_blob_chunks_large`, and multimodal columns on `kb_sections`.)
+(The schema block spans migrations `0001`–`0011`. Migration `0003` adds `episodes.content_hash`, `memories.status/source_trust/ts_lex`, `memory_retrievals`, `audit_records`, and L0 `kb_sections`; migration `0009` scopes `agent_profiles` by `(tenant_id, agent_id)`; migration `0010` adds `kb_blobs`, `kb_blob_chunks`, `kb_blob_chunks_large`, and multimodal columns on `kb_sections`; migration `0011` (`CHG-010`) enables `FORCE ROW LEVEL SECURITY` with `app.tenant_id` GUC isolation across all 14 tenant tables, provisions `engramory_app` / `engramory_worker` non-owner roles, converts `v_ambient_memory_active` to `security_invoker = true`, enforces composite `(tenant_id, doc_id, step_uid)` keys, and pairs with scoped `VectorPort.delete(tenant_id)` / `GraphPort` filters and FastAPI MCP Bearer transport.)
 
 Because `content_raw` and `provenance` are always kept and `embedding` is marked regenerable, **the brain survives any model or platform migration** — you re-embed from `content_raw`, you don't re-architect.
 

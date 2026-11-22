@@ -150,6 +150,7 @@ class KnowledgeCore:
     ) -> dict[str, list[str]]:
         """Ingest multiple documents into kb_sections with batch upsert and batch embedding."""
         from engramory.access.poisoning_guard import MemoryPoisoningError, inspect_memory_write
+        from engramory.core.docs_tools import _is_within_root, has_symlink_component
         from engramory.core.models import ValidationError
 
         all_sections: list[KBSection] = []
@@ -164,9 +165,13 @@ class KnowledgeCore:
                 logger.warning("Skipping non-existent file in batch: %s", p)
                 continue
 
+            if has_symlink_component(p, repo_root):
+                logger.warning("Skipping symlink path in batch: %s", p)
+                continue
+
             p_res = p.resolve()
-            if resolved_root is not None:
-                if not p_res.is_relative_to(resolved_root):
+            if repo_root is not None and resolved_root is not None:
+                if not _is_within_root(p, repo_root):
                     logger.warning("Skipping file outside repo_root (%s): %s", resolved_root, p)
                     continue
                 rel_key = p_res.relative_to(resolved_root).as_posix()
@@ -496,6 +501,7 @@ class KnowledgeCore:
                     )
                     await self.repo.set_kb_sections_embedding_batch(
                         valid_updates,
+                        tenant_id=tenant_id,
                         embedding_model=embed_model,
                     )
             except Exception as e:

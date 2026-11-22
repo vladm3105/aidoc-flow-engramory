@@ -257,3 +257,77 @@ def test_check_token_revocation_kill_switch() -> None:
 
     # Unrevoked token passes
     check_token_revocation(claims, revoked_identifiers={"unrelated-jti"})
+
+
+def test_c7_fail_closed_claims_and_revocation_hardening() -> None:
+    # 1. Missing tenant_id or project_id fails closed
+    with pytest.raises(AuthenticationError, match="tenant_id"):
+        claims_to_actor_context(
+            TokenClaims(
+                sub="a1", iss="iss", aud="aud", exp=9999999999, raw_claims={"projects": ["p1"]}
+            )
+        )
+    with pytest.raises(AuthenticationError, match="project_id"):
+        claims_to_actor_context(
+            TokenClaims(
+                sub="a1", iss="iss", aud="aud", exp=9999999999, raw_claims={"tenant_id": "t1"}
+            )
+        )
+
+    # 2. String 'false' is_superuser cannot grant 'space', and domain_id never grants 'domain'
+    claims_str_false = TokenClaims(
+        sub="a1",
+        iss="iss",
+        aud="aud",
+        exp=9999999999,
+        raw_claims={
+            "tenant_id": "t1",
+            "projects": ["p1"],
+            "domain_id": "billing",
+            "is_superuser": "false",
+        },
+    )
+    ctx = claims_to_actor_context(claims_str_false)
+    assert ctx.scopes == frozenset({"agent", "project"})
+    assert "domain" not in ctx.scopes
+    assert "space" not in ctx.scopes
+
+    # 3. Non-list memory_scopes or groups fail closed
+    with pytest.raises(AuthenticationError, match="memory_scopes"):
+        claims_to_actor_context(
+            TokenClaims(
+                sub="a1",
+                iss="iss",
+                aud="aud",
+                exp=9999999999,
+                raw_claims={"tenant_id": "t1", "projects": ["p1"], "memory_scopes": "space"},
+            )
+        )
+    with pytest.raises(AuthenticationError, match="groups"):
+        _ = TokenClaims(
+            sub="a1",
+            iss="iss",
+            aud="aud",
+            exp=9999999999,
+            raw_claims={"tenant_id": "t1", "projects": ["p1"], "groups": "admin"},
+        ).groups
+
+    # 4. External plaintext http security_gate_url is rejected & null revocations fails closed
+    from unittest.mock import MagicMock
+
+    from engramory.access.jwt_auth import validate_security_gate_url
+
+    with pytest.raises(ValueError, match="Plaintext HTTP is prohibited"):
+        validate_security_gate_url("http://evil.example.com:8095")
+    assert validate_security_gate_url("http://security-gate:8095")[1] is None
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = b'{"revocations": null}'
+    with patch("httpx.Client.get", return_value=mock_resp):
+        with pytest.raises(AuthenticationError, match="fail-closed"):
+            check_token_revocation(
+                claims_str_false,
+                security_gate_url="http://127.0.0.1:8095",
+                fail_closed=True,
+            )

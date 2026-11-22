@@ -15,9 +15,9 @@ title: "Access Surface & Authorization"
 
 document_control:
   status: Approved
-  version: "1.1"
+  version: "1.2"
   date_created: "2026-06-22T00:00:00"
-  last_updated: "2026-11-13T00:00:00"
+  last_updated: "2026-11-21T00:00:00"
   author: "Engramory team"
   component: "AccessSurface"
   tdd_ready_score: "98/100"
@@ -31,10 +31,12 @@ component_overview:
     audited, and fails closed on uncertainty inside AccessSurface itself. Implements
     the governed-write gate for SDD-artifact writes.
     TRUST (ADR-10 dev-tier carve-out): in production, ActorContext is constructed
-    exclusively from OIDC claims verified by the gateway; the one fenced exception is
-    the dev tier, where the CLI (arrives with PLAN-002 Phase 2) builds ActorContext
-    from local config — permitted only under ENGRAMORY_PROFILE=dev (single-tenant,
-    local store; the factory's require_dev_profile fence lands with the CLI).
+    exclusively from OIDC claims verified by the gateway (HTTPS/loopback/mesh JWKS,
+    fail-closed async/sync revocation cache, strict string-claim validation, no ?token=
+    query auth, and pre-body HTTP authentication over FastAPI/Uvicorn); the one fenced
+    exception is the dev tier, where the CLI builds ActorContext from local config —
+    permitted only on loopback hosts when --auth is disabled under ENGRAMORY_PROFILE=dev
+    (stdio with --auth is refused).
   architecture_decision: "@adr: ADR-02"
   diagram:
     tags: ["@diagram: c4-l3", "@diagram: dfd-l3"]
@@ -64,7 +66,7 @@ interfaces:
     - name: "memory_feedback"
       type: "async function"
       signature: "async def memory_feedback(ctx: ActorContext, retrieval_id: RetrievalId, outcome: str) -> None"
-      description: "Record a retrieval outcome (useful | not_useful | harmful); drives the SPEC-04 confidence-update rule via the memory_retrievals log (migration 0003)."
+      description: "Record a retrieval outcome (useful | not_useful | harmful); enforces retrieval ownership (tenant/agent/scope), reverses prior applied_delta on revision, requires >= 2 distinct agent_id harmful votes for shared scopes, and audits denials."
       errors: ["AuthzError"]
     - name: "memory_forget"
       type: "async function"
@@ -183,7 +185,9 @@ data_models:
 behavior:
   validation_rules:
     - { rule: "Every read/write is authorized and scoped by agent/project/tenant before execution", source: "@ears: EARS.01.03.e020" }
-    - { rule: "SDD-artifact writes require a valid approved-evidence reference", source: "@ears: EARS.01.03.a700" }
+    - { rule: "SDD-artifact writes require a valid approved-evidence reference (enforced on sdd_ingest and memory/docs ingest)", source: "@ears: EARS.01.03.a700" }
+    - { rule: "Agent offboarding (agent_space_offboard) enforces same-agent/explicit-admin authz, audits denials, and never soft-deletes space-scoped shared memories", source: "@ears: EARS.01.03.e020" }
+    - { rule: "Documentation smoke runners execute only strict shlex-allowlisted non-shell commands with scrubbed env and symlink-free workspace confinement", source: "@ears: EARS.01.04.c300" }
   state_transitions:
     - { from: "Received", to: "Denied", trigger: "scope check fails OR missing evidence", source: "@bdd: BDD.01.03.e500" }
     - { from: "Received", to: "Executed", trigger: "authorized", source: "@bdd: BDD.01.03.a100" }

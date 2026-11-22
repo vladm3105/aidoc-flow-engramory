@@ -5,13 +5,17 @@ Integrates with Authentik OIDC and platform-security 2-Axis Hybrid RBAC.
 
 from __future__ import annotations
 
+import ipaddress
+import json
 import logging
+import os
 import threading
-import urllib.error
-import urllib.request
+import time
+import urllib.parse
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
 import jwt
 from jwt import PyJWKClient
 from jwt.exceptions import PyJWKClientError
@@ -21,9 +25,29 @@ from engramory.core.models import SCOPES
 
 logger = logging.getLogger(__name__)
 
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+_INTERNAL_SUFFIXES = (".internal", ".local", ".int.aiops-flow.io", ".mesh", ".cluster.local")
+_MAX_REVOCATION_BODY_BYTES = 1024 * 1024
+
 
 class AuthenticationError(Exception):
     """Raised when token verification or revocation checks fail."""
+
+
+def _extract_str_list(raw: Any, claim_name: str) -> list[str]:
+    """Validate and extract a list of non-empty strings from a JWT claim."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list | tuple):
+        raise AuthenticationError(f"Malformed JWT '{claim_name}' claim: expected list")
+    out: list[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            raise AuthenticationError(f"Malformed JWT '{claim_name}' claim entry: expected string")
+        cleaned = item.strip()
+        if cleaned:
+            out.append(cleaned)
+    return out
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,14 +67,16 @@ class TokenClaims:
 
     @property
     def groups(self) -> list[str]:
-        groups = self.raw_claims.get("groups") or self.raw_claims.get("roles") or []
-        return [str(g) for g in groups]
+        if "groups" in self.raw_claims and self.raw_claims["groups"] is not None:
+            return _extract_str_list(self.raw_claims["groups"], "groups")
+        if "roles" in self.raw_claims and self.raw_claims["roles"] is not None:
+            return _extract_str_list(self.raw_claims["roles"], "roles")
+        return []
 
     @property
     def namespaces(self) -> list[str]:
         """2-Axis Axis 2 disjoint root namespaces (platform, aidoc, b-local, security)."""
-        raw_ns = self.raw_claims.get("namespaces") or []
-        extracted = [str(n).strip() for n in raw_ns if str(n).strip()]
+        extracted = _extract_str_list(self.raw_claims.get("namespaces"), "namespaces")
         for g in self.groups:
             if g.startswith("ns:"):
                 ns_val = g.split(":", 1)[1].strip()
@@ -61,8 +87,7 @@ class TokenClaims:
     @property
     def projects(self) -> list[str]:
         """Bound project identifiers."""
-        raw_proj = self.raw_claims.get("projects") or []
-        return [str(p).strip() for p in raw_proj if str(p).strip()]
+        return _extract_str_list(self.raw_claims.get("projects"), "projects")
 
     @property
     def agent_role(self) -> str | None:
@@ -141,8 +166,10 @@ class JWKSValidator:
             raise AuthenticationError("Missing token")
 
         clean_token = token.strip()
-        if clean_token.startswith("Bearer "):
+        if clean_token[:7].lower() == "bearer ":
             clean_token = clean_token[7:].strip()
+        if not clean_token:
+            raise AuthenticationError("Missing token")
 
         try:
             try:
@@ -190,25 +217,82 @@ class JWKSValidator:
             raise AuthenticationError(f"Token validation failed: {exc}") from exc
 
 
+def _is_internal_mesh_host(hostname: str) -> bool:
+    """Return True for loopback, RFC1918/private IP, single-label, or internal DNS hosts."""
+    host = hostname.strip("[]").lower()
+    if not host:
+        return False
+    if host in _LOOPBACK_HOSTS:
+        return True
+    try:
+        ip_obj = ipaddress.ip_address(host)
+        return ip_obj.is_loopback or ip_obj.is_private or ip_obj.is_link_local
+    except ValueError:
+        pass
+    if "." not in host:
+        return True
+    return host.endswith(_INTERNAL_SUFFIXES)
+
+
+def validate_security_gate_url(security_gate_url: str) -> tuple[str, str | None]:
+    """Validate Security Gate URL; enforce HTTPS on external hosts, return (url, uds_path)."""
+    cleaned = security_gate_url.strip()
+    if not cleaned:
+        raise ValueError("Empty security_gate_url")
+    parsed = urllib.parse.urlparse(cleaned)
+    scheme = parsed.scheme.lower()
+    if scheme in {"unix", "http+unix"}:
+        if not parsed.path:
+            raise ValueError(f"Unix domain socket path required in security_gate_url: {cleaned}")
+        return "http://localhost/v1/gate/revocations", parsed.path
+    if scheme not in {"http", "https"}:
+        raise ValueError(f"Invalid security gate URL scheme: {cleaned}")
+    host = parsed.hostname or ""
+    if not host:
+        raise ValueError(f"Missing host in security_gate_url: {cleaned}")
+    if parsed.username or parsed.password:
+        raise ValueError("Credentials in security_gate_url are prohibited")
+    if scheme == "http" and not _is_internal_mesh_host(host):
+        raise ValueError(
+            f"Plaintext HTTP is prohibited for external security_gate_url '{cleaned}'; "
+            "use HTTPS or internal mesh host"
+        )
+    return f"{cleaned.rstrip('/')}/v1/gate/revocations", None
+
+
 def claims_to_actor_context(claims: TokenClaims) -> ActorContext:
-    """Map verified TokenClaims to canonical ActorContext with ADR-07 scope ladder grants."""
-    agent_id = claims.agent_id or claims.sub
+    """Map verified TokenClaims to canonical ActorContext with fail-closed ADR-07 scope grants."""
+    agent_id = claims.agent_id or (claims.sub.strip() if isinstance(claims.sub, str) else "")
+    if not agent_id:
+        raise AuthenticationError("Missing agent_id/sub claim")
 
     raw_tenant = claims.raw_claims.get("tenant_id")
-    if raw_tenant:
-        tenant_id = str(raw_tenant).strip()
+    if raw_tenant is not None and not isinstance(raw_tenant, str):
+        raise AuthenticationError("Malformed tenant_id claim: expected string")
+    if isinstance(raw_tenant, str) and raw_tenant.strip():
+        tenant_id = raw_tenant.strip()
     elif claims.namespaces:
         tenant_id = claims.namespaces[0]
     else:
-        tenant_id = "default"
+        raise AuthenticationError("Missing required tenant_id or namespaces claim")
 
     raw_projects = claims.projects
-    project_id = raw_projects[0] if raw_projects else "core"
+    raw_project_id = claims.raw_claims.get("project_id")
+    if raw_project_id is not None and not isinstance(raw_project_id, str):
+        raise AuthenticationError("Malformed project_id claim: expected string")
+    if raw_projects:
+        project_id = raw_projects[0]
+    elif isinstance(raw_project_id, str) and raw_project_id.strip():
+        project_id = raw_project_id.strip()
+    else:
+        raise AuthenticationError("Missing required project_id or projects claim")
 
     raw_domain = claims.raw_claims.get("domain_id") or claims.raw_claims.get("department_focus")
     domain_id: str | None = None
-    if raw_domain:
-        domain_id = str(raw_domain).strip() or None
+    if raw_domain is not None:
+        if not isinstance(raw_domain, str):
+            raise AuthenticationError("Malformed domain_id claim: expected string")
+        domain_id = raw_domain.strip() or None
     else:
         for grp in claims.groups:
             if grp.startswith("domain:"):
@@ -216,22 +300,28 @@ def claims_to_actor_context(claims: TokenClaims) -> ActorContext:
                 if domain_id:
                     break
 
-    # Evaluate role-authorized scopes
+    # Evaluate role-authorized scopes (no domain auto-grant; strict bool is_superuser)
     max_scopes: set[str] = {"agent", "project"}
     roles = set(claims.groups)
-    if "domain-admin" in roles or domain_id is not None:
+    if "domain-admin" in roles:
         max_scopes.add("domain")
-    if any(r in roles for r in ("platform-admin", "superuser")) or claims.raw_claims.get(
-        "is_superuser"
+    if any(r in roles for r in ("platform-admin", "superuser")) or (
+        claims.raw_claims.get("is_superuser") is True
     ):
         max_scopes.update({"domain", "space"})
 
     if "memory_scopes" in claims.raw_claims:
         custom_scopes = claims.raw_claims["memory_scopes"]
-        if isinstance(custom_scopes, list):
-            granted_scopes = {str(s).strip() for s in custom_scopes} & max_scopes
-        else:
-            granted_scopes = max_scopes
+        if not isinstance(custom_scopes, list):
+            raise AuthenticationError("Malformed memory_scopes claim: expected list")
+        requested: set[str] = set()
+        for entry in custom_scopes:
+            if not isinstance(entry, str) or not entry.strip():
+                raise AuthenticationError(
+                    "Malformed memory_scopes entry: expected non-empty string"
+                )
+            requested.add(entry.strip())
+        granted_scopes = requested & max_scopes
     else:
         granted_scopes = max_scopes
 
@@ -245,75 +335,165 @@ def claims_to_actor_context(claims: TokenClaims) -> ActorContext:
     )
 
 
+class RevocationCache:
+    """Thread-safe short-TTL cache of revoked JTIs/principals fetched from Security Gate."""
+
+    def __init__(self, ttl_seconds: float = 15.0) -> None:
+        self._ttl_seconds = ttl_seconds
+        self._lock = threading.Lock()
+        self._entries: dict[str, tuple[float, frozenset[str]]] = {}
+
+    def get(self, cache_key: str) -> frozenset[str] | None:
+        now = time.monotonic()
+        with self._lock:
+            hit = self._entries.get(cache_key)
+            if hit is None:
+                return None
+            fetched_at, values = hit
+            if now - fetched_at > self._ttl_seconds:
+                self._entries.pop(cache_key, None)
+                return None
+            return values
+
+    def set(self, cache_key: str, values: frozenset[str]) -> None:
+        with self._lock:
+            self._entries[cache_key] = (time.monotonic(), values)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
+
+
+def _resolve_fail_closed(fail_closed: bool | None) -> bool:
+    if fail_closed is not None:
+        return fail_closed
+    return os.environ.get("SECURITY_GATE_FAIL_CLOSED", "true").lower() not in (
+        "0",
+        "false",
+        "no",
+    )
+
+
+def _principals_for_claims(claims: TokenClaims) -> tuple[str | None, set[str]]:
+    jti = claims.jti
+    agent_id = claims.agent_id or claims.sub
+    actor_sub = claims.actor.get("sub") if isinstance(claims.actor, dict) else None
+    principals = {p for p in (agent_id, claims.sub, actor_sub) if p}
+    return jti, principals
+
+
+def _assert_not_revoked(
+    jti: str | None, principals: set[str], revoked_set: set[str] | frozenset[str]
+) -> None:
+    if jti and jti in revoked_set:
+        raise AuthenticationError(f"Token {jti} has been revoked by platform kill-switch")
+    for principal in principals:
+        if principal in revoked_set:
+            raise AuthenticationError(f"Agent {principal} has been revoked by platform kill-switch")
+
+
+def _parse_revocation_response(resp: httpx.Response) -> frozenset[str]:
+    if resp.status_code != 200:
+        raise ValueError(f"Unexpected Security Gate status {resp.status_code}")
+    raw_bytes = resp.content
+    if len(raw_bytes) > _MAX_REVOCATION_BODY_BYTES:
+        raise ValueError(
+            f"Security Gate revocation payload exceeds {_MAX_REVOCATION_BODY_BYTES} bytes"
+        )
+    data = json.loads(raw_bytes.decode("utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("Invalid Security Gate revocation response")
+    if "revocations" not in data or data["revocations"] is None:
+        if "revocations" in data and data["revocations"] is None:
+            raise ValueError("Invalid Security Gate revocation list: got null")
+        revoked_list: Any = []
+    else:
+        revoked_list = data["revocations"]
+    if not isinstance(revoked_list, list):
+        raise ValueError("Invalid Security Gate revocation list: expected list")
+    revoked_targets: set[str] = set()
+    for item in revoked_list:
+        if not isinstance(item, dict):
+            raise ValueError("Invalid Security Gate revocation entry: expected object")
+        target = item.get("target")
+        if isinstance(target, str) and target.strip():
+            revoked_targets.add(target.strip())
+    return frozenset(revoked_targets)
+
+
 def check_token_revocation(
     claims: TokenClaims,
     security_gate_url: str | None = None,
     *,
     revoked_identifiers: set[str] | None = None,
     fail_closed: bool | None = None,
+    cache: RevocationCache | None = None,
 ) -> None:
-    """Check if token jti or agent_id has been revoked by platform kill-switch.
+    """Synchronously check if token jti or agent_id has been revoked by platform kill-switch."""
+    eff_fail_closed = _resolve_fail_closed(fail_closed)
+    jti, principals = _principals_for_claims(claims)
 
-    Args:
-        claims: Verified token claims.
-        security_gate_url: Optional Security Gate HTTP URL (e.g. http://security-gate:8095).
-        revoked_identifiers: Optional in-memory set of revoked JTIs or agent IDs (for tests).
-        fail_closed: If True (default unless SECURITY_GATE_FAIL_CLOSED=false), raise
-            AuthenticationError when a configured security_gate_url is unreachable.
-    """
-    import os
-
-    if fail_closed is None:
-        fail_closed = os.environ.get("SECURITY_GATE_FAIL_CLOSED", "true").lower() not in (
-            "0",
-            "false",
-            "no",
-        )
-    jti = claims.jti
-    agent_id = claims.agent_id or claims.sub
-    actor_sub = claims.actor.get("sub") if isinstance(claims.actor, dict) else None
-    principals = {p for p in (agent_id, claims.sub, actor_sub) if p}
-
-    # Check local in-memory set if provided
     if revoked_identifiers:
-        if jti and jti in revoked_identifiers:
-            raise AuthenticationError(f"Token {jti} has been revoked by platform kill-switch")
-        for principal in principals:
-            if principal in revoked_identifiers:
-                raise AuthenticationError(
-                    f"Agent {principal} has been revoked by platform kill-switch"
-                )
+        _assert_not_revoked(jti, principals, revoked_identifiers)
 
-    # Check Security Gate if configured
     if security_gate_url:
-        target_url = f"{security_gate_url.rstrip('/')}/v1/gate/revocations"
-        if not (target_url.startswith("http://") or target_url.startswith("https://")):
-            raise ValueError(f"Invalid security gate URL scheme: {target_url}")
+        target_url, uds_path = validate_security_gate_url(security_gate_url)
+        cache_key = f"{uds_path or ''}|{target_url}"
+        cached = cache.get(cache_key) if cache is not None else None
+        if cached is not None:
+            _assert_not_revoked(jti, principals, cached)
+            return
         try:
-            req = urllib.request.Request(target_url, headers={"User-Agent": "Engramory-Auth/1.0"})
-            # nosemgrep  # reason: target_url scheme validated to http/https
-            with urllib.request.urlopen(req, timeout=2.0) as resp:  # nosec B310  # reason: scheme ok
-                if resp.status != 200:
-                    raise ValueError(f"Unexpected Security Gate status {resp.status}")
-                import json
-
-                data = json.loads(resp.read().decode("utf-8"))
-                if not isinstance(data, dict):
-                    raise ValueError("Invalid Security Gate revocation response")
-                revoked_list = data.get("revocations", [])
-                revoked_set = {r.get("target") for r in revoked_list if isinstance(r, dict)}
-                if jti and jti in revoked_set:
-                    raise AuthenticationError(
-                        f"Token {jti} has been revoked by platform kill-switch"
-                    )
-                for principal in principals:
-                    if principal in revoked_set:
-                        raise AuthenticationError(
-                            f"Agent {principal} has been revoked by platform kill-switch"
-                        )
-        except (urllib.error.URLError, ValueError, OSError) as exc:
+            transport = httpx.HTTPTransport(uds=uds_path) if uds_path else None
+            with httpx.Client(timeout=2.0, follow_redirects=False, transport=transport) as client:
+                resp = client.get(target_url, headers={"User-Agent": "Engramory-Auth/1.0"})
+            revoked_set = _parse_revocation_response(resp)
+            if cache is not None:
+                cache.set(cache_key, revoked_set)
+            _assert_not_revoked(jti, principals, revoked_set)
+        except (httpx.HTTPError, ValueError, TypeError, json.JSONDecodeError, OSError) as exc:
             logger.warning("Could not reach Security Gate revocation endpoint: %s", exc)
-            if fail_closed:
+            if eff_fail_closed:
+                raise AuthenticationError(
+                    f"Token revocation check failed (fail-closed): {exc}"
+                ) from exc
+
+
+async def check_token_revocation_async(
+    claims: TokenClaims,
+    security_gate_url: str | None = None,
+    *,
+    revoked_identifiers: set[str] | None = None,
+    fail_closed: bool | None = None,
+    cache: RevocationCache | None = None,
+) -> None:
+    """Asynchronously check if token jti or agent_id has been revoked by platform kill-switch."""
+    eff_fail_closed = _resolve_fail_closed(fail_closed)
+    jti, principals = _principals_for_claims(claims)
+
+    if revoked_identifiers:
+        _assert_not_revoked(jti, principals, revoked_identifiers)
+
+    if security_gate_url:
+        target_url, uds_path = validate_security_gate_url(security_gate_url)
+        cache_key = f"{uds_path or ''}|{target_url}"
+        cached = cache.get(cache_key) if cache is not None else None
+        if cached is not None:
+            _assert_not_revoked(jti, principals, cached)
+            return
+        try:
+            transport = httpx.AsyncHTTPTransport(uds=uds_path) if uds_path else None
+            async with httpx.AsyncClient(
+                timeout=2.0, follow_redirects=False, transport=transport
+            ) as client:
+                resp = await client.get(target_url, headers={"User-Agent": "Engramory-Auth/1.0"})
+            revoked_set = _parse_revocation_response(resp)
+            if cache is not None:
+                cache.set(cache_key, revoked_set)
+            _assert_not_revoked(jti, principals, revoked_set)
+        except (httpx.HTTPError, ValueError, TypeError, json.JSONDecodeError, OSError) as exc:
+            logger.warning("Could not reach Security Gate revocation endpoint: %s", exc)
+            if eff_fail_closed:
                 raise AuthenticationError(
                     f"Token revocation check failed (fail-closed): {exc}"
                 ) from exc

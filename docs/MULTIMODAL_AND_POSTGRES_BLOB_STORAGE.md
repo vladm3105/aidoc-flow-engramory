@@ -13,7 +13,7 @@ watched_paths:
   - "src/engramory/core/parsers/detector.py"
   - "src/engramory/core/extraction/router.py"
   - "db/migrations/0010_multimodal_rag_and_blob_cas.sql"
-last_verified: "2026-11-13"
+last_verified: "2026-11-21"
 ---
 
 # Engramory Multimodal Ingestion & PostgreSQL 18 Large-Blob (`20 GB+`) CAS Architecture
@@ -77,7 +77,7 @@ Naively storing a `20 GB` video in a single PostgreSQL column fails due to Postg
 2. **Physical Tablespace Isolation (`TABLESPACE ts_blob_cold`):** Places chunk tables on a dedicated mount (`/var/lib/postgresql/blob_ts`) separate from `pg_default` (`/var/lib/postgresql/data/pgdata`).
 3. **Zero-Recompression TOAST (`STORAGE EXTERNAL`):** Disables `pglz`/`lz4` CPU recompression on pre-compressed `MP4`/`H.264`/`H.265`/`JPEG`/`PNG`/`PDF` bytes and sets `fillfactor = 100`.
 4. **Tiered WAL Logging (`LOGGED` vs. `UNLOGGED`):** Routes blobs `<= 50 MiB` to `LOGGED` `kb_blob_chunks` and blobs `> 50 MiB` (up to `20 GB+`) to `UNLOGGED` `kb_blob_chunks_large` (`0 B` WAL generation during bulk video ingest).
-5. **Ring-Buffer Bulk I/O & TOAST Clock-Sweep Hygiene:** Uses `COPY BINARY` (`16 MiB` `BAS_BULKWRITE` ring buffer) on write and `4`-chunk (`16 MiB`) keyset pagination on read (TOAST pages enter `shared_buffers` with `usage_count = 1`, never evicting HNSW pages at `usage_count = 5`).
+5. **RLS-Compliant Streaming Chunk Writes & Keyset Reads:** Writes fixed-size chunks via parameterized binary `INSERT ... ON CONFLICT DO UPDATE` under transaction-local `app.tenant_id` (`FORCE ROW LEVEL SECURITY` re-applied across `commit()` and `rollback()`) and reads via `4`-chunk (`16 MiB`) keyset pagination so TOAST pages enter `shared_buffers` with minimal HNSW eviction.
 
 ### 3.2 Canonical DDL (`kb_blobs`, `kb_blob_chunks`, `kb_blob_chunks_large`)
 
@@ -169,23 +169,16 @@ Both chunk tables intentionally omit foreign keys back to `kb_blobs`: PostgreSQL
 
 ## 4. Streaming Protocol, `UNLOGGED` Crash Recovery & `postgresql.conf` Tuning
 
-### 4.1 Direct `:5432` Streaming Pool & `COPY BINARY` Protocol
+### 4.1 Direct `:5432` Streaming Pool & RLS-Safe Binary Chunk Protocol
 
-`PgBlobStorageAdapter` connects via a dedicated, bounded direct PostgreSQL pool (`127.0.0.1:5432` on dev / `10.250.0.1:5432` on stage, `max_size = 4`, `autocommit = True`), bypassing `PgBouncer` transaction-mode pooling (`127.0.0.1:6432`) so multi-minute `COPY BINARY` streams never hold transactional pool slots:
+`PgBlobStorageAdapter` connects via a dedicated, bounded direct PostgreSQL pool (`127.0.0.1:5432` on dev / `10.250.0.1:5432` on stage, `max_size = 4`), binding transaction-local `SET LOCAL app.tenant_id` via `_conn(tenant_id=...)` and re-applying `set_config('app.tenant_id', ...)` across `commit()` and `rollback()` boundaries under `FORCE ROW LEVEL SECURITY`:
 
 ```python
-# Write path (PgBlobStorageAdapter._stream_chunks_into_pg):
+# Write path (PgBlobStorageAdapter._put_known_stream):
 # 1. UPSERT kb_blobs with status='uploading', storage_tier=('unlogged' if size > 52428800 else 'logged')
-# 2. Stream 4 MiB chunks via psycopg v3 COPY BINARY (activates 16 MiB BAS_BULKWRITE ring buffer):
-async with conn.cursor() as cur:
-    async with cur.copy(
-        f"COPY {target_table} (tenant_id, blob_sha256, chunk_index, chunk_sha256, byte_size, data) "
-        "FROM STDIN WITH (FORMAT BINARY)"
-    ) as copy:
-        copy.set_types(["text", "text", "int4", "bytea", "int4", "bytea"])
-        for idx, chunk_bytes, chunk_digest in chunk_iterator:
-            await copy.write_row((tenant_id, blob_sha256, idx, chunk_digest, len(chunk_bytes), chunk_bytes))
-# 3. Verify COUNT(*) == chunk_count, flip kb_blobs.status = 'ready', and issue CHECKPOINT if unlogged.
+# 2. Commit metadata cleanup and re-apply SELECT set_config('app.tenant_id', tid, true)
+# 3. Stream chunks via parameterized binary INSERT ... ON CONFLICT DO UPDATE (satisfying FORCE RLS)
+# 4. Verify COUNT(*) == chunk_count, flip kb_blobs.status = 'ready', and CHECKPOINT if unlogged.
 ```
 
 For streaming reads (`get_stream`), `PgBlobStorageAdapter` first verifies `SELECT COUNT(*) FROM <chunk_table> WHERE tenant_id = $1 AND blob_sha256 = $2` equals `kb_blobs.chunk_count`, then fetches `4` chunks (`16 MiB`) per round-trip via keyset pagination (`WHERE tenant_id = $1 AND blob_sha256 = $2 AND chunk_index >= $3 ORDER BY chunk_index ASC LIMIT 4`).
@@ -242,8 +235,8 @@ Neo4j always acts as a **deterministic, rebuildable projection** of canonical Po
 
 Engramory implements the full multimodal and PostgreSQL 18 `20 GB+` Chunked Blob CAS pipeline across five modules:
 
-1. **Migration `db/migrations/0010_multimodal_rag_and_blob_cas.sql`:** Provisions `kb_blobs` (`STAGED`/`READY`), `kb_blob_chunks` (`LOGGED` `<= 50 MiB`), `kb_blob_chunks_large` (`UNLOGGED` `> 50 MiB` with `STORAGE EXTERNAL`), and multimodal columns on `kb_sections` (`modality`, `blob_sha256`, `blob_uri`, `media_metadata`) with `SELECT current_setting('app.tenant_id', true)` RLS policies.
-2. **`StoragePort` Streaming & `PostgresBlobStorageAdapter` (`src/engramory/ports/storage.py`, `src/engramory/adapters/dev/storage_pg_blob.py`):** Implements `put_stream()`, `get_stream()`, and `gc_orphan_blobs()` with `4 MiB` chunking (`O(1)` memory), end-to-end `SHA-256` verification, `BlobTruncatedError` completeness guards, and `LocalFsStorageAdapter` (`src/engramory/adapters/dev/storage_local.py`).
+1. **Migrations `0010` & `0011` (`db/migrations/0010_multimodal_rag_and_blob_cas.sql`, `0011_wave_p0_isolation_and_rls.sql`):** Provisions `kb_blobs`, `kb_blob_chunks` (`LOGGED` `<= 50 MiB`), `kb_blob_chunks_large` (`UNLOGGED` `> 50 MiB` with `STORAGE EXTERNAL`), multimodal columns on `kb_sections` (`modality`, `blob_sha256`, `blob_uri`, `media_metadata`, `agent_id`), and `FORCE ROW LEVEL SECURITY` with `NULLIF(current_setting('app.tenant_id', true), '')` + `engramory_worker` sweep policies.
+2. **`StoragePort` Streaming & `PgBlobStorageAdapter` (`src/engramory/ports/storage.py`, `src/engramory/adapters/dev/storage_pg.py`):** Implements `put_stream()`, `get_stream()`, and `gc_orphan_chunks()` with `4 MiB` chunking (`O(1)` memory), end-to-end `SHA-256` verification, `BlobTruncatedError` completeness guards, `app.tenant_id` propagation, and `LocalFsStorageAdapter` (`src/engramory/adapters/dev/storage_local.py`).
 3. **Multimodal Extractors & Ingestion Router (`src/engramory/core/extraction/media.py`, `router.py`, `src/engramory/access/surface.py`):** `ImageExtractor` and `VideoAudioExtractor` perform `O(1)`-RAM header probing (`PNG`/`JPEG`/`WebP`/`GIF`/`SVG`, ISO-BMFF `MP4`/`MOV`/`M4A`, RIFF `WAV`) plus optional LiteLLM Vision/Whisper enrichment, stamping `extraction_metadata` (`extraction_model`, `embedding_model`, `rag_params`) into `kb_sections.media_metadata` via `knowledge_ingest_media`.
-4. **3-Leg Hybrid RRF & Dual-Engine GraphRAG (`src/engramory/core/repository.py`, `src/engramory/core/knowledge_graph.py`):** `search_kb_sections()` fuses vector cosine similarity, `websearch_to_tsquery('simple')`, and trigram/ILIKE with `modality` filtering; `extract_document_graph()` extracts `DOCUMENT`, `SECTION`, `MEDIA_BLOB`, Unicode/Cyrillic `CONCEPT`, and SDD nodes projected to Neo4j or traversed via PostgreSQL recursive CTEs (`expand_graph=True`).
+4. **3-Leg Hybrid RRF & Dual-Engine GraphRAG (`src/engramory/core/repository.py`, `src/engramory/core/kb_graph.py`, `src/engramory/adapters/dev/graph_neo4j.py`):** `search_kb_sections()` enforces `allowed_scopes` and `vector(1536)` bounds across hybrid RRF, vector, and lexical legs; `extract_knowledge_and_media_graph()` marks `MEDIA_BLOB` and `CONCEPT` entities `scope='shared'` while qualifying `DOCUMENT`/`SECTION` nodes and edges by `project_id`, `domain_id`, and `scope` across Postgres recursive CTEs and Neo4j Cypher.
 5. **Verification Suite (`tests/test_multimodal_extraction_and_graphrag.py`):** Covers `4 MiB` multi-chunk streaming, `BlobTruncatedError` detection, multimodal extraction, 3-leg RRF, and fused `memory_search(include_knowledge=True, expand_graph=True)`.

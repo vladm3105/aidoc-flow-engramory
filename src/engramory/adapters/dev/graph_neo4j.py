@@ -30,6 +30,54 @@ def _sanitize_ident(ident: str, kind: str) -> str:
     return ident
 
 
+def _scope_cypher_params(
+    *,
+    tenant_id: str,
+    project_id: str | None,
+    domain_id: str | None,
+    allowed_scopes: Sequence[str] | None,
+) -> dict[str, Any]:
+    granted = set(allowed_scopes) if allowed_scopes is not None else set()
+    return {
+        "tenant_id": tenant_id,
+        "project_id": project_id,
+        "domain_id": domain_id,
+        "has_scope_filter": allowed_scopes is not None,
+        "inc_domain": ("domain" in granted or "space" in granted)
+        if allowed_scopes is not None
+        else bool(domain_id),
+        "inc_space": ("space" in granted) if allowed_scopes is not None else False,
+    }
+
+
+def _cypher_node_scope_clause(var: str) -> str:
+    return (
+        f"((($tenant_id = 'default' AND {var}.tenant_id IS NULL) OR {var}.tenant_id = $tenant_id) "
+        f"AND (($project_id IS NULL AND $domain_id IS NULL AND NOT $has_scope_filter) "
+        f"OR ($inc_space AND {var}.scope = 'space') "
+        f"OR (({var}:MEDIA_BLOB OR {var}:CONCEPT) AND {var}.scope = 'shared') "
+        f"OR ($inc_domain AND $domain_id IS NOT NULL AND {var}.domain_id = $domain_id "
+        f"    AND (coalesce({var}.scope, '') = 'domain' OR {var}.project_id IS NULL)) "
+        f"OR ($project_id IS NOT NULL AND {var}.project_id = $project_id)))"
+    )
+
+
+def _cypher_edge_scope_clause(var: str) -> str:
+    return (
+        f"(($project_id IS NULL AND $domain_id IS NULL AND NOT $has_scope_filter) "
+        f"OR ($inc_space AND {var}.scope = 'space') "
+        f"OR ($inc_domain AND $domain_id IS NOT NULL AND {var}.domain_id = $domain_id) "
+        f"OR ($project_id IS NOT NULL AND {var}.project_id = $project_id))"
+    )
+
+
+def _safe_neo4j_record_props(record: Mapping[str, Any], *, tenant_id: str) -> dict[str, Any]:
+    raw_props = dict(record.get("properties") or {})
+    if "uid" in raw_props:
+        raw_props["tenant_id"] = tenant_id
+    return raw_props
+
+
 class Neo4jGraphAdapter:
     """GraphPort implementation using asynchronous Neo4j Bolt driver."""
 
@@ -190,6 +238,8 @@ class Neo4jGraphAdapter:
         depth: int = 1,
         tenant_id: str = "default",
         project_id: str | None = None,
+        domain_id: str | None = None,
+        allowed_scopes: Sequence[str] | None = None,
     ) -> Sequence[Mapping[str, Any]]:
         """Return nodes reachable from `id` within `depth` hops (bounded traversal)."""
         safe_depth = max(1, min(depth, 5))
@@ -204,44 +254,41 @@ class Neo4jGraphAdapter:
             f"{project_id}:{id}" if project_id and not id.startswith(f"{project_id}:") else id
         )
         prefixed_uid = f"{tenant_id}:{prefixed_id}"
+        start_clause = _cypher_node_scope_clause("n")
+        hop_clause = _cypher_node_scope_clause("x")
+        end_clause = _cypher_node_scope_clause("m")
+        edge_clause = _cypher_edge_scope_clause("r")
         query = f"""
         MATCH (n:Entity)
-        WHERE (
-            n.uid = $uid
-            OR n.uid = $prefixed_uid
-            OR (
-                (n.id = $id OR n.id = $prefixed_id)
-                AND (n.tenant_id = $tenant_id OR ($tenant_id = 'default' AND n.tenant_id IS NULL))
-            )
-        )
+        WHERE (n.uid = $uid OR n.uid = $prefixed_uid OR n.id = $id OR n.id = $prefixed_id)
+          AND {start_clause}
         MATCH p = (n)-[{rel_pattern}]-(m:Entity)
         WHERE m <> n
-          AND (m.tenant_id = $tenant_id OR ($tenant_id = 'default' AND m.tenant_id IS NULL))
-          AND ALL(
-              x IN nodes(p)
-              WHERE (x.tenant_id = $tenant_id OR ($tenant_id = 'default' AND x.tenant_id IS NULL))
-                AND ($project_id IS NULL OR x.project_id IS NULL OR x.project_id = $project_id)
-          )
+          AND {end_clause}
+          AND ALL(x IN nodes(p) WHERE {hop_clause})
+          AND ALL(r IN relationships(p) WHERE {edge_clause})
         RETURN DISTINCT m.id AS id, labels(m) AS labels, properties(m) AS properties
         """
+        params = {
+            "uid": node_uid,
+            "prefixed_uid": prefixed_uid,
+            "id": id,
+            "prefixed_id": prefixed_id,
+            **_scope_cypher_params(
+                tenant_id=tenant_id,
+                project_id=project_id,
+                domain_id=domain_id,
+                allowed_scopes=allowed_scopes,
+            ),
+        }
         async with self._driver.session() as session:
-            result = await session.run(
-                query,
-                {
-                    "uid": node_uid,
-                    "prefixed_uid": prefixed_uid,
-                    "id": id,
-                    "prefixed_id": prefixed_id,
-                    "tenant_id": tenant_id,
-                    "project_id": project_id,
-                },
-            )
+            result = await session.run(query, params)
             records = await result.data()
             return [
                 {
                     "id": record["id"],
                     "labels": [lbl for lbl in record["labels"] if lbl != "Entity"],
-                    "properties": record["properties"],
+                    "properties": _safe_neo4j_record_props(record, tenant_id=tenant_id),
                 }
                 for record in records
             ]
@@ -254,6 +301,8 @@ class Neo4jGraphAdapter:
         depth: int = 6,
         tenant_id: str = "default",
         project_id: str | None = None,
+        domain_id: str | None = None,
+        allowed_scopes: Sequence[str] | None = None,
     ) -> Sequence[Mapping[str, Any]]:
         """Return upstream ancestor nodes reachable from `id` (directed out-edges)."""
         safe_depth = max(1, min(depth, 10))
@@ -268,44 +317,41 @@ class Neo4jGraphAdapter:
             f"{project_id}:{id}" if project_id and not id.startswith(f"{project_id}:") else id
         )
         prefixed_uid = f"{tenant_id}:{prefixed_id}"
+        start_clause = _cypher_node_scope_clause("n")
+        hop_clause = _cypher_node_scope_clause("x")
+        end_clause = _cypher_node_scope_clause("m")
+        edge_clause = _cypher_edge_scope_clause("r")
         query = f"""
         MATCH (n:Entity)
-        WHERE (
-            n.uid = $uid
-            OR n.uid = $prefixed_uid
-            OR (
-                (n.id = $id OR n.id = $prefixed_id)
-                AND (n.tenant_id = $tenant_id OR ($tenant_id = 'default' AND n.tenant_id IS NULL))
-            )
-        )
+        WHERE (n.uid = $uid OR n.uid = $prefixed_uid OR n.id = $id OR n.id = $prefixed_id)
+          AND {start_clause}
         MATCH p = (n)-[{rel_pattern}]->(m:Entity)
         WHERE m <> n
-          AND (m.tenant_id = $tenant_id OR ($tenant_id = 'default' AND m.tenant_id IS NULL))
-          AND ALL(
-              x IN nodes(p)
-              WHERE (x.tenant_id = $tenant_id OR ($tenant_id = 'default' AND x.tenant_id IS NULL))
-                AND ($project_id IS NULL OR x.project_id IS NULL OR x.project_id = $project_id)
-          )
+          AND {end_clause}
+          AND ALL(x IN nodes(p) WHERE {hop_clause})
+          AND ALL(r IN relationships(p) WHERE {edge_clause})
         RETURN DISTINCT m.id AS id, labels(m) AS labels, properties(m) AS properties
         """
+        params = {
+            "uid": src_uid,
+            "prefixed_uid": prefixed_uid,
+            "id": id,
+            "prefixed_id": prefixed_id,
+            **_scope_cypher_params(
+                tenant_id=tenant_id,
+                project_id=project_id,
+                domain_id=domain_id,
+                allowed_scopes=allowed_scopes,
+            ),
+        }
         async with self._driver.session() as session:
-            result = await session.run(
-                query,
-                {
-                    "uid": src_uid,
-                    "prefixed_uid": prefixed_uid,
-                    "id": id,
-                    "prefixed_id": prefixed_id,
-                    "tenant_id": tenant_id,
-                    "project_id": project_id,
-                },
-            )
+            result = await session.run(query, params)
             records = await result.data()
             return [
                 {
                     "id": record["id"],
                     "labels": [lbl for lbl in record["labels"] if lbl != "Entity"],
-                    "properties": record["properties"],
+                    "properties": _safe_neo4j_record_props(record, tenant_id=tenant_id),
                 }
                 for record in records
             ]
@@ -318,6 +364,8 @@ class Neo4jGraphAdapter:
         depth: int = 6,
         tenant_id: str = "default",
         project_id: str | None = None,
+        domain_id: str | None = None,
+        allowed_scopes: Sequence[str] | None = None,
     ) -> Sequence[Mapping[str, Any]]:
         """Return downstream descendant nodes reachable from `id` (directed in-edges)."""
         safe_depth = max(1, min(depth, 10))
@@ -332,44 +380,41 @@ class Neo4jGraphAdapter:
             f"{project_id}:{id}" if project_id and not id.startswith(f"{project_id}:") else id
         )
         prefixed_uid = f"{tenant_id}:{prefixed_id}"
+        start_clause = _cypher_node_scope_clause("n")
+        hop_clause = _cypher_node_scope_clause("x")
+        end_clause = _cypher_node_scope_clause("m")
+        edge_clause = _cypher_edge_scope_clause("r")
         query = f"""
         MATCH (n:Entity)
-        WHERE (
-            n.uid = $uid
-            OR n.uid = $prefixed_uid
-            OR (
-                (n.id = $id OR n.id = $prefixed_id)
-                AND (n.tenant_id = $tenant_id OR ($tenant_id = 'default' AND n.tenant_id IS NULL))
-            )
-        )
+        WHERE (n.uid = $uid OR n.uid = $prefixed_uid OR n.id = $id OR n.id = $prefixed_id)
+          AND {start_clause}
         MATCH p = (m:Entity)-[{rel_pattern}]->(n)
         WHERE m <> n
-          AND (m.tenant_id = $tenant_id OR ($tenant_id = 'default' AND m.tenant_id IS NULL))
-          AND ALL(
-              x IN nodes(p)
-              WHERE (x.tenant_id = $tenant_id OR ($tenant_id = 'default' AND x.tenant_id IS NULL))
-                AND ($project_id IS NULL OR x.project_id IS NULL OR x.project_id = $project_id)
-          )
+          AND {end_clause}
+          AND ALL(x IN nodes(p) WHERE {hop_clause})
+          AND ALL(r IN relationships(p) WHERE {edge_clause})
         RETURN DISTINCT m.id AS id, labels(m) AS labels, properties(m) AS properties
         """
+        params = {
+            "uid": dst_uid,
+            "prefixed_uid": prefixed_uid,
+            "id": id,
+            "prefixed_id": prefixed_id,
+            **_scope_cypher_params(
+                tenant_id=tenant_id,
+                project_id=project_id,
+                domain_id=domain_id,
+                allowed_scopes=allowed_scopes,
+            ),
+        }
         async with self._driver.session() as session:
-            result = await session.run(
-                query,
-                {
-                    "uid": dst_uid,
-                    "prefixed_uid": prefixed_uid,
-                    "id": id,
-                    "prefixed_id": prefixed_id,
-                    "tenant_id": tenant_id,
-                    "project_id": project_id,
-                },
-            )
+            result = await session.run(query, params)
             records = await result.data()
             return [
                 {
                     "id": record["id"],
                     "labels": [lbl for lbl in record["labels"] if lbl != "Entity"],
-                    "properties": record["properties"],
+                    "properties": _safe_neo4j_record_props(record, tenant_id=tenant_id),
                 }
                 for record in records
             ]
@@ -409,6 +454,7 @@ class Neo4jGraphAdapter:
         tenant_id: str,
         active_ids: Sequence[str],
         project_id: str | None = None,
+        exclude_kb_labels: bool = True,
     ) -> int:
         """Delete any nodes belonging to tenant_id (and optional project_id)
         whose IDs are not in active_ids.
@@ -416,9 +462,10 @@ class Neo4jGraphAdapter:
         active_uids = [f"{tenant_id}:{i}" for i in active_ids]
         where_clauses = [
             "(n.tenant_id = $tenant_id OR ($tenant_id = 'default' AND n.tenant_id IS NULL))",
-            "NOT (n:DOCUMENT OR n:SECTION OR n:MEDIA_BLOB OR n:CONCEPT)",
             "NOT n.uid IN $active_uids",
         ]
+        if exclude_kb_labels:
+            where_clauses.insert(1, "NOT (n:DOCUMENT OR n:SECTION OR n:MEDIA_BLOB OR n:CONCEPT)")
         params: dict[str, Any] = {"tenant_id": tenant_id, "active_uids": active_uids}
         if project_id:
             where_clauses.append("n.project_id = $project_id")

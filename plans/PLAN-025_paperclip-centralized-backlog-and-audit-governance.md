@@ -12,6 +12,7 @@
 - **Target Branch (`aidoc-flow-engramory`):** `feature/plan-025-paperclip-backlog-and-audit-governance`
 
 > **Supersession Notice (2026-11-21):** Remaining Tracks 2–3 of `PLAN-025` are superseded/declined as follows:
+>
 > - **Track 1A (`platform-paperclip` `v0.5.0`):** Shipped and merged on `dev` (`48dba5a`).
 > - **Track 1B (`platform-stage-ops` Paperclip `v0.5.0` EaC):** Shipped and merged on `dev` (`6fd88b2`).
 > - **Track 2 (`aiops-harness`):** Superseded by `aiops-harness/plans/PLAN-053_chg-iplan-paperclip-engramory-flywheel.md` (`CHG-31`/`IPLAN-31`, commit `f827f0c`), which delivers native `chg ingest-paperclip` / `aiops_chg_sync_paperclip`, execution comments, and Engramory distillation.
