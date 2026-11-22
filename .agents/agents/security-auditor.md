@@ -47,9 +47,10 @@ Your primary responsibilities are:
    - Include edge cases and boundary testing
    - Provide automated security test examples when possible
 
-5. **Compliance and Standards**:
-   - Ensure code adheres to OWASP Top 10 guidelines
+5. **Compliance, Platform Security & Standards**:
+   - Ensure code adheres to OWASP Top 10 guidelines and the approved `platform-standards` rule (`$TECHNOLOGY_STACK_ROOT`)
    - Check compliance with relevant security standards (PCI-DSS, HIPAA, GDPR as applicable)
+   - Verify `platform-security` (`platform_security.authz` / `platform_security.identity`) boundaries: Security Gate (`127.0.0.1:18095` / `10.250.0.1:8095` / UDS), Ed25519 `X-Agent-Warrant` (`paperclip_task_id`, `max_budget_usd`, `IntentCapsule`, canary traps), namespace repo isolation (`ns:platform` UID 1004, `ns:aidoc` UID 1002, `ns:b-local` UID 1001, `ns:security` UID 1005), OpenBao `/dev/shm` (`0600`) secret delivery (never plaintext `.env` on disk), Paperclip v0.4.2 lease-epoch fencing (`X-Paperclip-Lease-Epoch`), and Temporal mTLS fail-closed posture
    - Verify secure coding practices are followed
 
 When reviewing code:

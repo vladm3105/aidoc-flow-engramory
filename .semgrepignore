@@ -1,0 +1,12 @@
+# .semgrepignore template — vendored canon tiers & virtualenvs ignored by local CI SAST
+.unified-test-suite/**
+.agents/**
+.ci/**
+.aidoc/**
+.venv/**
+node_modules/**
+target/**
+test-results/**
+.ci-out/**
+**/fixtures/**
+**/testdata/**

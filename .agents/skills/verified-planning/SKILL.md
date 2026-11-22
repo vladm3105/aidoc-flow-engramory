@@ -12,12 +12,18 @@ skill replaces ritual with two forcing functions.
 
 ## 0. Where the plan lives
 
-A development plan lives in the owning repository's declared planning surface:
+A development design plan lives in the owning repository's declared planning surface:
 
-- In **SDD-governed repositories** (e.g. `aidoc-context-tools`, `aidoc-flow-iplan-standard`): Layer 08 (`docs/sdd/08_IPLAN/IPLAN-NNN_slug.md`).
-- In **standalone and platform-tooling repositories**: the `plans/` directory (`PLAN-NNN_slug.md`).
+- **SDD-governed repositories** (e.g. `aiops-harness` and its thin spokes): follow the **4-Stage Planning & Change Pipeline** (sole exemption: pre-first-BRD seed drafting per `SEED_CONTRACT R1`):
+  1. **Stage 0 — Classify (`sdd-chg-flow`):** Route to `HOTFIX`, `CODE2S`, `CODE2C`, `SEED2C`, `DIR2C` (strictly `C1` non-behavior/non-SDD-cascading only), or `SDD2C` (`GATE-SPEC` + `change_source: spec` for normative `.aidoc/framework/framework/**`).
+  2. **Stage 1 — Upstream Design (`plans/PLAN-NNN_<slug>.md`):** Citation-verified design doc (`check_plan.py`), Two-Tier evaluation, and fresh-context multi-lens review (`<= 3` passes). Optional for trivial `C1` docs/typos or single-line bugfixes tracked directly via GitHub Issue + `C1 CHG` + scoped `IPLAN`. In SDD-governed repos, `plans/PLAN-NNN_<slug>.md` is strictly upstream design and **never replaces `CHG` or `IPLAN`**. (`PLAN-001-ONBOARDING.md`, `PLAN-001-FOUNDATION-AND-INCEPTION.md`, and `PLAN-001-ARCHITECTURE-AND-MODERNIZATION-BASELINE.md` remain Phase-1 kickoff aliases alongside `PLAN-NNN_<slug>.md`.)
+  3. **Stage 2 — Governance Authorization (`docs/sdd/09_CHG/CHG-NN_<slug>.yaml`):** Formal authorization, `decision:`, and Phase 0 SDD cascade (`01_BRD..07_TDD` for `SEED2C`/`SDD2C`) before IPLAN authoring.
+  4. **Stage 3 & 4 — Executable Contract (`docs/sdd/08_IPLAN/IPLAN-NN_<slug>.swf.yaml` + `docs/sdd/graph/SLICE-NN_<slug>.graph.yaml`) & Closeout:** Required `In Progress` before code/deliverable edits (`DOC_GOVERNANCE_CORE.md` §3.13 bootstrap exemption covers authoring `PLAN-NNN` → `CHG` → SDD → `SLICE` → `IPLAN` in order). **3-Way YAML Manifest Parity** (`aiops-harness iplan verify`) validates `CHG-NN.yaml` ↔ `IPLAN-NN.swf.yaml` ↔ `SLICE-NN.graph.yaml`; `plans/PLAN-NNN_<slug>.md` is gated separately by `check_plan.py`, links `CHG`/`IPLAN`/`SLICE` in metadata, and enters the 3-way YAML manifest whenever created/edited in the PR. Authors follow either **Pattern A (Pure Stage-1 Plan First)** (citing only pre-existing repo files in `## Claim ledger` and recording `Planned Authorizing CHG: CHG-NN` in header metadata before minting `CHG`/`IPLAN`/`SLICE`) or **Pattern B (Feature-Branch Phase-0 Co-Bootstrap)** (scaffolding `PLAN-NNN` → `CHG-NN` → `SLICE-NN` → `IPLAN-NN` together on the feature branch before code edits so `check_plan.py` and `iplan verify` run together). Normative files under `.aidoc/framework/framework/**` are governed by `GATE-SPEC` (`change_source: spec`, `framework/VERSION` bump from `0.96.25`), while host `aiops-harness` skills/rules/guides use `DIR2C` (`C1`).
+- **Standalone and platform-tooling repositories** (no `docs/sdd/`): `plans/PLAN-NNN_<slug>.md` alone without `09_CHG`/`08_IPLAN`.
 
 A plan never lives in `docs/superpowers/` and never in an aggregator/umbrella repo that holds no development of its own. This convention takes priority over any generic plan skill's default location.
+
+**Documentation-First Prerequisite (`Seed -> Module -> SDD -> Code`):** In any new or unseeded repository (`docs/seed/00_index.md` absent), `PLAN-001` MUST scope and deliver the Tier-1 Seed documentation (`docs/seed/00_index.md`, `architecture/`, `adr/`, `agent-surface/`) and 4-Bucket Platform Applicability Audit before any application code phases. In existing repositories, plans that introduce or modify features must include phases/tasks to update the governing SDD layers (`01_BRD..09_CHG`) and `watched_paths` documentation prior to or atomically with code changes.
 
 ## 1. Draft with a Claim ledger
 
@@ -66,12 +72,17 @@ Two rules learned from this mechanism's own first use, where both were broken:
 | --- | --- | --- |
 | `path:line` | verified against source | yes |
 | `UNVERIFIED` | you did not look | **no** |
-| `PROBE: <cmd>` | looking cannot answer it | yes — the phase is blocked |
+| `PROBE[experiment]: <cmd>` (or bare `PROBE: <external_cmd>`) | external/throwaway live experiment gating its named `### Phase <N>` (never enters Link-0 SWF) | yes — the phase is blocked |
+| `PROBE[link0]: <readonly_cmd>` (or bare `PROBE: <readonly_cmd>`) | hermetic Link-0 read-only local diagnostic (`pytest`, `ruff`, `mypy`, `true`, `echo`, `test`, `git` with zero shell metacharacters; pairs with `Status = PROBE` + `SPLIT_TO_CHAIN (CHG-<N>)` in `v2`) | yes (or `SPLIT_TO_CHAIN` in `v2`) |
 
 - **Platform claims cite the stack.** A behavioral claim about platform
   surfaces (secrets, cloud, envs, IaC, network, identity) cites the
   stack section (`technology_stack/06-security-rbac.md §9.2`) in
   Citation — an `UNVERIFIED` platform claim cannot reach ready either.
+  Plans must **never** propose **insecure options** (plaintext secrets,
+  relaxed sandboxing, or `--no-verify`); under **Missing Tools**, halt and
+  escalate via `approval-gate` if a required tool is absent from
+  `technology_stack`.
 
 The **symbol is authoritative; the line is an advisory hint.** If a later edit shifts a cited line, the gate
 still passes (the symbol is found elsewhere) and only **warns** that the line drifted — only a genuinely
@@ -180,11 +191,23 @@ Because the review loop is capped at **3 subagent reviews max** (`Review -> Fold
 - **AWS (Well-Architected & Operational Excellence):** One-way vs. two-way door decisions, IAM least privilege & zero-trust secret custody, idempotency, distributed SAGA/partial-failure compensation, and Everything-as-Code (OpenTofu / declarative config) convergence.
 - **Microsoft (SDL & STRIDE Threat Modeling):** STRIDE security threat modeling (Spoofing, Tampering, Repudiation, Information Disclosure, DoS, Elevation of Privilege), defense-in-depth, backward-compatible schema/contract evolution, and supply-chain/CI gate integrity.
 
-**Up-to-3-Review Workflow:**
+#### 3.0.1 Industry Best Practices Mandate (Never Invent Custom Wheels)
 
-1. **Review 1 (Deep Multi-Lens Audit) $\to$ Fold 1:** Dispatch fresh-context subagent(s) applying the selected lenses to surface all `Critical`, `Major`, and `Medium` gaps with `file:line` evidence. Fold all findings into the plan and `## Claim ledger`, then re-run `check_plan.py`.
-2. **Review 2 (Verification & Residual Gap Audit) $\to$ Fold 2:** Dispatch a second fresh-context subagent review to verify every Fold 1 fix against live source files, confirm no regressions or broken references were introduced, and surface any remaining `Critical`, `Major`, or `Medium` gaps. Fold all Round 2 findings and re-run `check_plan.py`. If Review 2 returned zero findings, mark the plan `ready`.
-3. **Review 3 (Final Convergence Pass — 3 Reviews Max) $\to$ Fold 3:** If Review 2 uncovered gaps that required folding, dispatch a third (and final) fresh-context subagent review to verify Fold 2 and fold any remaining gaps, re-run `check_plan.py`, and mark the plan `ready`.
+Review subagents must benchmark the plan against established, authoritative industry standards and best practices directly relevant to the plan's domain tasks, rejecting attempts to invent custom or idiosyncratic patterns:
+
+- **Security & Authorization:** NIST SP 800-63 / 800-207 (Zero Trust), OWASP Top 10 & API Security Top 10, Microsoft STRIDE threat taxonomy, principle of least privilege, ephemeral secret delivery (`/dev/shm` mode `0600`).
+- **Protocols & Interfaces:** Model Context Protocol (MCP specification), CloudEvents v1.0.2, CNCF Serverless Workflow v0.8, OpenAPI 3.1 / JSON-Schema Draft 2020-12.
+- **Reliability & SRE:** Google SRE invariants (error budgets, circuit breakers, graceful degradation, health probes), AWS Well-Architected Framework (two-way door reversible decisions, idempotent handlers, distributed SAGA compensation).
+- **Architecture & Infrastructure-as-Code:** Clean Architecture / Hexagonal Ports & Adapters, Twelve-Factor App methodology, OpenTofu / declarative state convergence, Semantic Versioning 2.0.0.
+- **Agentic Systems & LLMs:** Anthropic Evaluator-Optimizer pattern (`Judge != Generator`), constitutional invariant enforcement, CaMeL prompt injection fencing, token economy and bounded sliding windows.
+
+Review findings must cite deviations from these established industry standards and require standard alignment before clearing a plan pass.
+
+**Up-to-3-Pass Review Log Workflow (`Pass 1..3`, `_TASK_PASS_CAP_V2 = 3`):**
+
+1. **Pass 1 (`### Pass 1 - <date>` [or `- independent`]) $\to$ Fold 1:** Initial draft and `check_plan.py` gate check (or first fresh-context subagent multi-lens audit). Dispatch fresh-context subagent(s) applying the 2–4 selected lenses to surface all `Critical`, `Major`, and `Medium` gaps with `file:line` evidence. Fold all findings into the plan and `## Claim ledger` (tagging new claims `NEW@pass2`) and re-run `check_plan.py`.
+2. **Pass 2 (`### Pass 2 - <date> - independent`) $\to$ Fold 2:** Fresh-context subagent review verifying every prior fix against live source files, confirming zero broken references, and surfacing any remaining `Critical`, `Major`, or `Medium` gaps. If Pass 2 returns zero findings (and `100% LOCKED` tasks in `v2`), mark the plan `ready`.
+3. **Pass 3 (`### Pass 3 - <date> - independent` — Final Convergence Pass, 3 Passes Max) $\to$ Fold 3:** If Pass 2 required folding, dispatch the final fresh-context subagent review to verify Fold 2, re-run `check_plan.py --hash-tasks --fix`, and close with either `**Result:** ready — no further findings.`, `**Disposition:** SPLIT_TO_CHAIN (CHG-<N>)`, or `**Disposition:** ESCALATE`.
 
 **Define the unit once: a *pass* is a logged review** recorded as
 `### Pass N - <date>`. At least one pass MUST be dispatched — the
@@ -256,6 +279,42 @@ grows. Converge the **decision set**: the claims that change what gets built.
 A finding of the form "the plan should also mention X" is not load-bearing unless
 X changes an action. Say so in the fold and move on — folding it grows the
 surface for no decision.
+
+### 3.3 Autonomous Open-Question Resolution (Tier-1 4-Pillar Persona Matrix + Auto-Continue)
+
+Whenever the authoring or reviewing agent encounters open questions during conversation turns or plan draft rounds:
+
+1. **Generate 3 Recommendations per Open Question:** Provide **3 distinct recommendations/options** for each question with clear rationale and trade-offs.
+2. **Review & Score (1.0 to 5.0) via 4-Pillar Persona-Decomposed Matrix:** Critically review the options across four distinct persona perspectives:
+   - **Pillar 1: Architectural & EaC Alignment** (Canon Architect perspective: standards, SDD/EaC compliance, 3-layer plane boundary, schema integrity)
+   - **Pillar 2: Security & Blast Radius** (Security/SRE perspective: least privilege, STRIDE threat containment, secret isolation, rollback feasibility)
+   - **Pillar 3: End-User / Agent DX** (Developer & CLI User perspective: naming ergonomics, TUI readability, prompt context/token efficiency)
+   - **Pillar 4: Platform Owner Day-2 Ops** (Platform Engineer perspective: operational simplicity, upgrade stability, drift risk, fleet maintenance)
+3. **Compute Composite Score & Auto-Select:** Compute the unweighted composite average ($\sum \text{Pillars} / 4$). Adopt the highest-scoring recommendation directly into the decision record and **continue execution without asking an operator**.
+
+### 3.4 Plan Architecture Decision Scorecard (Tier-2 100-Point Well-Architected Model)
+
+For strategic architectural decisions in `plans/PLAN-*.md`, evaluate competing implementation options using the **100-Point 5-Pillar Well-Architected Scorecard**:
+
+| Pillar | Max Weight | Evaluation Criteria & Minimum Standard |
+|---|:---:|---|
+| **1. Security, Fencing & Least Privilege** | **25 pts** | STRIDE threat mitigation, cryptographic token/warrant fencing, secret delivery in `/dev/shm`, zero hardcoded credentials, jail containment. |
+| **2. Reliability, Rollback & Blast Radius** | **25 pts** | Failure domain containment, two-way door reversible migrations, 1-click compensation/undo, automated rollback pathways. |
+| **3. Operational Excellence & EaC Convergence** | **20 pts** | Clean 3-layer plane boundary, OpenTofu/declarative config compliance, SDD artifact graph parity, zero drift. |
+| **4. Developer & Agent Experience (DX)** | **15 pts** | Intuitive naming and ergonomics, clear TUI visualization, automated discovery, diagnostic error reporting. |
+| **5. Performance & Token/Resource Economy** | **15 pts** | Prompt token footprint, context efficiency via lazy loading, sub-second latency, bounded memory usage. |
+| **TOTAL SCORE** | **100 pts** | **Passing Bar: $\ge 80 / 100$ total score; no pillar may score $< 50\%$ of its allocated weight.** |
+
+- **$\ge 80 / 100$ Total**: Approved for implementation (`READY`).
+- **$70 - 79 / 100$ Total**: Conditional approval (`SHIP-WITH-FIXES` — must resolve specific pillar deficits prior to merge).
+- **$< 70 / 100$ Total or any pillar $< 50\%$ weight**: Rejected (`BLOCKER` / Redesign proposal).
+
+## 4. Plan Gate v2 (Opt-In Task Convergence & Split Cascade)
+
+- **Opt-in activation:** Declare a standalone HTML comment `<!-- plan-gate: v2 -->` outside fenced code blocks/backticks (or pass `--v2` to `check_plan.py`; use `--init --v2` to scaffold without altering default `v1 --init`). Existing `v1` plans remain unaffected.
+- **`## Task convergence` table & Stage-1 `--hash-tasks`:** Record `| Task ID | SHA-256 | P1 | P2 | P3 | P4 | Total | Status |` with valid statuses `LOCKED`, `FIX`, `STALE`, `PROBE`, or `REDESIGN`. At Stage 1 (before Stage-3 `SLICE-NN.graph.yaml` exists), run `check_plan.py --hash-tasks [--fix] <plan>` to compute/pin deterministic section-excluded SHA-256 hashes over each `### Phase ... (<Task ID>)` block (mapping Stage-1 `TASK-1..N` to Stage-3 `TASK.08.NN.a001..a00N` graph nodes hashed by `compute_task_canonical_hash` in `aiops-harness iplan evaluate-split`). `LOCKED` requires a non-zero 64-hex lowercase canonical `SHA-256` matching the body task block, `Total >= 16.0`, every pillar `>= 2.5`, and an `independent` / `fallback` pass. `STALE` contributes `0.0%` credit to `plan_health_pct`.
+- **Automated `v2` Scorecard, Open-Question, Reference & `PROBE` Gates:** In `v2`, `check_plan.py` also validates Tier-2 100-Point Scorecard tables (`>= 80/100`, every pillar `>= 50%` floor), Tier-1 4-Pillar Open-Question tables (`>= 3` options, composite average, highest composite selected), unique ledger `#` IDs (including alphanumeric `3b`/`5b`), prose `Claim <N>` resolution, `NEW@pass<N>` bounds, and `PROBE[link0]:` vs `PROBE[experiment]:` sandbox coherence (never cite mutable counts like `total_changes: 28` as a `Symbol`; cite stable YAML keys `total_changes:` / `total_plans:`).
+- **Hard 3-pass circuit breaker & split cascade:** In `v2`, `Pass 4+` always fails. Terminal convergence requires either (a) `100% LOCKED` tasks + zero findings (`**Result:** ready — no further findings.`), or (b) `**Disposition:** SPLIT_TO_CHAIN (CHG-<N>)` to split unresolved/probe tasks via `iplan evaluate-split`. `**Disposition:** ESCALATE` always halts exit `1` for human intervention.
 
 ## What "ready" means
 

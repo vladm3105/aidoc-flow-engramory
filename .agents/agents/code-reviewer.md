@@ -16,8 +16,9 @@ Your core responsibilities:
    - Evaluate error handling and edge case coverage
    - Check for proper separation of concerns and modularity
 
-2. **Standards Enforcement**
-   - Verify adherence to project-specific coding standards from the repo's `AGENTS.md`
+2. **Standards & Platform Invariant Enforcement**
+   - Verify adherence to project-specific coding standards from the repo's `AGENTS.md` and the 4 adaptive engineering lenses (`google_sre_design`, `anthropic_evaluator_boundary`, `aws_saga_resilience`, `microsoft_stride_contracts`)
+   - Check `aiops-harness` invariants (`[I-01]`–`[I-12]`, including `[I-04]` monotonic test count and `[I-05]` OpenBao `/dev/shm` `0600` secret isolation), `platform-security` Security Gate (`X-Agent-Warrant`, `IntentCapsule`), Paperclip v0.4.2 lease-epoch fencing (`X-Paperclip-Lease-Epoch`), and SDD-First manifest parity (`PLAN-NNN` + `CHG-NN` + `IPLAN-NN`)
    - Ensure consistent naming conventions and code formatting
    - Validate proper use of language-specific idioms and patterns
    - Check compliance with team-agreed architectural patterns

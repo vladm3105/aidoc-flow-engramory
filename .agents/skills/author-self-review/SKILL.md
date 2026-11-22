@@ -69,7 +69,7 @@ Audit your diff against the 5 Rubric Lenses used by the independent reviewer:
 - [ ] Are there automated tests verifying that all 3 adversarial bypass payloads are rejected?
 - [ ] Do negative tests assert non-zero exit codes AND that dangerous operations (network calls, file writes) never executed?
 - [ ] Are integration test fixtures strictly airgapped (`GIT_ALLOW_PROTOCOL=file`, mock network services)?
-- [ ] Does the test suite avoid modifying shared host paths outside tracked temporary directories?
+- [ ] Does the test suite avoid modifying shared host paths outside tracked temporary directories, and does the collected test count satisfy `[I-04]` (`verify_monotonic_test_count` against `.aidoc/test_baseline.json`)?
 
 ### Lens 3 — Architecture & Minimal Blast Radius
 
@@ -79,10 +79,10 @@ Audit your diff against the 5 Rubric Lenses used by the independent reviewer:
 
 ### Lens 4 — Security & Boundary Invariants
 
-- [ ] Are secrets, tokens, and keys isolated from process argv (using 0600 config files or filesystems)?
+- [ ] Are secrets, tokens, and keys isolated from process argv and delivered via OpenBao `/dev/shm` (`0600` mode, `[I-05]`) rather than plaintext `.env` files on disk?
 - [ ] Are secrets prevented from leaking to `stdout`/`stderr` (no `-v`/verbose or debug tracing in authenticated flows)?
-- [ ] Are permissions on secret and environment files strictly enforced to mode `0600`?
-- [ ] Are network destinations restricted to HTTPS with strict host and path matching?
+- [ ] Are permissions on secret and environment files strictly enforced to mode `0600`, and are Security Gate (`platform-security` `X-Agent-Warrant`, `IntentCapsule`) and Paperclip lease-epoch (`X-Paperclip-Lease-Epoch`) boundaries preserved?
+- [ ] Are network destinations restricted to HTTPS or approved mesh endpoints (`100.88.0.0/16` NetBird / `100.64.0.0/10` Tailscale) with strict host and path matching?
 
 ### Lens 5 — Hygiene & Polish
 
@@ -110,8 +110,8 @@ Audit your diff against the 5 Rubric Lenses used by the independent reviewer:
 
 Before invoking outer `task review` (`tier-frontier`) on multi-module or multi-chunk changes, run the **Adaptive Multi-Lens Subagent Pre-Review & 2-Pass Fold Loop** so all Critical, Major, and Medium defects are identified and folded within the 3-review cap:
 
-1. **Select 2–4 Best-Fit Engineering Lenses & Co-Located Clusters (`aiops sdd select-lenses` / `aiops sdd review-clusters`):**
-   - Run `uv run python -m aiops_harness.cli.main sdd review-clusters --json` (or `select-lenses`) to deterministically pick the **2–4 best-fit lenses** matched to the touched files and plan:
+1. **Select 2–4 Best-Fit Engineering Lenses & Co-Located Clusters (`aiops-harness sdd render` / `aiops-harness iplan seal-evidence`):**
+   - Select the **2–4 best-fit lenses** matched to the touched files and plan (and seal evidence via `uv run aiops-harness iplan seal-evidence` or `uv run aiops-harness sdd seal`):
      - `google_sre_design` — **Google** (Design Doc invariants, readability, SRE hermeticity & blast-radius)
      - `anthropic_evaluator_boundary` — **Anthropic** (Evaluator-Optimizer `Judge != Generator`, sandbox/tool contracts, untrusted prompt/XML/expression boundary safety, anti-mock verification)
      - `aws_saga_resilience` — **AWS** (Well-Architected 1-way/2-way doors, SAGA compensation completeness, idempotency, atomic lock/CAS convergence)

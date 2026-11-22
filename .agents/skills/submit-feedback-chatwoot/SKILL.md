@@ -11,48 +11,48 @@ channel fragmentation and dual-channel maintenance, all defects, bug reports,
 and improvement ideas enter through a **single standard ingress plane: the
 Chatwoot API**.
 
-The Support Desk (`aidoc-flow-support-desk`) acts as the automated gateway: it
+The Support Desk (`aiops-agent-support`, formerly `aidoc-flow-support-desk`) acts as the automated gateway: it
 sanitizes secrets fail-closed, authorizes the target repository, prevents
 duplicates, derives deterministic correlation identifiers (`UUIDv5 request_id`),
-and files the canonical issue in GitHub Issues and GitHub Projects v2.
+publishes CloudEvents 1.0 envelopes to NATS JetStream (`DESK_EVENTS` / `INBOX_AIOPS_PM`),
+and files the canonical issue in GitHub Issues and GitHub Projects v2 (`platform-paperclip` owns internal engineering execution/TODO queues via `aiops_paperclip_queue_todo`). Agents may
+also invoke this flow programmatically via the `aiops_desk_submit` MCP tool or
+`aiops-harness desk submit` CLI (`aiops_harness/orchestration/support_desk.py`).
 
-Requires `curl` and `jq` plus a valid Chatwoot API access token (`CHATWOOT_API_TOKEN`).
+Requires `curl` and `jq` plus a valid Chatwoot API access token (`CHATWOOT_API_TOKEN` or `AIOPS_AGENT_SUPPORT_TOKEN` delivered via OpenBao `/dev/shm`).
 
 ## 1. Establish account, inbox, and target
 
 Authoritative settings for the platform Chatwoot deployment are defined in
-`/home/ya/devd/platform-stage-ops` (specifically `inventory/stage.md`,
-`scripts/cloudflare-platform-stage.py`, and `stacks/platform-chatwoot/compose.yaml`).
+`${CHATWOOT_ROOT:-$HOME/devd/platform-chatwoot}` and `${STAGE_OPS_ROOT:-$HOME/devd/platform-stage-ops}`
+(specifically `inventory/stage.md`, `scripts/cloudflare-platform-stage.py`, and
+`stacks/platform-chatwoot/compose.yaml`).
 
 ### Endpoint Resolution
 
-- **Public Stage HTTPS Domain (default for authenticated API calls):**
-  `https://chatwoot-stage.aiops-flow.io` (managed by Cloudflare TLS tunnel in `platform-stage-ops/scripts/cloudflare-platform-stage.py`).
-- **Internal Stage TLS Mesh (for local/host agents and CI runners with internal TLS):**
-  `https://10.250.0.1:3000` (routed via TLS termination to `platform-tenant-chatwoot.socket` in the rootless `chatwoot` container namespace, UID 1006, port 13030).
+- **Stage Host Loopback / Internal Stage Mesh (preferred for local/host agents and CI runners):**
+  `http://127.0.0.1:13030` on the stage host (`http://10.250.0.1:3000` inside the rootless `chatwoot` container namespace, UID 1006; outbound webhooks forward to `http://10.250.0.1:8090/webhooks/chatwoot/<slug>`).
+- **Public Stage Domain (external access):**
+  `https://chatwoot-stage.aiops-flow.io` (managed by Cloudflare tunnel in `platform-stage-ops/scripts/cloudflare-platform-stage.py`).
 - **Stage Host Runner (mesh access):**
-  `ssh ya@debian` or `ssh ya@100.98.134.10` over Tailscale mesh.
+  `ssh ya@debian` over NetBird WireGuard mesh (`100.88.0.0/16`, `*.int.aiops-flow.io`) or legacy Tailscale mesh.
 
-### Tenant Accounts & Inboxes (PLAT-025 / ADR-02)
+### Tenant Accounts & Inboxes (PLAT-025 / ADR-02 3-Tenant Canonical Architecture)
 
 | Account ID | Slug | Primary Audience & Target Scope | Inboxes & Ingress Routing |
 |---|---|---|---|
-| **1** | **`aidoc-projects`** | Autonomous agent feedback, spoke microservices, cross-project defects, and developer intake | `1`: Support Desk API Gateway (`/webhooks/chatwoot/support-desk`)<br>`2`: Platform API Gateway (`/webhooks/chatwoot/support-desk`)<br>`4`: AIDOC Framework API Gateway (`/webhooks/chatwoot/framework`)<br>`6`: Trading Nexus API Gateway (`/webhooks/chatwoot/trading-nexus`) |
-| **3** | **`aiops-platform`** | Infrastructure metrics, unified OTel Collector, HyperDX alerts, Prometheus threshold breaches | `3`: Operations Assistant API Gateway (`/webhooks/chatwoot/operations-assistant`)<br>`7`: Platform Unified Alerts & Incidents (`/webhooks/chatwoot/operations-assistant`) |
-| **5** | **`b-local`** | BeeLocal customer-facing support, mobile app, web widget, merchant inquiries | `5`: BeeLocal API Gateway (`/webhooks/chatwoot/b-local-privy`) |
+| **1** | **`aidoc-projects`** | Autonomous agent feedback, spoke microservices, cross-project defects, and developer intake (`aiops-agent-support`) | `1`: Support Desk API Gateway (`/webhooks/chatwoot/support-desk`)<br>`2`: Platform API Gateway (`/webhooks/chatwoot/support-desk`)<br>`4`: AIDOC Framework API Gateway (`/webhooks/chatwoot/framework`)<br>`6`: Trading Nexus API Gateway (`/webhooks/chatwoot/trading-nexus`) |
+| **2 / 3** | **`aiops-platform`** | Infrastructure metrics, unified OTel Collector, HyperDX alerts, Prometheus threshold breaches (`aiops-agent-pm`) | `3`: PM & Operations Agent API Gateway (`/webhooks/chatwoot/aiops-agent-pm`, legacy `/webhooks/chatwoot/operations-assistant`)<br>`7`: Platform Unified Alerts & Incidents (`/webhooks/chatwoot/aiops-agent-pm`) |
+| **3 / 5** | **`b-local`** | BeeLocal customer-facing support, mobile app, web widget, merchant inquiries | `5`: BeeLocal API Gateway (`/webhooks/chatwoot/b-local-privy`) |
 
 ### Environment Configuration & Secret Resolution
 
-Resolve the following variables from the environment or the OpenBao stage store (`stage/aidoc-flow-support-desk/tokens` or Chatwoot SuperAdmin user profile), and validate that `CHATWOOT_BASE_URL` uses `https://` before sending `CHATWOOT_API_TOKEN`:
+Resolve the following variables from the environment or the OpenBao `/dev/shm` tmpfs sink (`stage/aiops-agent-support/tokens`, `AIOPS_AGENT_SUPPORT_TOKEN`, or `SUPPORT_DESK_TOKEN`):
 
 ```bash
-# Default to HTTPS stage endpoint; enforce https:// scheme before transmitting credentials:
-CHATWOOT_BASE_URL="${CHATWOOT_BASE_URL:-https://chatwoot-stage.aiops-flow.io}"
-case "$CHATWOOT_BASE_URL" in
-  https://*) ;;
-  *) echo "Error: CHATWOOT_BASE_URL must use https:// to protect CHATWOOT_API_TOKEN" >&2; exit 1 ;;
-esac
-CHATWOOT_API_TOKEN="${CHATWOOT_API_TOKEN:?CHATWOOT_API_TOKEN must be set}"
+# Default to internal stage mesh / host endpoint; fallback to public stage URL if off-mesh:
+CHATWOOT_BASE_URL="${CHATWOOT_BASE_URL:-http://10.250.0.1:3000}"
+CHATWOOT_API_TOKEN="${CHATWOOT_API_TOKEN:-${AIOPS_AGENT_SUPPORT_TOKEN:?CHATWOOT_API_TOKEN or AIOPS_AGENT_SUPPORT_TOKEN must be set}}"
 CHATWOOT_ACCOUNT_ID="${CHATWOOT_ACCOUNT_ID:-1}"
 ```
 
@@ -101,8 +101,7 @@ Rules governing origin:
 Search existing Chatwoot conversations to prevent creating duplicate threads:
 
 ```bash
-case "$CHATWOOT_BASE_URL" in https://*) ;; *) echo "Error: CHATWOOT_BASE_URL must use https://" >&2; exit 1 ;; esac
-curl -sS -f --proto '=https' --tlsv1.2 \
+curl -sS -f \
   -H "api_access_token: $CHATWOOT_API_TOKEN" \
   "$CHATWOOT_BASE_URL/api/v1/accounts/$CHATWOOT_ACCOUNT_ID/conversations?q=distinctive+terms" \
   | jq -r '.data.payload[] | {id: .id, status: .status, title: .messages[0].content[:60]}'
@@ -115,8 +114,8 @@ curl -sS -f --proto '=https' --tlsv1.2 \
 ## 5. Body contract
 
 The message payload carries the structured technical analysis. The quality of
-this report directly determines whether `operations-assistant` can resolve the
-issue autonomously or requires human escalation.
+this report directly determines whether `aiops-agent-pm` and `aiops-agent-dev` can resolve the
+issue autonomously or require human escalation.
 
 The canonical schema (see full reference and example in `templates/feedback-template.md`):
 
@@ -184,8 +183,7 @@ cat > "$PAYLOAD" <<'EOF'
 }
 EOF
 
-case "$CHATWOOT_BASE_URL" in https://*) ;; *) echo "Error: CHATWOOT_BASE_URL must use https://" >&2; exit 1 ;; esac
-RESPONSE=$(curl -sS -f --proto '=https' --tlsv1.2 -X POST \
+RESPONSE=$(curl -sS -f -X POST \
   "$CHATWOOT_BASE_URL/api/v1/accounts/$CHATWOOT_ACCOUNT_ID/conversations/$CONVERSATION_ID/messages" \
   -H "Content-Type: application/json" \
   -H "api_access_token: $CHATWOOT_API_TOKEN" \
@@ -202,15 +200,14 @@ Chatwoot's API requires associating a conversation with an existing `contact_id`
 1. **Resolve or Create Contact:** Ensure a sender contact identity exists for the reporting agent or service:
 
 ```bash
-case "$CHATWOOT_BASE_URL" in https://*) ;; *) echo "Error: CHATWOOT_BASE_URL must use https://" >&2; exit 1 ;; esac
 CONTACT_EMAIL="agent-muse@aiops-flow.io"
-CONTACT_ID=$(curl -sS -f --proto '=https' --tlsv1.2 \
+CONTACT_ID=$(curl -sS -f \
   -H "api_access_token: $CHATWOOT_API_TOKEN" \
   "$CHATWOOT_BASE_URL/api/v1/accounts/$CHATWOOT_ACCOUNT_ID/contacts/search?q=$CONTACT_EMAIL" \
   | jq -r '.payload[0].id // empty')
 
 if [ -z "$CONTACT_ID" ]; then
-  CONTACT_ID=$(curl -sS -f --proto '=https' --tlsv1.2 -X POST \
+  CONTACT_ID=$(curl -sS -f -X POST \
     "$CHATWOOT_BASE_URL/api/v1/accounts/$CHATWOOT_ACCOUNT_ID/contacts" \
     -H "Content-Type: application/json" \
     -H "api_access_token: $CHATWOOT_API_TOKEN" \
@@ -224,11 +221,10 @@ fi
 
 ```bash
 INBOX_ID=1  # Account 1: 1 (support-desk), 2 (platform), 4 (framework), 6 (trading)
-            # Account 3: 3 (operations-assistant), 7 (incidents)
-            # Account 5: 5 (b-local)
+            # Account 2/3: 3 (aiops-agent-pm), 7 (incidents)
+            # Account 3/5: 5 (b-local)
 
-case "$CHATWOOT_BASE_URL" in https://*) ;; *) echo "Error: CHATWOOT_BASE_URL must use https://" >&2; exit 1 ;; esac
-CONVO_RESP=$(curl -sS -f --proto '=https' --tlsv1.2 -X POST \
+CONVO_RESP=$(curl -sS -f -X POST \
   "$CHATWOOT_BASE_URL/api/v1/accounts/$CHATWOOT_ACCOUNT_ID/conversations" \
   -H "Content-Type: application/json" \
   -H "api_access_token: $CHATWOOT_API_TOKEN" \
@@ -259,8 +255,7 @@ cat > "$PAYLOAD" <<'EOF'
 }
 EOF
 
-case "$CHATWOOT_BASE_URL" in https://*) ;; *) echo "Error: CHATWOOT_BASE_URL must use https://" >&2; exit 1 ;; esac
-MSG_RESP=$(curl -sS -f --proto '=https' --tlsv1.2 -X POST \
+MSG_RESP=$(curl -sS -f -X POST \
   "$CHATWOOT_BASE_URL/api/v1/accounts/$CHATWOOT_ACCOUNT_ID/conversations/$CONVO_ID/messages" \
   -H "Content-Type: application/json" \
   -H "api_access_token: $CHATWOOT_API_TOKEN" \
@@ -277,8 +272,7 @@ The Support Desk Agent Bot intercepts the webhook from Chatwoot, sanitizes secre
 
 ```bash
 sleep 2
-case "$CHATWOOT_BASE_URL" in https://*) ;; *) echo "Error: CHATWOOT_BASE_URL must use https://" >&2; exit 1 ;; esac
-curl -sS -f --proto '=https' --tlsv1.2 \
+curl -sS -f \
   -H "api_access_token: $CHATWOOT_API_TOKEN" \
   "$CHATWOOT_BASE_URL/api/v1/accounts/$CHATWOOT_ACCOUNT_ID/conversations/$CONVO_ID/messages" \
   | jq -r '.payload[] | select(.sender.name=="Vl" or .sender.type=="agent_bot") | .content'
@@ -301,8 +295,7 @@ in the thread without needing GitHub access:
 
 ```bash
 # Post a status query into the thread:
-case "$CHATWOOT_BASE_URL" in https://*) ;; *) echo "Error: CHATWOOT_BASE_URL must use https://" >&2; exit 1 ;; esac
-curl -sS -f --proto '=https' --tlsv1.2 -X POST \
+curl -sS -f -X POST \
   "$CHATWOOT_BASE_URL/api/v1/accounts/$CHATWOOT_ACCOUNT_ID/conversations/$CONVO_ID/messages" \
   -H "Content-Type: application/json" \
   -H "api_access_token: $CHATWOOT_API_TOKEN" \
@@ -310,7 +303,7 @@ curl -sS -f --proto '=https' --tlsv1.2 -X POST \
 
 # Read back the live status card generated by Support Desk:
 sleep 2
-curl -sS -f --proto '=https' --tlsv1.2 \
+curl -sS -f \
   -H "api_access_token: $CHATWOOT_API_TOKEN" \
   "$CHATWOOT_BASE_URL/api/v1/accounts/$CHATWOOT_ACCOUNT_ID/conversations/$CONVO_ID/messages" \
   | jq -r '.payload[-1].content'

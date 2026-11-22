@@ -22,6 +22,11 @@ Do not invent a GitHub handoff for a file-based repository, or a file handoff
 for a tracker-based repository. If no handoff is declared, use recent commits,
 open issues, and open PRs and say that the state was derived.
 
+Enforce **Documentation-First & SDD-First continuity** at session open:
+
+- Read `docs/seed/00_index.md`, `docs/modules/`, `docs/sdd/`, and `plans/` (and run `aidoc_slice_context` / `aiops-harness sdd slice-context` when picking up an SDD slice or IPLAN task, plus `aiops_paperclip_list` / `aiops_paperclip_update` when Paperclip task orchestration is active; also check `docs/audits/` for unclosed findings if preparing a release) to reconstruct architectural ground truth before proposing or editing code.
+- If the repository is a new/greenfield project lacking `docs/seed/00_index.md`, route work immediately to `sdd-seed` and `verified-planning` to establish the Tier-1 Seed documentation (`architecture/`, `adr/`, `agent-surface/`) and `PLAN-001` before writing application code.
+
 ## 2. Read without inheriting
 
 For a file handoff, read the declared file. For a tracker handoff, identify the
@@ -104,5 +109,10 @@ Return:
 - selected task and its tracker identifier;
 - state changes made, with read-back confirmation;
 - the immediate next action.
+
+If the agent has open questions during session pickup or execution:
+1. **Generate 3 Recommendations per Open Question:** Provide **3 distinct recommendations/options** for each question with clear rationale and trade-offs.
+2. **Review & Score (1 to 5):** Critically review the generated recommendations and **score each from `1` to `5`** based on **best practices** (platform standards, security, SDD/EaC compliance, maintainability) and **practical use** (operational simplicity, execution feasibility, blast radius), where a higher score is better (`5` = best), and highlight the top-scored recommendation.
+3. **Use the Highest-Scored Recommendation & Continue:** Apply the recommendation with the highest score and continue without asking an operator.
 
 Do not begin implementation until this pickup is complete.

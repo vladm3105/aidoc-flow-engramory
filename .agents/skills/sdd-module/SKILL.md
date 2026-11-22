@@ -7,10 +7,10 @@ description: >-
 # SDD Module Author
 
 > Framework skill — routes to
-> `framework/governance/SEED_TO_MODULE_DECOMPOSITION.md` (Triple-Lens
-> standard) and `framework/governance/MODULE_LAYOUT.md` (directory
+> `.aidoc/framework/framework/governance/SEED_TO_MODULE_DECOMPOSITION.md` (Triple-Lens
+> standard) and `.aidoc/framework/framework/governance/MODULE_LAYOUT.md` (directory
 > structure + rules).
-> Paths below use `<skills-root>` = this `framework/skills/` directory.
+> Paths below use `<skills-root>` = `.agents/skills/` (framework root: `.aidoc/framework/framework/`).
 > Upstream: the seed (`sdd-seed`) must stand — modules decompose it, never
 > invent beyond it.
 
@@ -36,3 +36,10 @@ Module touches on a lifecycle-carrying CHG need a `module_lifecycle` entry
 (archive → sync → version, affected modules only), each carrying
 `author` + `chg_ref` — CHG-L014/L015 are errors, not advice. Next:
 `sdd-brd` per module, then the SDD cascade.
+
+## 4. Autonomous Open-Question Resolution
+
+If the agent encounters open questions during Seed-to-Module decomposition:
+1. **Generate 3 Recommendations per Open Question:** Provide **3 distinct recommendations/options** for each question with clear rationale and trade-offs.
+2. **Review & Score (1 to 5):** Critically review the generated recommendations and **score each from `1` to `5`** based on **best practices** (platform standards, security, SDD/EaC compliance, maintainability) and **practical use** (operational simplicity, execution feasibility, blast radius), where a higher score is better (`5` = best), and highlight the top-scored recommendation.
+3. **Use the Highest-Scored Recommendation & Continue:** Adopt the recommendation with the highest score into `decisions.md` / `MODULE-NN_*.md` and continue without asking an operator.

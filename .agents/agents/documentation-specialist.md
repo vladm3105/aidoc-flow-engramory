@@ -24,6 +24,7 @@ Your primary responsibilities include:
 When creating documentation, you will:
 - Analyze the codebase and existing documentation to understand the current state
 - Identify documentation gaps and outdated information
+- Enforce the `platform-docs` canon (`aiops_harness/docs/docs_tools.py`): keep every H2/H3 section `<= 450` words (`max_section_words`), start body headings at `##` (H2), include `REQUIRED_FRONTMATTER_KEYS` (`id`, `title`, `kind`, `domain`, `namespace`, `status`, `autonomy_tier`, `watched_paths`, `last_verified`), avoid banned deictic phrases and retired tool/service names (`pre-commit`, `seaweedfs`, `minio`, `bytebase`, `platform-identity`, `platform-authz`, `aidoc-flow-support-desk`, `aidoc-flow-interlog`, `operations-assistant` — use `lefthook`, `OCI Object Storage / Cloudflare R2`, `Atlas CLI`, `platform-security` [`platform_security.authz` / `platform_security.identity`], `aiops-agent-support`, `aiops-agent-pm`), and verify with `docs-lint` and `docs-drift`
 - Use clear, concise language appropriate for the target audience
 - Include practical examples and code snippets where relevant
 - Organize information logically with proper headings and navigation

@@ -1,0 +1,296 @@
+# Server-side Gitea auto-merge workflow (Split-Forge / Gitea integration).
+# Pure Node.js v24 (aidoc-gitea-runner:local provides node/curl/git/bash, no jq/python3).
+# NOTE: no 'permissions:' block — Gitea restricts the automatic token when one is present.
+name: auto-merge
+
+'on':
+  pull_request:
+    branches: ["dev"]
+    types: [opened, synchronize, reopened, ready_for_review]
+  status: {}
+
+concurrency:
+  group: gitea-auto-merge-${{ github.repository }}-${{ github.event.pull_request.number || github.event.sha }}
+  cancel-in-progress: true
+
+jobs:
+  auto-merge:
+    runs-on: [self-hosted, ci, ephemeral]
+    timeout-minutes: 10
+    steps:
+      - name: Evaluate checks and merge green PR
+        env:
+          GITEA_SERVER_URL: ${{ github.server_url }}
+          GITEA_REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_PR_NUM: ${{ github.event.pull_request.number || '' }}
+          EVENT_SHA: ${{ github.event.pull_request.head.sha || github.event.sha || github.sha }}
+          EVENT_STATE: ${{ github.event.state || '' }}
+          DEFAULT_TOKEN: ${{ github.token }}
+          AUTO_MERGE_SECRET: ${{ secrets.AUTO_MERGE_TOKEN }}
+        run: |
+          node - <<'EOF'
+          const server = (process.env.GITEA_SERVER_URL || '').replace(/\/+$/, '');
+          const repo = process.env.GITEA_REPO || '';
+          const eventName = process.env.EVENT_NAME || '';
+          const eventPrNum = process.env.EVENT_PR_NUM || '';
+          const eventSha = process.env.EVENT_SHA || '';
+          const eventState = process.env.EVENT_STATE || '';
+          const token = (process.env.AUTO_MERGE_SECRET || process.env.DEFAULT_TOKEN || '').trim();
+
+          if (!server || !repo || !token) {
+            console.error('auto-merge: missing GITEA_SERVER_URL, GITEA_REPO, or token');
+            process.exit(1);
+          }
+
+          if (eventName === 'status' && eventState !== 'success') {
+            console.info(`auto-merge: ignoring status event (state=${eventState})`);
+            process.exit(0);
+          }
+
+          const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+          async function api(method, path, body) {
+            const url = `${server}/api/v1${path}`;
+            const headers = {
+              Authorization: `token ${token}`,
+              Accept: 'application/json',
+            };
+            if (body !== undefined) {
+              headers['Content-Type'] = 'application/json';
+            }
+            const res = await fetch(url, {
+              method,
+              headers,
+              body: body !== undefined ? JSON.stringify(body) : undefined,
+            });
+            const text = await res.text();
+            let data = null;
+            try { data = text ? JSON.parse(text) : null; } catch {}
+            return { status: res.status, data, text };
+          }
+
+          function parseCiConfig(raw) {
+            const cfg = {};
+            for (const line of raw.split(/\r?\n/)) {
+              const trimmed = line.trim();
+              if (!trimmed || trimmed.startsWith('#')) continue;
+              const eq = trimmed.indexOf('=');
+              if (eq <= 0) continue;
+              const k = trimmed.slice(0, eq).trim();
+              let v = trimmed.slice(eq + 1).trim();
+              if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+                v = v.slice(1, -1);
+              }
+              cfg[k] = v;
+            }
+            return cfg;
+          }
+
+          function splitList(val) {
+            return (val || '').trim().split(/\s+/).filter(Boolean);
+          }
+
+          async function fetchAllStatuses(sha) {
+            const all = [];
+            for (let page = 1; page <= 10; page++) {
+              const r = await api('GET', `/repos/${repo}/commits/${sha}/statuses?limit=50&page=${page}`);
+              if (r.status !== 200 || !Array.isArray(r.data) || r.data.length === 0) break;
+              all.push(...r.data);
+              if (r.data.length < 50) break;
+            }
+            all.sort((a, b) => (a.id || 0) - (b.id || 0));
+            const latest = {};
+            for (const row of all) {
+              if (!row.context) continue;
+              latest[row.context] = row.status || row.state || '';
+            }
+            return latest;
+          }
+
+          async function processPr(initialPr) {
+            let pr = initialPr;
+            const num = pr.number;
+            const headSha = pr.head?.sha || '';
+            const baseRef = pr.base?.ref || '';
+            const headRef = pr.head?.ref || '';
+            const headRepo = pr.head?.repo?.full_name || '';
+
+            if (pr.state !== 'open') {
+              console.info(`auto-merge: PR #${num} state=${pr.state}, skipping`);
+              return;
+            }
+            if (headRepo !== repo) {
+              console.info(`auto-merge: PR #${num} originates from external repo (${headRepo}), refusing`);
+              return;
+            }
+            if (pr.draft || /^\s*(\[?WIP\]?:?|\bWIP\b)/i.test(pr.title || '')) {
+              console.info(`auto-merge: PR #${num} is draft/WIP, skipping`);
+              return;
+            }
+            if (!/^(feature\/|fix\/|dependabot\/|renovate\/|staging$)/.test(headRef)) {
+              console.info(`auto-merge: PR #${num} head branch '${headRef}' not eligible, skipping`);
+              return;
+            }
+            const blockedLabels = new Set(['conflict:human', 'blocked: founder', 'hold', 'review:blocked']);
+            const labels = (pr.labels || []).map((l) => l.name);
+            if (labels.some((l) => blockedLabels.has(l))) {
+              console.info(`auto-merge: PR #${num} has blocking label (${labels.join(',')}), skipping`);
+              return;
+            }
+
+            const cfgRes = await api('GET', `/repos/${repo}/contents/.ci-config?ref=${encodeURIComponent(baseRef)}`);
+            if (cfgRes.status !== 200 || !cfgRes.data?.content) {
+              console.info(`auto-merge: PR #${num} target '${baseRef}' has no .ci-config (HTTP ${cfgRes.status}), skipping`);
+              return;
+            }
+            const cfg = parseCiConfig(Buffer.from(cfgRes.data.content, 'base64').toString('utf8'));
+            const shipAuto = splitList(cfg.SHIP_AUTONOMOUS_BRANCHES);
+            if (!shipAuto.includes(baseRef)) {
+              console.info(`auto-merge: PR #${num} base '${baseRef}' not in SHIP_AUTONOMOUS_BRANCHES, skipping`);
+              return;
+            }
+
+            for (let attempt = 1; attempt <= 3 && pr.mergeable === null; attempt++) {
+              await sleep(5000);
+              const refetched = await api('GET', `/repos/${repo}/pulls/${num}`);
+              if (refetched.status === 200 && refetched.data) pr = refetched.data;
+            }
+            if (pr.mergeable !== true) {
+              console.info(`auto-merge: PR #${num} mergeable=${pr.mergeable}, cannot merge`);
+              return;
+            }
+            if ((pr.head?.sha || '') !== headSha) {
+              console.info(`auto-merge: PR #${num} head advanced cleanly, waiting for next check run`);
+              return;
+            }
+
+            const promoList = splitList(cfg.PROMOTION_BRANCHES);
+            const required = ['signoff'];
+            if (cfg.REVIEW === 'required') required.push('review');
+            if (promoList.length > 0 && (cfg.INTEGRATION_SOURCE_CHECK || '1') !== '0') {
+              required.push('verify-integration-source');
+            }
+            for (const extra of splitList(cfg.RULESET_EXTRA_CHECKS)) {
+              const ctx = extra.replace(/^!/, '');
+              if (ctx && !required.includes(ctx)) required.push(ctx);
+            }
+
+            const pollDeadline = Date.now() + 180_000;
+            while (true) {
+              const latest = await fetchAllStatuses(headSha);
+              const failedAny = Object.entries(latest).filter(([, st]) => st === 'failure' || st === 'error');
+              if (failedAny.length > 0) {
+                console.info(`auto-merge: PR #${num} has failing status(es): ${failedAny.map(([k, v]) => `${k}=${v}`).join(', ')}`);
+                return;
+              }
+              const missingOrPending = required.filter((c) => latest[c] !== 'success');
+              if (missingOrPending.length === 0) break;
+              if (Date.now() >= pollDeadline) {
+                console.info(`auto-merge: PR #${num} timed out waiting on required context(s): ${missingOrPending.map((c) => `${c}=${latest[c] || 'missing'}`).join(', ')}`);
+                return;
+              }
+              await sleep(5000);
+              const refetched = await api('GET', `/repos/${repo}/pulls/${num}`);
+              if (refetched.status !== 200 || !refetched.data) return;
+              pr = refetched.data;
+              if (pr.state !== 'open') {
+                console.info(`auto-merge: PR #${num} state=${pr.state} while waiting, exiting`);
+                return;
+              }
+              if ((pr.head?.sha || '') !== headSha) {
+                console.info(`auto-merge: PR #${num} head moved while waiting, exiting`);
+                return;
+              }
+              if (pr.draft || /^\s*(\[?WIP\]?:?|\bWIP\b)/i.test(pr.title || '')) {
+                console.info(`auto-merge: PR #${num} became draft/WIP while waiting, exiting`);
+                return;
+              }
+              if ((pr.labels || []).some((l) => blockedLabels.has(l.name))) {
+                console.info(`auto-merge: PR #${num} received blocking label while waiting, exiting`);
+                return;
+              }
+              if (pr.mergeable === false) {
+                console.info(`auto-merge: PR #${num} became unmergeable while waiting, exiting`);
+                return;
+              }
+            }
+
+            let method = cfg.AUTO_MERGE_METHOD || 'merge';
+            if (!['merge', 'squash', 'rebase'].includes(method)) method = 'merge';
+            if (headRef === 'staging' || headRef === 'main') method = 'merge';
+            const deleteBranch = headRef !== 'staging' && headRef !== 'main';
+
+            const mergeRes = await api('POST', `/repos/${repo}/pulls/${num}/merge`, {
+              Do: method,
+              head_commit_id: headSha,
+              delete_branch_after_merge: deleteBranch,
+              MergeTitleField: `${pr.title} (#${num})`,
+              MergeMessageField: `Auto-merged by Gitea auto-merge workflow on green (${required.join(', ')})`,
+            });
+
+            if (mergeRes.status === 405 || mergeRes.status === 409) {
+              console.info(`auto-merge: PR #${num} merge returned HTTP ${mergeRes.status} (already merged or state changed); exiting cleanly`);
+              return;
+            }
+            if (mergeRes.status === 403) {
+              console.error(`auto-merge: PR #${num} merge returned HTTP 403; automatic token lacks merge scope (provision AUTO_MERGE_TOKEN secret)`);
+              process.exit(1);
+            }
+            if (mergeRes.status < 200 || mergeRes.status >= 300) {
+              console.error(`auto-merge: PR #${num} merge failed (HTTP ${mergeRes.status}): ${mergeRes.text}`);
+              process.exit(1);
+            }
+            console.info(`auto-merge: merged PR #${num} (${headRef} -> ${baseRef}) via ${method}`);
+
+            let mergeSha = '';
+            for (let attempt = 0; attempt < 3; attempt++) {
+              const mergedPr = await api('GET', `/repos/${repo}/pulls/${num}`);
+              mergeSha = mergedPr.data?.merge_commit_sha || '';
+              if (mergeSha) break;
+              await sleep(1000);
+            }
+            if (mergeSha) {
+              await api('POST', `/repos/${repo}/statuses/${mergeSha}`, {
+                state: 'success',
+                context: 'signoff',
+                description: `merged PR #${num} on observed green required checks`,
+              });
+              if (cfg.REVIEW === 'required') {
+                await api('POST', `/repos/${repo}/statuses/${mergeSha}`, {
+                  state: 'success',
+                  context: 'review',
+                  description: 'AI review verified prior to autonomous merge',
+                });
+              }
+              console.info(`auto-merge: attested merge commit ${mergeSha.slice(0, 12)}`);
+            }
+          }
+
+          (async () => {
+            if (eventName === 'pull_request' && eventPrNum) {
+              const r = await api('GET', `/repos/${repo}/pulls/${eventPrNum}`);
+              if (r.status === 200 && r.data) await processPr(r.data);
+              return;
+            }
+            const candidates = [];
+            for (let page = 1; page <= 5; page++) {
+              const r = await api('GET', `/repos/${repo}/pulls?state=open&limit=50&page=${page}`);
+              if (r.status !== 200 || !Array.isArray(r.data) || r.data.length === 0) break;
+              for (const p of r.data) {
+                if (p.head?.sha === eventSha) candidates.push(p);
+              }
+              if (r.data.length < 50) break;
+            }
+            if (candidates.length === 0) {
+              console.info(`auto-merge: no open PR matching sha ${eventSha.slice(0, 12)} (no-op / post-merge attestation)`);
+              return;
+            }
+            for (const pr of candidates) {
+              await processPr(pr);
+            }
+          })().catch((err) => {
+            console.error('auto-merge: unexpected error:', err);
+            process.exit(1);
+          });
+          EOF

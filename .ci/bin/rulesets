@@ -342,20 +342,52 @@ if [[ -n $promotions && $scope != integration ]]; then
       rules: ([ {type: "deletion"}, {type: "non_fast_forward"} ] + $access + $pr) }')")
 fi
 
-# Auto-merge on green is on whenever agents may merge (autoship into dev, autopromote into staging).
-settings=$(jq -n --argjson auto "$([[ -n "$(ci_list SHIP_AUTONOMOUS_BRANCHES "")$(ci_list PROMOTION_AUTONOMOUS "")" ]] && echo true || echo false)" \
-  '{allow_auto_merge: $auto, delete_branch_on_merge: true}')
+# Auto-merge on green is on whenever agents may merge (autoship into dev, autopromote into staging/main).
+# Disable delete_branch_on_merge in Split-Forge or GitHub Free (unprotected branches) so promotion merges never prune staging/dev.
+auto_flag=$([[ -n "$(ci_list SHIP_AUTONOMOUS_BRANCHES "")$(ci_list PROMOTION_AUTONOMOUS "")" ]] && echo true || echo false)
+split_mode=0
+if ci_split_forge || [[ ${RULESETS_SCOPE:-all} == promotion ]]; then
+  split_mode=1
+fi
+build_settings() {
+  local del_flag=true
+  [[ $split_mode -eq 1 || ${1:-0} -eq 1 ]] && del_flag=false
+  jq -n --argjson auto "$auto_flag" --argjson del "$del_flag" \
+    '{allow_auto_merge: $auto, delete_branch_on_merge: $del}'
+}
+settings=$(build_settings 0)
 
 if [[ $check == 1 ]]; then
   command -v gh >/dev/null || { echo "rulesets: --check needs the gh CLI (mise install; gh auth login)" >&2; exit 2; }
-  live=$(gh api "repos/{owner}/{repo}/rulesets?per_page=100" 2>&1) \
-    || { echo "rulesets: cannot read live rulesets: $live" >&2; exit 2; }
+  pro_plan_403=0
+  if ! live=$(gh api "repos/{owner}/{repo}/rulesets?per_page=100" 2>&1); then
+    if grep -qiE 'Upgrade to GitHub Pro|HTTP 403|status.? ?403|Resource not accessible by' <<<"$live"; then
+      pro_plan_403=1
+      live='[]'
+    else
+      echo "rulesets: cannot read live rulesets: $live" >&2; exit 2
+    fi
+  fi
   [[ -n $live ]] || { echo "rulesets: cannot read live rulesets: empty response" >&2; exit 2; }
   repo_live=$(gh api "repos/{owner}/{repo}" 2>&1) \
     || { echo "rulesets: cannot read live repo settings: $repo_live" >&2; exit 2; }
   [[ -n $repo_live ]] || { echo "rulesets: cannot read live repo settings: empty response" >&2; exit 2; }
   jq -e . >/dev/null 2>&1 <<<"$live" || { echo "rulesets: cannot read live rulesets: invalid JSON" >&2; exit 2; }
   jq -e . >/dev/null 2>&1 <<<"$repo_live" || { echo "rulesets: cannot read live repo settings: invalid JSON" >&2; exit 2; }
+  settings=$(build_settings "$pro_plan_403")
+  if [[ $pro_plan_403 -eq 1 ]]; then
+    echo "  rulesets: unavailable on GitHub Free (HTTP 403); checking repo settings only"
+    cmp_free=$(jq -n --argjson settings "$settings" --argjson repo "$repo_live" \
+      '{settings_drift: ($settings != {allow_auto_merge: $repo.allow_auto_merge, delete_branch_on_merge: $repo.delete_branch_on_merge}), desired_canon: {repo_settings: $settings}, live_canon: {repo_settings: {allow_auto_merge: $repo.allow_auto_merge, delete_branch_on_merge: $repo.delete_branch_on_merge}}}')
+    jq -r '"  repo settings: " + (if .settings_drift then "DRIFT" else "OK" end)' <<<"$cmp_free"
+    if [[ $(jq -r .settings_drift <<<"$cmp_free") == true ]]; then
+      diff -u --label desired --label live <(jq -S .desired_canon <<<"$cmp_free") <(jq -S .live_canon <<<"$cmp_free") || true
+      echo "rulesets: drift detected — a human applies with: task rulesets -- --apply" >&2
+      exit 1
+    fi
+    echo "rulesets: repo settings match .ci-config (rulesets gated by GitHub Pro HTTP 403)"
+    exit 0
+  fi
   # The list call returns summaries only (id, name, target, enforcement, …: no rules,
   # conditions or bypass_actors), so each alfci-* ruleset is read in full by id (#44).
   # Server-added keys, present in GET but never in PUT/POST payloads, ignored here:
@@ -429,23 +461,44 @@ if [[ $apply == 0 ]]; then
 fi
 
 command -v gh >/dev/null || { echo "rulesets: gh CLI required" >&2; exit 1; }
-existing=$(gh api "repos/{owner}/{repo}/rulesets?per_page=100" 2>/dev/null || echo '[]')
+pro_plan_403=0
+if ! existing=$(gh api "repos/{owner}/{repo}/rulesets?per_page=100" 2>&1); then
+  if grep -qiE 'Upgrade to GitHub Pro|HTTP 403|status.? ?403|Resource not accessible by' <<<"$existing"; then
+    pro_plan_403=1
+    existing='[]'
+    echo "rulesets: note — GitHub rulesets unavailable without GitHub Pro (HTTP 403); enforcing repo settings only" >&2
+  else
+    existing='[]'
+  fi
+fi
+settings=$(build_settings "$pro_plan_403")
 tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
 # Like the Gitea backend: attempt every ruleset, count failures, never abort
 # mid-apply leaving the set half-applied without a summary.
 failures=0
-for rs in "${sets[@]}"; do
-  name=$(jq -r .name <<<"$rs")
-  id=$(jq -r --arg n "$name" '[.[] | select(.name == $n) | .id] | first // empty' <<<"$existing")
-  printf '%s' "$rs" >"$tmp"
-  if [[ -n $id ]]; then
-    if gh api -X PUT "repos/{owner}/{repo}/rulesets/$id" --input "$tmp" >/dev/null; then echo "rulesets: updated $name (#$id)"
-    else echo "rulesets: FAILED to update $name" >&2; failures=$((failures + 1)); fi
-  else
-    if gh api -X POST "repos/{owner}/{repo}/rulesets" --input "$tmp" >/dev/null; then echo "rulesets: created $name"
-    else echo "rulesets: FAILED to create $name" >&2; failures=$((failures + 1)); fi
-  fi
-done
+if [[ $pro_plan_403 -eq 0 ]]; then
+  for rs in "${sets[@]}"; do
+    name=$(jq -r .name <<<"$rs")
+    id=$(jq -r --arg n "$name" '[.[] | select(.name == $n) | .id] | first // empty' <<<"$existing")
+    printf '%s' "$rs" >"$tmp"
+    if [[ -n $id ]]; then
+      rc_rs=0
+      out_rs=$(gh api -X PUT "repos/{owner}/{repo}/rulesets/$id" --input "$tmp" 2>&1) || rc_rs=$?
+      if [[ $rc_rs -eq 0 ]]; then echo "rulesets: updated $name (#$id)"
+      elif grep -qiE 'Upgrade to GitHub Pro|HTTP 403|status.? ?403|Resource not accessible by' <<<"$out_rs"; then
+        pro_plan_403=1; echo "rulesets: note — $name skipped on GitHub Free (HTTP 403)" >&2; break
+      else echo "rulesets: FAILED to update $name: $out_rs" >&2; failures=$((failures + 1)); fi
+    else
+      rc_rs=0
+      out_rs=$(gh api -X POST "repos/{owner}/{repo}/rulesets" --input "$tmp" 2>&1) || rc_rs=$?
+      if [[ $rc_rs -eq 0 ]]; then echo "rulesets: created $name"
+      elif grep -qiE 'Upgrade to GitHub Pro|HTTP 403|status.? ?403|Resource not accessible by' <<<"$out_rs"; then
+        pro_plan_403=1; echo "rulesets: note — $name skipped on GitHub Free (HTTP 403)" >&2; break
+      else echo "rulesets: FAILED to create $name: $out_rs" >&2; failures=$((failures + 1)); fi
+    fi
+  done
+  settings=$(build_settings "$pro_plan_403")
+fi
 printf '%s' "$settings" >"$tmp"
 if gh api -X PATCH "repos/{owner}/{repo}" --input "$tmp" >/dev/null; then echo "rulesets: repo settings $(jq -c . <<<"$settings")"
 else echo "rulesets: FAILED to apply repo settings" >&2; failures=$((failures + 1)); fi

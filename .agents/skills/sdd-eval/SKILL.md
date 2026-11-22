@@ -6,9 +6,9 @@ description: >-
 
 # SDD EVAL Runner
 
-> Framework skill — routes to `framework/layers/10_EVAL/EVAL-TEMPLATE.yaml`,
+> Framework skill — routes to `.aidoc/framework/framework/layers/10_EVAL/EVAL-TEMPLATE.yaml`,
 > `EVAL-REPORT-TEMPLATE.yaml`, and `EVAL_WORKFLOW_STANDARD.md`.
-> Paths below use `<skills-root>` = this `framework/skills/` directory.
+> Paths below use `<skills-root>` = `.agents/skills/` (framework root: `.aidoc/framework/framework/`).
 > Upstream: implemented code plus the `sdd-tdd` battery; the IPLAN's
 > execution receipt (`iplan_receipt_ref`) is the evidence anchor.
 

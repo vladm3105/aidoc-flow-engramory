@@ -92,6 +92,8 @@ from a canon checkout:
 ```bash
 bash <canon>/.agents/scripts/pull.sh [--dry-run] [--force] [--backup DIR] [--] <project> [...]
 bash <canon>/.agents/scripts/pull.sh --global [--dry-run] [--force] [--backup DIR]
+# Spoke repositories managed by aiops-harness may also synchronize via:
+bash <canon>/.agents/deploy-canon.sh --target <project> --update [--prune]
 ```
 
 The script implements the steps below: it refreshes canon-owned

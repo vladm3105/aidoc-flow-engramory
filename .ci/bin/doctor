@@ -63,7 +63,13 @@ ghish=0
 # Split forge (#48): Gitea integration + GitHub promotion; both remotes must exist.
 if [[ $(ci_config PROMOTION_FORGE "") == github ]]; then
   ghish=1
-  if ci_split_forge; then
+  if [[ ${GITHUB_ACTIONS:-} == true || ${GITEA_ACTIONS:-} == true ]]; then
+    ok+=("split forge: server CI single-remote checkout")
+    [[ $(ci_config PROMOTION_MODE ff) == pr ]] \
+      || problems+=("split forge: PROMOTION_MODE must be pr (one verify per promotion PR; PLAN-007) — set PROMOTION_MODE=pr in .ci-config")
+    [[ -f .github/dependabot.yml || -f .github/dependabot.yaml ]] \
+      && warnings+=("split forge: .github/dependabot.yml opens PRs into the read-only GitHub dev — remove it; dependency updates go through task ship on Gitea (PLAN-007 D-1)")
+  elif ci_split_forge; then
     prem=$(ci_promotion_remote)
     if [[ $(git remote get-url "$prem" 2>/dev/null) == *github.com* ]]; then
       ok+=("split forge: integration on gitea ($(ci_push_remote)), promotion on github ($prem)")
@@ -186,15 +192,17 @@ fi
 # jdx/mise-action against the same ~/.local/share/mise as local `task ci`; concurrent installs make
 # local checks fail at random ("Text file busy"). Each runner's .env must point MISE_DATA_DIR (and
 # MISE_CACHE_DIR) at a runner-only dir.
-dev_mise=${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}
-shared=()
-for rd in "${CI_RUNNER_HOME:-$HOME}"/actions-runner*/; do
-  [[ -f $rd.runner ]] || continue
-  rdata=$(sed -n 's/^MISE_DATA_DIR=//p' "$rd.env" 2>/dev/null | tail -1)
-  [[ -n $rdata && ${rdata%/} != "${dev_mise%/}" ]] || shared+=("${rd%/}")
-done
-if (( ${#shared[@]} )); then
-  warnings+=("host runners share your mise data dir (${#shared[@]}): ${shared[*]##*/} — set MISE_DATA_DIR/MISE_CACHE_DIR in each runner .env (SERVER_CI_GUIDE: host runners)")
+if [[ ${GITHUB_ACTIONS:-} != true && ${GITEA_ACTIONS:-} != true ]]; then
+  dev_mise=${MISE_DATA_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mise}
+  shared=()
+  for rd in "${CI_RUNNER_HOME:-$HOME}"/actions-runner*/; do
+    [[ -f $rd.runner ]] || continue
+    rdata=$(sed -n 's/^MISE_DATA_DIR=//p' "$rd.env" 2>/dev/null | tail -1)
+    [[ -n $rdata && ${rdata%/} != "${dev_mise%/}" ]] || shared+=("${rd%/}")
+  done
+  if (( ${#shared[@]} )); then
+    warnings+=("host runners share your mise data dir (${#shared[@]}): ${shared[*]##*/} — set MISE_DATA_DIR/MISE_CACHE_DIR in each runner .env (SERVER_CI_GUIDE: host runners)")
+  fi
 fi
 
 # --- per-repo governance (failures surface as warnings, never problems) ------------------

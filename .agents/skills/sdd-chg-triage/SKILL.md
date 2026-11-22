@@ -8,8 +8,8 @@ description: >-
 
 > Framework skill — the engine-agnostic half of issue validation. For the
 > repo-specific workflow (labels, triage notes, memory write-back), dispatch
-> the local `aidoc-triage` skill alongside this one.
-> Paths below use `<skills-root>` = this `framework/skills/` directory.
+> the `issue-triage` skill alongside this one.
+> Paths below use `<skills-root>` = `.agents/skills/` (framework root: `.aidoc/framework/framework/`).
 
 Triage answers "may I implement now" (go/no-go). It NEVER implements,
 closes, or rewrites history.

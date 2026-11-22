@@ -5,7 +5,7 @@
     "local_ci": {
       "pinned_version": "1.1.0",
       "pinned_commit": "e0ad99691a996e87d24448b958b58f1e687946ee",
-      "manifest_sha256": "1575e1af4a95f12f70b4ee6a6adce8160953d93ea17dc2611b90883ccc3ad3b8"
+      "manifest_sha256": "0e8757cb1b38ccd1aafff1a1dbe2674fd102161fb511cefa2d8706972f02ef6f"
     },
     "agent_canon": {
       "pinned_version": "1.0.0",
@@ -30,7 +30,7 @@
     "remote_ci": {
       "pinned_version": "1.1.0",
       "pinned_commit": "e0ad99691a996e87d24448b958b58f1e687946ee",
-      "manifest_sha256": "1575e1af4a95f12f70b4ee6a6adce8160953d93ea17dc2611b90883ccc3ad3b8"
+      "manifest_sha256": "0e8757cb1b38ccd1aafff1a1dbe2674fd102161fb511cefa2d8706972f02ef6f"
     },
     "data_contracts": {
       "pinned_version": "1.0.0",

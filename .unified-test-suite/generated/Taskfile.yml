@@ -18,6 +18,11 @@ tasks:
     cmds:
       - task: uts:single
         vars: { LAYER: 'integration' }
+  test:smoke:
+    desc: 'Layer smoke (steps) → summary'
+    cmds:
+      - task: uts:single
+        vars: { LAYER: 'smoke' }
   test:fast:
     desc: 'Gate fast: unit, static (budget 300s) → summary'
     cmds:
@@ -33,7 +38,7 @@ tasks:
       - task: uts:gate
         vars: { GATE: 'pr' }
   test:all:
-    desc: 'Gate all: unit, static, integration (strict) → summary'
+    desc: 'Gate all: unit, static, integration, smoke (strict) → summary'
     cmds:
       - task: uts:invalidate
         vars: { TARGET: 'all' }
