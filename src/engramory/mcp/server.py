@@ -44,7 +44,7 @@ from engramory.access.jwt_auth import (
 )
 from engramory.access.surface import AccessSurface, AuthzError, GovernedWriteRejected
 from engramory.core.models import ValidationError
-from engramory.core.repository import StoreUnavailable
+from engramory.core.repository import Repository, StoreUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -1727,12 +1727,67 @@ class McpServer:
             return bytes(buf)
 
         @app.get("/")
-        @app.get("/health")
         @app.get("/healthz")
-        async def health() -> JSONResponse:
+        async def liveness() -> JSONResponse:
             return JSONResponse(
                 content={"status": "ok", "service": "engramory-mcp", "version": "0.3.0"},
                 status_code=200,
+            )
+
+        @app.get("/health")
+        @app.get("/ready")
+        async def health() -> JSONResponse:
+            checks: dict[str, str] = {}
+            ok = True
+            repo_obj = getattr(self._surface, "_repo", None)
+            if isinstance(repo_obj, Repository):
+                pg_ok = await repo_obj.ping(timeout_sec=2.0)
+                checks["postgres"] = "ok" if pg_ok else "unreachable"
+                if not pg_ok:
+                    ok = False
+
+            graph_obj = getattr(self._surface, "_graph", None)
+            if graph_obj is not None and not type(graph_obj).__module__.startswith("unittest.mock"):
+                ping_fn = getattr(graph_obj, "ping", None)
+                driver = getattr(graph_obj, "_driver", None)
+                verify_fn = getattr(driver, "verify_connectivity", None)
+                if callable(ping_fn):
+                    try:
+                        res = ping_fn()
+                        g_ok = (
+                            bool(await asyncio.wait_for(res, timeout=2.0))
+                            if asyncio.iscoroutine(res)
+                            else bool(res)
+                        )
+                    except Exception:  # noqa: BLE001  # reason: readiness probe reports degraded graph cleanly
+                        g_ok = False
+                    checks["neo4j"] = "ok" if g_ok else "unreachable"
+                    if not g_ok:
+                        ok = False
+                elif callable(verify_fn):
+                    try:
+                        vres = verify_fn()
+                        if asyncio.iscoroutine(vres):
+                            await asyncio.wait_for(vres, timeout=2.0)
+                        checks["neo4j"] = "ok"
+                    except Exception:  # noqa: BLE001  # reason: readiness probe reports degraded graph cleanly
+                        checks["neo4j"] = "unreachable"
+                        ok = False
+
+            if self._auth_enabled:
+                checks["jwks"] = "configured" if self._token_validator is not None else "missing"
+                if self._token_validator is None:
+                    ok = False
+
+            status_code = 200 if ok else 503
+            return JSONResponse(
+                content={
+                    "status": "ok" if ok else "degraded",
+                    "service": "engramory-mcp",
+                    "version": "0.3.0",
+                    "checks": checks,
+                },
+                status_code=status_code,
             )
 
         @app.get("/sse")

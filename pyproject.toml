@@ -22,14 +22,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["ruff", "pytest", "pytest-asyncio", "pytest-cov", "mypy"]
-extraction = ["docling>=2.0", "pymupdf>=1.24.0", "beautifulsoup4>=4.12.0"]
+extraction = ["docling>=2.0", "pypdf>=5.0.0", "beautifulsoup4>=4.12.0"]
 
 [project.scripts]
 engramory = "engramory.cli:main"
 
 [project.urls]
-Repository = "https://github.com/vladm3105/platform-engramory"
+Repository = "https://github.com/vladm3105/aidoc-flow-engramory"
 
 [build-system]
 requires = ["hatchling"]
@@ -63,5 +62,10 @@ ignore_missing_imports = true
 [dependency-groups]
 dev = [
     "bandit>=1.9.4",
+    "mypy>=1.10.0",
     "pip-audit>=2.10.1",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=5.0.0",
+    "ruff>=0.5.0",
 ]

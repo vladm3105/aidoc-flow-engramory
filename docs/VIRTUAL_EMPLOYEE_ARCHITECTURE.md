@@ -12,7 +12,7 @@ watched_paths:
   - "src/engramory/workers/distillation.py"
   - "src/engramory/mcp/server.py"
   - "src/engramory/cli.py"
-last_verified: "2026-11-21"
+last_verified: "2026-11-22"
 ---
 
 # Engramory Virtual Employee Hierarchy, Multi-Model Brain Variants & Portable Brain Passports

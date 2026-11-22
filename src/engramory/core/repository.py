@@ -12,6 +12,7 @@ can fail closed with a retryable error (EARS.01.03.c900).
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -422,6 +423,20 @@ class Repository:
             # without this the connection would leak until GC.
             if not conn.closed:
                 await conn.close()
+
+    async def ping(self, *, timeout_sec: float = 2.0) -> bool:
+        """Return True iff PostgreSQL executes ``SELECT 1`` within ``timeout_sec``."""
+
+        async def _probe() -> bool:
+            async with self._conn() as conn:
+                cur = await conn.execute("SELECT 1")
+                row = await cur.fetchone()
+                return row is not None
+
+        try:
+            return bool(await asyncio.wait_for(_probe(), timeout=timeout_sec))
+        except Exception:  # noqa: BLE001  # reason: readiness probe must degrade cleanly to unhealthy
+            return False
 
     async def add_episode(self, episode: Episode) -> str:
         """Persist idempotently by content hash or event_id within scope (BDD.01.03.c900).

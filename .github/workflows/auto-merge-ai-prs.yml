@@ -50,7 +50,7 @@ jobs:
     # failed ai-review or composition), but this saves the runner slot
     # entirely (per OPS-0065 security-auditor recommendation).
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
-    uses: vladm3105/aidoc-flow-ci/.github/workflows/auto-merge-ai-prs.yml@ci/v1.9.5
+    uses: vladm3105/aidoc-flow-ci/.github/workflows/auto-merge-ai-prs.yml@845964a439747001b5e3febbeebde4aa5a551d20 # ci/v1.9.5
     with:
       # `||` fallback per Workflow-tool expression semantics: returns
       # the first truthy operand. workflow_run path resolves the LHS;
@@ -58,7 +58,7 @@ jobs:
       # have empty `pull_requests[]` so LHS is empty and the reusable's
       # step 1 exits clean (per the reusable's fork-PR handling).
       pr_number: ${{ github.event.workflow_run.pull_requests[0].number || inputs.pr_number || '' }}
-      runner_labels: '["ubuntu-latest"]'
+      runner_labels: '["self-hosted", "ci", "ephemeral"]'
       # External adopters: MUST match ai-review.yml's trust config repo/ref.
       # Defaults to vladm3105/aidoc-flow-operations@main.
       # trust_config_repo: your-org/your-ops-repo

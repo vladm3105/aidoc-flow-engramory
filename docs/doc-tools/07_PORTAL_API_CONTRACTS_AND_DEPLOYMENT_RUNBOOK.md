@@ -44,7 +44,7 @@ endpoints:
 watched_paths:
   - "compose.platform.yaml"
   - "docs/doc-tools/07_PORTAL_API_CONTRACTS_AND_DEPLOYMENT_RUNBOOK.md"
-last_verified: 2026-11-21
+last_verified: 2026-11-22
 ---
 
 # Multi-Repo Starlight & Scalar Portal, Deployment Architecture & Operations Runbook
@@ -67,13 +67,13 @@ While autonomous agents consume documentation primarily via **FastMCP (`docs_*`)
 
 ## 2. Rootless Stage Deployment Topology (`ns:platform`, `UID 1004`)
 
-`platform-docs` deploys on the shared stage host in the `ns:platform` compartment (`UID 1004:1004`), isolated behind `platform-edge-gateway` (Traefik v3 + Authentik OIDC ForwardAuth over NetBird mesh) with secrets injected to tmpfs (`/dev/shm/openbao-env.sh`) via the Path C OpenBao Agent sidecar (`docs-bao-agent`).
+`platform-docs` and `platform-engramory` deploy on the shared stage host in the `ns:platform` compartment (`UID 1004:1004`), isolated behind `platform-edge-gateway` (Traefik v3 + Authentik OIDC `https://auth.int.aiops-flow.io` over NetBird mesh) with secrets injected into fail-closed `${VAR:?}` environment variables from OpenBao tmpfs (`/dev/shm/openbao-env.sh`, `0600`) via `platform-stage-ops` OpenTofu/`pyinfra` EaC (imperative `scripts/deploy-stage.sh` is retired). While `engramory-mcp` binds `127.0.0.1:8005` on stage (`ENGRAMORY_PROFILE=stage`, `/health` dependency readiness check, `ENGRAMORY_ALLOWED_DOCS_ROOT=/workspace`), the local Astro Starlight + Scalar `portal/` dev and preview servers bind `127.0.0.1:4321` to avoid port collisions.
 
 ```yaml
-# Reference compose.yaml excerpt for platform-docs stage service
+# Reference compose excerpt for hardened stage service (compose.platform.yaml)
 services:
   platform-docs:
-    image: platform-docs:stage-local # Built locally from digest-pinned debian:trixie-slim base
+    image: platform-docs:stage-local # Built with locked uv sync + ffmpeg + no-new-privileges
     user: "1004:1004"
     read_only: true
     security_opt:
@@ -91,7 +91,7 @@ services:
       - PLATFORM_DOCS_BIND=0.0.0.0:8000
       - PLATFORM_DOCS_KUZU_PATH=/var/lib/platform-docs/kuzu
       - PLATFORM_SECURITY_GATE_URL=http://10.250.0.1:8095
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://10.250.0.1:14318
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
     networks:
       - platform-mesh
 ```

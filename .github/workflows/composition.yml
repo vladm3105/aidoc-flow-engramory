@@ -27,6 +27,6 @@ permissions:
 
 jobs:
   call:
-    uses: vladm3105/aidoc-flow-ci/.github/workflows/composition.yml@ci/v1.9.5
+    uses: vladm3105/aidoc-flow-ci/.github/workflows/composition.yml@845964a439747001b5e3febbeebde4aa5a551d20 # ci/v1.9.5
     with:
-      runner_labels: '"ubuntu-latest"'
+      runner_labels: '["self-hosted", "ci", "ephemeral"]'

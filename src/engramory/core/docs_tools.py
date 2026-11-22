@@ -73,8 +73,8 @@ BANNED_DEICTIC_PHRASES = (
 )
 
 BANNED_RETIRED_TOOLS: Mapping[str, str] = {
-    "seaweedfs": "MinIO / RustFS",
-    "bytebase": "Atlas CLI",
+    "seaweedfs": "OCI Object Storage / Cloudflare R2 + PostgreSQL 18 Blob CAS",
+    "bytebase": "Apache Superset SQL Lab + Gitea Actions CI (Squawk + pgroll) + postgres-mcp",
     "pre-commit": "lefthook",
 }
 
@@ -126,11 +126,11 @@ DOCUMENTATION_TOOL_CATALOG: tuple[dict[str, str], ...] = (
         ),
     },
     {
-        "tool": "docling + pymupdf + beautifulsoup4",
+        "tool": "docling + pypdf + beautifulsoup4",
         "category": "Multi-Format Ingestion (PDF/DOCX/HTML -> MD)",
         "tier": "Adopt",
         "gate": "L0 Ingestion",
-        "license": "MIT / AGPL-optional",
+        "license": "MIT / BSD-3-Clause",
         "role": (
             "Extracts PDFs, DOCX, and HTML documents into heading-structured Markdown chunks "
             "inside platform-engramory's SmartExtractionRouter."

@@ -16,9 +16,9 @@ title: "CLI Face — engramory dev/CI transport"
 
 document_control:
   status: Approved
-  version: "1.2"
+  version: "1.3"
   date_created: "2026-07-11T00:00:00"
-  last_updated: "2026-11-21T00:00:00"
+  last_updated: "2026-11-22T00:00:00"
   author: "Engramory team"
   component: "engramory.cli"
   tdd_ready_score: "98/100"
@@ -26,7 +26,10 @@ document_control:
 component_overview:
   description: |
     The `engramory` console script (alias: `python -m engramory`) — the ADR-10
-    dev/CI face over AccessSurface. A THIN BINDING: it may only construct
+    dev/CI face over AccessSurface (with stage MCP Authentik defaults targeting
+    `auth.int.aiops-flow.io`, `pypdf` replacing AGPL `pymupdf` in extraction
+    packaging, and `portal_builder` synthesizing `title:` frontmatter and
+    pruning orphan portal files). A THIN BINDING: it may only construct
     ActorContext from local config, parse arguments, and map errors to exit
     codes; the authorize -> audit -> execute order and every SPEC-01 semantic
     live in AccessSurface. Two commands are dev-tier OPS COMMANDS outside the

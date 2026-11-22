@@ -5,17 +5,17 @@
     "local_ci": {
       "pinned_version": "1.1.0",
       "pinned_commit": "e0ad99691a996e87d24448b958b58f1e687946ee",
-      "manifest_sha256": "f7297149e4980207acc8782e2c25a0259fae2c4f400c98ba2334573930689429"
+      "manifest_sha256": "1575e1af4a95f12f70b4ee6a6adce8160953d93ea17dc2611b90883ccc3ad3b8"
     },
     "agent_canon": {
       "pinned_version": "1.0.0",
       "pinned_commit": "92e5a9ee38e7071e468740a5059c242790888236",
-      "manifest_sha256": "92e5a9ee38e7071e468740a5059c24279088823692e5a9ee38e7071e468740a5"
+      "manifest_sha256": "305feaad198d020b6623e56487a7c0c3ad687da1c4db1bdb877c055452f4f46a"
     },
     "framework_adaptation": {
       "pinned_version": "0.96.25",
       "pinned_commit": "19a5b706fa0c5623e1719281c5d3069866e5e977",
-      "manifest_sha256": "19a5b706fa0c5623e1719281c5d3069866e5e97719a5b706fa0c5623e1719281"
+      "manifest_sha256": "2db4d7bed9c16231986ee6896cbb1566292a49b7ddadf2fd9dc2c0a9cd190ca0"
     },
     "test_suite": {
       "pinned_version": "1.0.1",
@@ -24,24 +24,23 @@
     },
     "tech_stack": {
       "pinned_version": "1.0.0",
-      "pinned_commit": "b212c4b11f565d0bb432219d79ba4fb69d917bab",
-      "manifest_sha256": "b212c4b11f565d0bb432219d79ba4fb69d917babb212c4b11f565d0bb432219d"
+      "pinned_commit": "9564de8f7fae84e2f3c6dbdacd1136e22b846fad",
+      "manifest_sha256": "d8ebfb9594808d435529404234d6998f6837e63271176416c580a85205fe6fa6"
     },
     "remote_ci": {
       "pinned_version": "1.1.0",
       "pinned_commit": "e0ad99691a996e87d24448b958b58f1e687946ee",
-      "manifest_sha256": "f7297149e4980207acc8782e2c25a0259fae2c4f400c98ba2334573930689429"
+      "manifest_sha256": "1575e1af4a95f12f70b4ee6a6adce8160953d93ea17dc2611b90883ccc3ad3b8"
     },
     "data_contracts": {
       "pinned_version": "1.0.0",
       "pinned_commit": "0767f3ab629f4389642ea42974c68b939191f932",
-      "manifest_sha256": "0767f3ab629f4389642ea42974c68b939191f9320767f3ab629f4389642ea429"
+      "manifest_sha256": "69e9c721e26267aff9b36ce80beb8e8e2fee90ad986d06214500c30b4c572fac"
     },
     "context_tools": {
       "pinned_version": "1.0.0",
       "pinned_commit": "9920bd54bde9555cc76f7f7ce5518192e4390995",
-      "manifest_sha256": "9920bd54bde9555cc76f7f7ce5518192e43909959920bd54bde9555cc76f7f7c"
+      "manifest_sha256": "e9f156bfdf5e97e724dbe2299f5a2cd4205bb2621eb651b6c75077c9088f2afe"
     }
-  },
-  "ci_manifest_sha256": "f7297149e4980207acc8782e2c25a0259fae2c4f400c98ba2334573930689429"
+  }
 }

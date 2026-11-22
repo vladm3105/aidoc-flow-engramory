@@ -1355,7 +1355,8 @@ def test_plan019_documentation_tool_catalog_and_cli(capsys: pytest.CaptureFixtur
     assert tools["vale"]["tier"] == "Adopt"
     assert tools["@astrojs/starlight"]["tier"] == "Trial"
     assert tools["@scalar/api-reference"]["tier"] == "Trial"
-    assert tools["docling + pymupdf + beautifulsoup4"]["tier"] == "Adopt"
+    assert tools["docling + pypdf + beautifulsoup4"]["tier"] == "Adopt"
+    assert tools["docling + pypdf + beautifulsoup4"]["license"] == "MIT / BSD-3-Clause"
     assert tools["aidoc-framework (sdd_doc_lint) + Embedded Kùzu"]["license"] == "MIT"
     assert tools["copybara"]["tier"] == "Hold"
 

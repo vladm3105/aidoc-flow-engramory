@@ -1,0 +1,457 @@
+# IPLAN-12_audit-wave-p2-infra-stack-ci.swf.yaml — Executable Implementation Plan (CNCF v0.8 DSL)
+# Authorizing CHG: CHG-012 | @spec: SPEC-01 | @tdd: TDD.01.04.c300
+
+doc_id: IPLAN-12
+title: "Wave P2 Audit Remediation — Infra, Stack Policy, Astro Starlight Portal & CI Governance (PLAN-026 TASK-3)"
+metadata:
+  id: IPLAN-12
+  title: "Wave P2 Audit Remediation — Infra, Stack Policy, Astro Starlight Portal & CI Governance (PLAN-026 TASK-3)"
+  status: Completed
+  version: '1.0'
+  authorizing_chg: CHG-012
+  schema_version: '1.0'
+  framework_version: 0.96.25
+  document_type: iplan-document
+  layer: 8
+  subtype: workflow
+  workflow_spec: CNCF-Serverless-Workflow-v0.8
+  author_persona: tech_lead
+  author_playbook: framework/playbooks/08_IPLAN/tech_lead.md
+  workflow_standard: CNCF-Serverless-Workflow-0.8
+  total_sections: 8
+  last_updated: '2026-11-22'
+  tags:
+  - iplan-document
+  - layer-8-artifact
+  - shared-architecture
+  - cncf-workflow
+document_control:
+  iplan_id: IPLAN-12
+  authorizing_chg: CHG-012
+  flow: sdd_to_code
+  flow_code: SDD2C
+  subtype: workflow
+  source_spec: '@spec: SPEC-01'
+  status: Completed
+  version: '1.0'
+  date_created: '2026-11-22T09:44:00'
+  last_updated: '2026-11-22T10:22:00'
+  author: Antigravity + Operator
+  complexity: 5
+  estimated_files: 82
+  session_count: 1
+file_manifest:
+  files:
+  - {"path":".aidoc/Taskfile.yml","action":"MODIFY","task_id":"TASK.08.12.a003","status":"DONE"}
+  - {"path":".aidoc/harness.lock.json","action":"MODIFY","task_id":"TASK.08.12.a003","status":"DONE"}
+  - {"path":".aidoc/litellm.env.example","action":"MODIFY","task_id":"TASK.08.12.a003","status":"DONE"}
+  - {"path":".aidoc/security.env.example","action":"MODIFY","task_id":"TASK.08.12.a003","status":"DONE"}
+  - {"path":".aidoc/stack-policy.yaml","action":"MODIFY","task_id":"TASK.08.12.a001","status":"DONE"}
+  - {"path":".ci-config","action":"MODIFY","task_id":"TASK.08.12.a004","status":"DONE"}
+  - {"path":".github/actions/pre-commit/action.yml","action":"DELETE","task_id":"TASK.08.12.a004","status":"DONE"}
+  - {"path":".github/dependabot.yml","action":"DELETE","task_id":"TASK.08.12.a004","status":"DONE"}
+  - {"path":".github/docs-sync.json","action":"MODIFY","task_id":"TASK.08.12.a004","status":"DONE"}
+  - {"path":".github/workflows/ai-review.yml","action":"MODIFY","task_id":"TASK.08.12.a004","status":"DONE"}
+  - {"path":".github/workflows/audit-trail.yml","action":"MODIFY","task_id":"TASK.08.12.a004","status":"DONE"}
+  - {"path":".github/workflows/auto-merge-ai-prs.yml","action":"MODIFY","task_id":"TASK.08.12.a004","status":"DONE"}
+  - {"path":".github/workflows/bot-signoff.yml","action":"MODIFY","task_id":"TASK.08.12.a004","status":"DONE"}
+  - {"path":".github/workflows/branch-promotion.yml","action":"MODIFY","task_id":"TASK.08.12.a004","status":"DONE"}
+  - {"path":".github/workflows/ci.yml","action":"MODIFY","task_id":"TASK.08.12.a004","status":"DONE"}
+  - {"path":".github/workflows/composition.yml","action":"MODIFY","task_id":"TASK.08.12.a004","status":"DONE"}
+  - {"path":".github/workflows/docs-sync.yml","action":"MODIFY","task_id":"TASK.08.12.a004","status":"DONE"}
+  - {"path":".github/workflows/labeler.yml","action":"MODIFY","task_id":"TASK.08.12.a004","status":"DONE"}
+  - {"path":".github/workflows/links.yml","action":"DELETE","task_id":"TASK.08.12.a004","status":"DONE"}
+  - {"path":".github/workflows/markdown-lint.yml","action":"DELETE","task_id":"TASK.08.12.a004","status":"DONE"}
+  - {"path":".github/workflows/nightly-audit.yml","action":"MODIFY","task_id":"TASK.08.12.a004","status":"DONE"}
+  - {"path":".github/workflows/pre-commit.yml","action":"DELETE","task_id":"TASK.08.12.a004","status":"DONE"}
+  - {"path":".github/workflows/quick-gates.yml","action":"MODIFY","task_id":"TASK.08.12.a004","status":"DONE"}
+  - {"path":".github/workflows/secret-scan.yml","action":"MODIFY","task_id":"TASK.08.12.a004","status":"DONE"}
+  - {"path":".github/workflows/standards-drift.yml","action":"MODIFY","task_id":"TASK.08.12.a004","status":"DONE"}
+  - {"path":".github/workflows/verify.yml","action":"MODIFY","task_id":"TASK.08.12.a004","status":"DONE"}
+  - {"path":".gitleaks.toml","action":"MODIFY","task_id":"TASK.08.12.a004","status":"DONE"}
+  - {"path":".pre-commit-config.yaml","action":"DELETE","task_id":"TASK.08.12.a004","status":"DONE"}
+  - {"path":".secret-scan-allow","action":"CREATE","task_id":"TASK.08.12.a003","status":"DONE"}
+  - {"path":".semgrepignore","action":"DELETE","task_id":"TASK.08.12.a004","status":"DONE"}
+  - {"path":".vale/styles/AIOpsAgent/BannedRetiredTools.yml","action":"MODIFY","task_id":"TASK.08.12.a003","status":"DONE"}
+  - {"path":"Dockerfile","action":"MODIFY","task_id":"TASK.08.12.a002","status":"DONE"}
+  - {"path":"Makefile","action":"MODIFY","task_id":"TASK.08.12.a002","status":"DONE"}
+  - {"path":"Taskfile.yml","action":"MODIFY","task_id":"TASK.08.12.a004","status":"DONE"}
+  - {"path":"compose.platform.yaml","action":"MODIFY","task_id":"TASK.08.12.a002","status":"DONE"}
+  - {"path":"config/litellm.config.yaml","action":"MODIFY","task_id":"TASK.08.12.a002","status":"DONE"}
+  - {"path":"docker-compose.telemetry-net.yml","action":"MODIFY","task_id":"TASK.08.12.a002","status":"DONE"}
+  - {"path":"docker-compose.yml","action":"MODIFY","task_id":"TASK.08.12.a002","status":"DONE"}
+  - {"path":"docs/ARCHITECTURE.md","action":"MODIFY","task_id":"TASK.08.12.a005","status":"DONE"}
+  - {"path":"docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md","action":"MODIFY","task_id":"TASK.08.12.a005","status":"DONE"}
+  - {"path":"docs/archive/CHG-012/SPEC-01_access_surface_v1.3.yaml","action":"CREATE","task_id":"TASK.08.12.a001","status":"DONE"}
+  - {"path":"docs/archive/CHG-012/SPEC-06_ports_portability_v1.2.yaml","action":"CREATE","task_id":"TASK.08.12.a001","status":"DONE"}
+  - {"path":"docs/archive/CHG-012/SPEC-07_cli_face_v1.2.yaml","action":"CREATE","task_id":"TASK.08.12.a001","status":"DONE"}
+  - {"path":"docs/doc-tools/00_INDEX.md","action":"MODIFY","task_id":"TASK.08.12.a005","status":"DONE"}
+  - {"path":"docs/doc-tools/07_PORTAL_API_CONTRACTS_AND_DEPLOYMENT_RUNBOOK.md","action":"MODIFY","task_id":"TASK.08.12.a005","status":"DONE"}
+  - {"path":"docs/doc-tools/10_DOCUMENTATION_TOOLS_TECHNICAL_REFERENCE.md","action":"MODIFY","task_id":"TASK.08.12.a005","status":"DONE"}
+  - {"path":"docs/sdd/06_SPEC/SPEC-01_access_surface.yaml","action":"MODIFY","task_id":"TASK.08.12.a001","status":"DONE"}
+  - {"path":"docs/sdd/06_SPEC/SPEC-06_ports_portability.yaml","action":"MODIFY","task_id":"TASK.08.12.a001","status":"DONE"}
+  - {"path":"docs/sdd/06_SPEC/SPEC-07_cli_face.yaml","action":"MODIFY","task_id":"TASK.08.12.a001","status":"DONE"}
+  - {"path":"docs/sdd/08_IPLAN/IPLAN-00_index.yaml","action":"MODIFY","task_id":"TASK.08.12.a001","status":"DONE"}
+  - {"path":"docs/sdd/08_IPLAN/IPLAN-12_audit-wave-p2-infra-stack-ci.swf.yaml","action":"CREATE","task_id":"TASK.08.12.a001","status":"DONE"}
+  - {"path":"docs/sdd/09_CHG/CHG-012_audit-wave-p2-infra-stack-ci.yaml","action":"CREATE","task_id":"TASK.08.12.a001","status":"DONE"}
+  - {"path":"docs/sdd/graph/SLICE-12_audit-wave-p2-infra-stack-ci.graph.yaml","action":"CREATE","task_id":"TASK.08.12.a001","status":"DONE"}
+  - {"path":"mise.toml","action":"MODIFY","task_id":"TASK.08.12.a001","status":"DONE"}
+  - {"path":"portal/README.md","action":"MODIFY","task_id":"TASK.08.12.a003","status":"DONE"}
+  - {"path":"portal/astro.config.mjs","action":"MODIFY","task_id":"TASK.08.12.a003","status":"DONE"}
+  - {"path":"portal/package.json","action":"MODIFY","task_id":"TASK.08.12.a003","status":"DONE"}
+  - {"path":"portal/pnpm-lock.yaml","action":"CREATE","task_id":"TASK.08.12.a003","status":"DONE"}
+  - {"path":"portal/src/content.config.ts","action":"CREATE","task_id":"TASK.08.12.a003","status":"DONE"}
+  - {"path":"portal/src/content/docs/contracts/index.md","action":"CREATE","task_id":"TASK.08.12.a003","status":"DONE"}
+  - {"path":"portal/src/content/docs/index.mdx","action":"CREATE","task_id":"TASK.08.12.a003","status":"DONE"}
+  - {"path":"portal/src/content/docs/runbooks/index.md","action":"CREATE","task_id":"TASK.08.12.a003","status":"DONE"}
+  - {"path":"portal/src/pages/contracts/playground.astro","action":"CREATE","task_id":"TASK.08.12.a003","status":"DONE"}
+  - {"path":"pyproject.toml","action":"MODIFY","task_id":"TASK.08.12.a001","status":"DONE"}
+  - {"path":"scripts/deploy-stage.sh","action":"MODIFY","task_id":"TASK.08.12.a002","status":"DONE"}
+  - {"path":"scripts/ingest_docs.py","action":"MODIFY","task_id":"TASK.08.12.a003","status":"DONE"}
+  - {"path":"scripts/pre_push_guard.sh","action":"MODIFY","task_id":"TASK.08.12.a004","status":"DONE"}
+  - {"path":"scripts/secret_scan.py","action":"MODIFY","task_id":"TASK.08.12.a003","status":"DONE"}
+  - {"path":"skills/engramory-memory/SKILL.md","action":"MODIFY","task_id":"TASK.08.12.a003","status":"DONE"}
+  - {"path":"src/engramory/adapters/factory.py","action":"MODIFY","task_id":"TASK.08.12.a002","status":"DONE"}
+  - {"path":"src/engramory/cli.py","action":"MODIFY","task_id":"TASK.08.12.a002","status":"DONE"}
+  - {"path":"src/engramory/core/context_tools.py","action":"MODIFY","task_id":"TASK.08.12.a001","status":"DONE"}
+  - {"path":"src/engramory/core/docs_tools.py","action":"MODIFY","task_id":"TASK.08.12.a003","status":"DONE"}
+  - {"path":"src/engramory/core/portal_builder.py","action":"MODIFY","task_id":"TASK.08.12.a003","status":"DONE"}
+  - {"path":"src/engramory/core/repository.py","action":"MODIFY","task_id":"TASK.08.12.a002","status":"DONE"}
+  - {"path":"src/engramory/mcp/server.py","action":"MODIFY","task_id":"TASK.08.12.a002","status":"DONE"}
+  - {"path":"src/engramory/workers/runner.py","action":"MODIFY","task_id":"TASK.08.12.a002","status":"DONE"}
+  - {"path":"tests/security/test_wave_p2_infra_governance.py","action":"CREATE","task_id":"TASK.08.12.a005","status":"DONE"}
+  - {"path":"tests/steps/static.list","action":"MODIFY","task_id":"TASK.08.12.a003","status":"DONE"}
+  - {"path":"tests/test_docs_tools.py","action":"MODIFY","task_id":"TASK.08.12.a005","status":"DONE"}
+  - {"path":"unified-test-suite.config.json","action":"MODIFY","task_id":"TASK.08.12.a003","status":"DONE"}
+  - {"path":"uv.lock","action":"MODIFY","task_id":"TASK.08.12.a001","status":"DONE"}
+workflow:
+  id: IPLAN-12
+  name: wave_p2_infra_stack_portal_ci_remediation
+  specVersion: '0.8'
+  version: '1.0'
+  start: Step1_PreFlightCheck
+  functions:
+  - name: runCommand
+    type: custom
+    operation: shell:exec
+  - name: remediateLayerFindings
+    type: custom
+    operation: sdd:remediate
+  - name: incrementCounter
+    type: custom
+    operation: metrics:counter
+  - name: sealDocumentBaseline
+    type: custom
+    operation: sdd:seal
+  - name: registerGraphBaselineNode
+    type: custom
+    operation: sdd:graph_register
+  - name: emitCloudEvent
+    type: custom
+    operation: cloudevent:emit
+  states:
+  - name: Step1_PreFlightCheck
+    type: operation
+    actions:
+    - name: checkCleanBranchState
+      functionRef:
+        refName: runCommand
+        arguments:
+          command: git status --porcelain
+    transition: Step2_TaskA001SddAndStack
+  - name: Step2_TaskA001SddAndStack
+    type: operation
+    metadata:
+      task_id: TASK.08.12.a001
+    compensatedBy: Rollback_TASK.08.12.a001
+    actions:
+    - name: syncStackPolicyAndSdd
+      functionRef:
+        refName: runCommand
+        arguments:
+          command: uv lock && uv sync --locked
+          task_id: TASK.08.12.a001
+          target_files:
+          - .aidoc/stack-policy.yaml
+          - docs/archive/CHG-012/SPEC-01_access_surface_v1.3.yaml
+          - docs/archive/CHG-012/SPEC-06_ports_portability_v1.2.yaml
+          - docs/archive/CHG-012/SPEC-07_cli_face_v1.2.yaml
+          - docs/sdd/06_SPEC/SPEC-01_access_surface.yaml
+          - docs/sdd/06_SPEC/SPEC-06_ports_portability.yaml
+          - docs/sdd/06_SPEC/SPEC-07_cli_face.yaml
+          - docs/sdd/08_IPLAN/IPLAN-00_index.yaml
+          - docs/sdd/08_IPLAN/IPLAN-12_audit-wave-p2-infra-stack-ci.swf.yaml
+          - docs/sdd/09_CHG/CHG-012_audit-wave-p2-infra-stack-ci.yaml
+          - docs/sdd/graph/SLICE-12_audit-wave-p2-infra-stack-ci.graph.yaml
+          - mise.toml
+          - pyproject.toml
+          - uv.lock
+    transition: Step3_TaskA002RuntimeDockerCompose
+  - name: Step3_TaskA002RuntimeDockerCompose
+    type: operation
+    metadata:
+      task_id: TASK.08.12.a002
+    compensatedBy: Rollback_TASK.08.12.a002
+    actions:
+    - name: hardenDockerComposeAndProbes
+      functionRef:
+        refName: runCommand
+        arguments:
+          command: docker compose -f docker-compose.yml config >/dev/null
+          task_id: TASK.08.12.a002
+          target_files:
+          - Dockerfile
+          - Makefile
+          - compose.platform.yaml
+          - config/litellm.config.yaml
+          - docker-compose.telemetry-net.yml
+          - docker-compose.yml
+          - scripts/deploy-stage.sh
+          - src/engramory/adapters/factory.py
+          - src/engramory/cli.py
+          - src/engramory/core/repository.py
+          - src/engramory/mcp/server.py
+          - src/engramory/workers/runner.py
+    transition: Step4_TaskA003GovernanceLockPortal
+  - name: Step4_TaskA003GovernanceLockPortal
+    type: operation
+    metadata:
+      task_id: TASK.08.12.a003
+    compensatedBy: Rollback_TASK.08.12.a003
+    actions:
+    - name: rebuildPortalAndGovernance
+      functionRef:
+        refName: runCommand
+        arguments:
+          command: uv run engramory docs build-portal --repo-path . && pnpm --dir portal build
+          task_id: TASK.08.12.a003
+          target_files:
+          - .aidoc/Taskfile.yml
+          - .aidoc/harness.lock.json
+          - .aidoc/litellm.env.example
+          - .aidoc/security.env.example
+          - .vale/styles/AIOpsAgent/BannedRetiredTools.yml
+          - portal/README.md
+          - portal/astro.config.mjs
+          - portal/package.json
+          - portal/pnpm-lock.yaml
+          - portal/src/content.config.ts
+          - portal/src/content/docs/contracts/index.md
+          - portal/src/content/docs/index.mdx
+          - portal/src/content/docs/runbooks/index.md
+          - portal/src/pages/contracts/playground.astro
+          - scripts/ingest_docs.py
+          - scripts/secret_scan.py
+          - skills/engramory-memory/SKILL.md
+          - src/engramory/core/docs_tools.py
+          - src/engramory/core/portal_builder.py
+          - tests/steps/static.list
+          - unified-test-suite.config.json
+    transition: Step5_TaskA004CiWorkflows
+  - name: Step5_TaskA004CiWorkflows
+    type: operation
+    metadata:
+      task_id: TASK.08.12.a004
+    compensatedBy: Rollback_TASK.08.12.a004
+    actions:
+    - name: validateProtectedWorkflows
+      functionRef:
+        refName: runCommand
+        arguments:
+          command: actionlint
+          task_id: TASK.08.12.a004
+          target_files:
+          - .ci-config
+          - .github/actions/pre-commit/action.yml
+          - .github/dependabot.yml
+          - .github/docs-sync.json
+          - .github/workflows/ai-review.yml
+          - .github/workflows/audit-trail.yml
+          - .github/workflows/auto-merge-ai-prs.yml
+          - .github/workflows/bot-signoff.yml
+          - .github/workflows/branch-promotion.yml
+          - .github/workflows/ci.yml
+          - .github/workflows/composition.yml
+          - .github/workflows/docs-sync.yml
+          - .github/workflows/labeler.yml
+          - .github/workflows/links.yml
+          - .github/workflows/markdown-lint.yml
+          - .github/workflows/nightly-audit.yml
+          - .github/workflows/pre-commit.yml
+          - .github/workflows/quick-gates.yml
+          - .github/workflows/secret-scan.yml
+          - .github/workflows/standards-drift.yml
+          - .github/workflows/verify.yml
+          - .gitleaks.toml
+          - .pre-commit-config.yaml
+          - .semgrepignore
+          - Taskfile.yml
+          - scripts/pre_push_guard.sh
+    transition: Step6_TaskA005DocsAndTests
+  - name: Step6_TaskA005DocsAndTests
+    type: operation
+    metadata:
+      task_id: TASK.08.12.a005
+    compensatedBy: Rollback_TASK.08.12.a005
+    actions:
+    - name: verifyWaveP2SuiteAndCi
+      functionRef:
+        refName: runCommand
+        arguments:
+          command: task doctor && task check && task sdd:check && task ci
+          task_id: TASK.08.12.a005
+          target_files:
+          - docs/ARCHITECTURE.md
+          - docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md
+          - docs/doc-tools/00_INDEX.md
+          - docs/doc-tools/07_PORTAL_API_CONTRACTS_AND_DEPLOYMENT_RUNBOOK.md
+          - docs/doc-tools/10_DOCUMENTATION_TOOLS_TECHNICAL_REFERENCE.md
+          - tests/security/test_wave_p2_infra_governance.py
+          - tests/test_docs_tools.py
+    transition: EvaluateLayerConsistency
+  - name: EvaluateLayerConsistency
+    type: switch
+    dataConditions:
+    - condition: ${ .consistencyScore >= 1.0 }
+      transition: PassConsistencyGate
+    defaultCondition:
+      transition: EscalateToRemediation
+  - name: EscalateToRemediation
+    type: operation
+    actions:
+    - name: dispatchRemediationAction
+      functionRef:
+        refName: remediateLayerFindings
+        arguments:
+          layer: 08_IPLAN
+          documentId: IPLAN-12
+    transition: SealLayerDocumentBaseline
+  - name: PassConsistencyGate
+    type: operation
+    actions:
+    - name: logConsistencyPass
+      functionRef:
+        refName: incrementCounter
+        arguments:
+          metric: iplan_consistency_gate_pass
+          layer: 08_IPLAN
+          documentId: IPLAN-12
+    transition: SealLayerDocumentBaseline
+  - name: SealLayerDocumentBaseline
+    type: operation
+    actions:
+    - name: sealFrontmatterStatus
+      functionRef:
+        refName: sealDocumentBaseline
+        arguments:
+          documentId: IPLAN-12
+          layer: 08_IPLAN
+          targetStatus: Baselined
+          checksumAlgorithm: SHA-256
+    transition: RegisterSddGraphBaselineNode
+  - name: RegisterSddGraphBaselineNode
+    type: operation
+    actions:
+    - name: updateGraphNode
+      functionRef:
+        refName: registerGraphBaselineNode
+        arguments:
+          nodeType: IplanNode
+          nodeId: IPLAN-12
+          status: Baselined
+          lockIncomingEdges: true
+    transition: EmitLayerHandoffEvent
+  - name: EmitLayerHandoffEvent
+    type: operation
+    actions:
+    - name: publishCompletionEvent
+      functionRef:
+        refName: emitCloudEvent
+        arguments:
+          event: IplanApprovedEvent
+          iplan_id: IPLAN-12
+    end: true
+  - name: Rollback_TASK.08.12.a001
+    type: operation
+    usedForCompensation: true
+    actions:
+    - name: compensateTaskA001
+      functionRef:
+        refName: runCommand
+        arguments:
+          command: git checkout 217bed7 -- .aidoc/stack-policy.yaml pyproject.toml uv.lock mise.toml docs/sdd/ docs/archive/
+    end:
+      terminate: true
+  - name: Rollback_TASK.08.12.a002
+    type: operation
+    usedForCompensation: true
+    actions:
+    - name: compensateTaskA002
+      functionRef:
+        refName: runCommand
+        arguments:
+          command: git checkout 217bed7 -- Dockerfile Makefile compose.platform.yaml docker-compose*.yml config/litellm.config.yaml scripts/deploy-stage.sh src/
+    end:
+      terminate: true
+  - name: Rollback_TASK.08.12.a003
+    type: operation
+    usedForCompensation: true
+    actions:
+    - name: compensateTaskA003
+      functionRef:
+        refName: runCommand
+        arguments:
+          command: git checkout 217bed7 -- .aidoc/ portal/ scripts/ skills/ src/ tests/steps/ unified-test-suite.config.json .vale/
+    end:
+      terminate: true
+  - name: Rollback_TASK.08.12.a004
+    type: operation
+    usedForCompensation: true
+    actions:
+    - name: compensateTaskA004
+      functionRef:
+        refName: runCommand
+        arguments:
+          command: git checkout 217bed7 -- .ci-config .github/ .gitleaks.toml .pre-commit-config.yaml .semgrepignore Taskfile.yml scripts/pre_push_guard.sh
+    end:
+      terminate: true
+  - name: Rollback_TASK.08.12.a005
+    type: operation
+    usedForCompensation: true
+    actions:
+    - name: compensateTaskA005
+      functionRef:
+        refName: runCommand
+        arguments:
+          command: git checkout 217bed7 -- docs/ tests/
+    end:
+      terminate: true
+session_handoff:
+  current_phase: Completed
+  completed_states:
+  - Step1_PreFlightCheck
+  - Step2_TaskA001SddAndStack
+  - Step3_TaskA002RuntimeDockerCompose
+  - Step4_TaskA003GovernanceLockPortal
+  - Step5_TaskA004CiWorkflows
+  - Step6_TaskA005DocsAndTests
+  pending_states: []
+implementation_contracts:
+  provided:
+    contracts:
+    - { name: "WaveP2GovernanceSurface", type: "InfraCI", note: "Hardened PG18 compose/Dockerfile, OpenBao /dev/shm fail-closed contracts, unified stack-policy & pypdf deps, authentic harness.lock.json, Astro Starlight portal on :4321, and pinned split-forge CI workflows" }
+  consumed:
+    dependencies:
+    - { name: "AccessSurface", from: "@spec: SPEC-01", note: "MCP HTTP /health & /ready readiness probes" }
+    - { name: "AdapterFactory", from: "@spec: SPEC-06", note: "ENGRAMORY_PROFILE='stage' adapter routing" }
+tdd_consistency:
+  summary: "Verified via tests/security/test_wave_p2_infra_governance.py, tests/test_docs_tools.py, tests/unit/test_factory_fence.py, and full task ci gate."
+traceability:
+  upstream:
+  - '@spec: SPEC-01'
+  - '@spec: SPEC-06'
+  - '@spec: SPEC-07'
+  - '@tdd: TDD.01.04.c300'
+  downstream:
+  - '@doc: plans/PLAN-026_v030-deep-audit-remediation.md'
+  - '@test: tests/security/test_wave_p2_infra_governance.py'

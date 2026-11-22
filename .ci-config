@@ -13,7 +13,7 @@ BASE_BRANCH=dev
 # dev-staging-main model: branches reachable by `task promote -- <branch>` (space-separated,
 # in promotion order — one hop at a time, so `staging main` means dev->staging->main).
 # Promotion branches never use local CI: the gate is the server check(s) below on the exact commit.
-PROMOTION_BRANCHES=
+PROMOTION_BRANCHES="staging main"
 # ff = fast-forward push of the verified commit (same SHA) · pr = open a promotion PR
 PROMOTION_MODE=pr
 # Split forge (#47/#48): empty = one forge for the whole chain. `github` = BASE_BRANCH lives on

@@ -17,5 +17,5 @@ osv-scanner = "2.4.0"
 trivy = "0.75.0"
 
 # python
-python = "3.14"
+python = "3.12"
 uv = "0.9.0"

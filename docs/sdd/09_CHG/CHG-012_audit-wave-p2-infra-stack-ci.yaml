@@ -1,0 +1,301 @@
+# CHG-012_audit-wave-p2-infra-stack-ci.yaml — Wave P2 Infra, Stack Policy, Portal & CI Governance Remediation (PLAN-026 TASK-3)
+
+document_control:
+  project_name: platform-engramory
+  document_id: CHG-012
+  version: '1.0'
+  status: Completed
+  author: Antigravity + Operator
+  created_date: '2026-11-22'
+  last_updated: '2026-11-22'
+  framework_version: 0.96.25
+  revision_history:
+  - version: '1.0'
+    date: '2026-11-22'
+    author: Antigravity + Operator
+    description: Wave P2 (C11, H13, H14, M3, M6, M7, L2, L5) SDD2C change record for PLAN-026 deep-audit remediation.
+id: CHG-012
+doc_id: CHG-012
+chg_id: CHG-012
+status: Completed
+title: "Wave P2 Audit Remediation — Infra, Stack Policy, Astro Starlight Portal & CI Governance (PLAN-026 TASK-3)"
+classification:
+  type: Type-F
+  weight: C3
+  flow: SDD2C
+metadata:
+  document_type: chg-document
+  layer: 9
+  purpose: governance
+  last_updated: '2026-11-22'
+  change_level:
+    value: C3
+  change_source:
+    value: sdd
+change_control:
+  chg_id: CHG-012
+  status: Completed
+  flow: sdd_to_code
+  flow_code: SDD2C
+  change_level: C3
+  change_source: sdd
+  entry_gate: GATE-SPEC
+  semver_impact: minor
+  version_action: bump
+  author: Antigravity + Operator
+  date_proposed: '2026-11-22T09:44:00'
+  date_approved: '2026-11-22T09:44:00'
+  date_implemented: '2026-11-22'
+  supersedes:
+  - docs/archive/CHG-012/SPEC-01_access_surface_v1.3.yaml
+  - docs/archive/CHG-012/SPEC-06_ports_portability_v1.2.yaml
+  - docs/archive/CHG-012/SPEC-07_cli_face_v1.2.yaml
+decision:
+  decision_id: DEC-CHG-012
+  title: "Reconcile Stack Policy, Fail-Closed Stage EaC Stub, Hardened Compose/Dockerfile, Ready/Heartbeat Probes, Astro Starlight Portal & Pinned Split-Forge CI Gates (PLAN-026 Wave P2)"
+  status: Ratified
+  context: "AUDIT-2026-11-20_deep-review.md identified 8 Wave P2 infra, supply-chain, packaging, portal, and CI/governance findings (C11, H13, H14, M3, M6, M7, L2, L5). Operator approved all recommended items (Items A/A1, B1-B3 for pypdf/ffmpeg/pip-audit, C1-C2 tracked PLAN-026 amendments, and D fail-closed scripts/deploy-stage.sh retirement) with two hard gates: (1) Item 0 requires privatizing vladm3105/aidoc-flow-engramory before pushing self-hosted PR workflows; (2) Item E flags cross-repo platform-stage-ops OpenTofu/pyinfra EaC migration as a separate operator-initiated PR without modifying external repositories here."
+  choice: "Execute PLAN-026 TASK-3 under SDD2C (C3): archive and update SPEC-01/06/07 first; apply operator-approved stack-policy and pyproject.toml unification (replacing AGPL-3.0 pymupdf with BSD-3-Clause pypdf); add 'stage' profile to factory.py and auth.int.aiops-flow.io defaults in cli.py; add bounded /health & /ready dependency probes on McpServer + startup/periodic heartbeat ticks in runner.py; harden docker-compose.yml, compose.platform.yaml, docker-compose.telemetry-net.yml, Dockerfile, Makefile, and config/litellm.config.yaml; fail-closed retire scripts/deploy-stage.sh; harden scripts/secret_scan.py, scripts/pre_push_guard.sh, scripts/ingest_docs.py; regenerate authentic .aidoc/harness.lock.json digests; fix .aidoc/Taskfile.yml fail-closed sdd:check (with --invariants deferred to CHG-013), BANNED_RETIRED_TOOLS & Vale parity (C1), Astro Starlight portal scaffold on port 4321 + portal_builder title injection & orphan pruning, and approved protected CI workflows + .ci-config + .gitleaks.toml."
+  consequences: "Closes all 8 Wave P2 findings on the feature branch with zero unapproved dependencies, authentic harness lockfile checksums, buildable Astro Starlight portal, hardened secret scanner and containers, and pinned CI gates ready for post-privatization push and companion platform-stage-ops rollout."
+  alternatives_considered:
+  - option: Retain imperative scripts/deploy-stage.sh or allow public-repo self-hosted runners
+    rationale_rejected: Violates global EaC mandate, fails against removed plaintext secrets in compose.platform.yaml, and exposes self-hosted runners on public fork PRs.
+  - option: Remove bytebase from BANNED_RETIRED_TOOLS literally per PLAN-026:230
+    rationale_rejected: Authoritative platform-technology_stack/25-approved-tooling-inventory.md:112 marks both bytebase and seaweedfs Hold/Retired; approved amendment C1 retains both and updates their stale replacement strings.
+change_description:
+  what: "Remediate all 8 Wave P2 findings (C11, H13, H14, M3, M6, M7, L2, L5) across .aidoc/, .github/, .vale/, config/, docs/, portal/, scripts/, skills/, src/engramory/, tests/, compose files, Dockerfile, Makefile, mise.toml, pyproject.toml, uv.lock, Taskfile.yml, and unified-test-suite.config.json per PLAN-026 TASK-3."
+  why: "Resolve container/PG18/compose/secret-custody defects, AGPL licensing & stack-policy mismatch, fabricated harness lockfile hashes, non-buildable portal & port 8005 conflict, silent-skip sdd:check, stale retired-tool rules, and CI workflow/promotion gate bypasses."
+  trigger: "Operator approval of all Wave P2 approval-gate recommended items (Items A/A1, B1-B3, C1-C2, D; Item 0 & Item E flagged)."
+impact_assessment:
+  affected_layers:
+  - layer: SPEC
+    artifacts:
+    - SPEC-01
+    - SPEC-06
+    - SPEC-07
+    impact: Updated contracts for dependency-aware MCP /health & /ready probes, 'stage' adapter profile selection, and Authentik/pypdf/portal-builder updates.
+  - layer: IPLAN
+    artifacts:
+    - IPLAN-12
+    impact: Created executable IPLAN-SWF and SDD-GRAPH v2.0 slice (IPLAN-12 / SLICE-12) for Wave P2.
+  cascade_direction: downstream
+  risk_level: High
+justification: "Directly executes PLAN-026 TASK-3 (Wave P2) following Wave P1 commit 217bed7 with explicit operator approval."
+scope:
+  in_scope:
+  - "Findings C11, H13, H14, M3, M6, M7, L2, L5 remediation, governed docs sync, Astro Starlight portal scaffold, and Wave P2 regression tests"
+  out_of_scope:
+  - "Cross-repo edits in platform-stage-ops (Item E flagged for separate operator PR)"
+  - "Wave P3 (CHG-013) real-DB CI services, psycopg[binary,pool], sdd validate-graph --invariants cardinality fixes, and remaining M1/M2/M4/M5/M8/H16/L1/L3/L4 items"
+  - "Remotes push or merge before operator completes Item 0 (GitHub repository privatization)"
+  files_to_touch: &id001
+  - .aidoc/Taskfile.yml
+  - .aidoc/harness.lock.json
+  - .aidoc/litellm.env.example
+  - .aidoc/security.env.example
+  - .aidoc/stack-policy.yaml
+  - .ci-config
+  - .github/actions/pre-commit/action.yml
+  - .github/dependabot.yml
+  - .github/docs-sync.json
+  - .github/workflows/ai-review.yml
+  - .github/workflows/audit-trail.yml
+  - .github/workflows/auto-merge-ai-prs.yml
+  - .github/workflows/bot-signoff.yml
+  - .github/workflows/branch-promotion.yml
+  - .github/workflows/ci.yml
+  - .github/workflows/composition.yml
+  - .github/workflows/docs-sync.yml
+  - .github/workflows/labeler.yml
+  - .github/workflows/links.yml
+  - .github/workflows/markdown-lint.yml
+  - .github/workflows/nightly-audit.yml
+  - .github/workflows/pre-commit.yml
+  - .github/workflows/quick-gates.yml
+  - .github/workflows/secret-scan.yml
+  - .github/workflows/standards-drift.yml
+  - .github/workflows/verify.yml
+  - .gitleaks.toml
+  - .pre-commit-config.yaml
+  - .secret-scan-allow
+  - .semgrepignore
+  - .vale/styles/AIOpsAgent/BannedRetiredTools.yml
+  - Dockerfile
+  - Makefile
+  - Taskfile.yml
+  - compose.platform.yaml
+  - config/litellm.config.yaml
+  - docker-compose.telemetry-net.yml
+  - docker-compose.yml
+  - docs/ARCHITECTURE.md
+  - docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md
+  - docs/archive/CHG-012/SPEC-01_access_surface_v1.3.yaml
+  - docs/archive/CHG-012/SPEC-06_ports_portability_v1.2.yaml
+  - docs/archive/CHG-012/SPEC-07_cli_face_v1.2.yaml
+  - docs/doc-tools/00_INDEX.md
+  - docs/doc-tools/07_PORTAL_API_CONTRACTS_AND_DEPLOYMENT_RUNBOOK.md
+  - docs/doc-tools/10_DOCUMENTATION_TOOLS_TECHNICAL_REFERENCE.md
+  - docs/sdd/06_SPEC/SPEC-01_access_surface.yaml
+  - docs/sdd/06_SPEC/SPEC-06_ports_portability.yaml
+  - docs/sdd/06_SPEC/SPEC-07_cli_face.yaml
+  - docs/sdd/08_IPLAN/IPLAN-00_index.yaml
+  - docs/sdd/08_IPLAN/IPLAN-12_audit-wave-p2-infra-stack-ci.swf.yaml
+  - docs/sdd/09_CHG/CHG-012_audit-wave-p2-infra-stack-ci.yaml
+  - docs/sdd/graph/SLICE-12_audit-wave-p2-infra-stack-ci.graph.yaml
+  - mise.toml
+  - portal/README.md
+  - portal/astro.config.mjs
+  - portal/package.json
+  - portal/pnpm-lock.yaml
+  - portal/src/content.config.ts
+  - portal/src/content/docs/contracts/index.md
+  - portal/src/content/docs/index.mdx
+  - portal/src/content/docs/runbooks/index.md
+  - portal/src/pages/contracts/playground.astro
+  - pyproject.toml
+  - scripts/deploy-stage.sh
+  - scripts/ingest_docs.py
+  - scripts/pre_push_guard.sh
+  - scripts/secret_scan.py
+  - skills/engramory-memory/SKILL.md
+  - src/engramory/adapters/factory.py
+  - src/engramory/cli.py
+  - src/engramory/core/context_tools.py
+  - src/engramory/core/docs_tools.py
+  - src/engramory/core/portal_builder.py
+  - src/engramory/core/repository.py
+  - src/engramory/mcp/server.py
+  - src/engramory/workers/runner.py
+  - tests/security/test_wave_p2_infra_governance.py
+  - tests/steps/static.list
+  - tests/test_docs_tools.py
+  - unified-test-suite.config.json
+  - uv.lock
+implementation:
+  steps:
+  - step: Archive SPEC-01 v1.3, SPEC-06 v1.2, and SPEC-07 v1.2 and update active SPECs
+    phase: sdd_lifecycle
+    artifact: SPEC-01, SPEC-06, SPEC-07
+    archive_path: docs/archive/CHG-012/
+    current_version: '1.2'
+    new_version: '1.3'
+    status: Completed
+  - step: Create IPLAN-12 (IPLAN-12_audit-wave-p2-infra-stack-ci.swf.yaml) and SLICE-12_audit-wave-p2-infra-stack-ci.graph.yaml
+    phase: iplan_creation
+    artifact: IPLAN-12
+    status: Completed
+  - step: Synchronize IPLAN-00_index.yaml and watched_paths documentation with Wave P2 changes
+    phase: documentation_sync
+    artifact: IPLAN-00_index and docs/
+    status: Completed
+  artifacts_modified:
+  - id: SPEC-01
+    file: docs/sdd/06_SPEC/SPEC-01_access_surface.yaml
+    change_type: modified
+  - id: SPEC-06
+    file: docs/sdd/06_SPEC/SPEC-06_ports_portability.yaml
+    change_type: modified
+  - id: SPEC-07
+    file: docs/sdd/06_SPEC/SPEC-07_cli_face.yaml
+    change_type: modified
+  - id: IPLAN-12
+    file: docs/sdd/08_IPLAN/IPLAN-12_audit-wave-p2-infra-stack-ci.swf.yaml
+    change_type: created
+  rollback_steps:
+  - step: Reset feature/plan-026-v030-deep-audit-remediation to 217bed7
+    phase: rollback
+    artifact: codebase
+verification:
+  pre_implementation_validation:
+  - description: Verify CHG-012, IPLAN-12, and SLICE-12 3-way parity before protected edits
+    command: uv --project ${AIOPS_HARNESS_ROOT} run aiops-harness chg verify docs/sdd/09_CHG/CHG-012_audit-wave-p2-infra-stack-ci.yaml
+  post_implementation_validation:
+  - description: Full quality, unit, security, docs, portal build, lockfile, and task ci gates
+    command: task doctor && task check && task sdd:check && task ci
+  exit_criteria:
+    all_tests_pass: true
+    no_regressions: true
+    zero_security_downgrade: true
+gate_approval:
+  gate: GATE-SPEC
+  approved: true
+  approver: Operator (explicit approval-gate signoff 2026-11-22)
+  role: Judge (C3)
+  approval_date: '2026-11-22'
+  evidence: Operator approved all Wave P2 recommended items (Items A/A1, B1-B3, C1-C2, D; Item 0 privacy gate & Item E cross-repo platform-stage-ops PR acknowledged)
+  approved_scope_files: *id001
+rollback_plan:
+  strategy: branch-reset
+  steps:
+  - git reset --hard 217bed7 && uv sync --locked
+  estimated_effort: 2m
+emergency_change:
+  emergency_id: null
+  incident_severity: null
+  fix_deployed: null
+  post_mortem_due: null
+  post_mortem_completed: false
+  post_hoc_gate: null
+glossary:
+  terms:
+  - term: Split-Forge Verification Alignment
+    definition: Synchronized GitHub Actions triggers, PROMOTION_TARGETS, PROMOTION_BRANCHES, and SHA-pinned reusable workflow callers ensuring dev -> staging -> main promotion gates fail closed.
+  - term: Strict Stack Allowlist Parity
+    definition: Alignment of pyproject.toml, uv.lock, Dockerfile, and .aidoc/stack-policy.yaml with prohibited AGPL-3.0 replacement (pypdf) and authentic canons.yaml SHA-256 lockfile digests.
+creation_checklist:
+  checks:
+  - id: 1
+    check: Read every file you reference
+    status: Pass
+  - id: 2
+    check: Verify the architectural claim
+    status: Pass
+  - id: 3
+    check: Check existing struct/type signatures
+    status: Pass
+  - id: 4
+    check: Check existing INSERT/SELECT queries
+    status: Pass
+  - id: 5
+    check: Cross-reference upstream requirements
+    status: Pass
+  - id: 6
+    check: Check for existing handlers/webhooks
+    status: Pass
+  - id: 7
+    check: Couple dependent issues
+    status: Pass
+  - id: 8
+    check: Add automated test specifications
+    status: Pass
+  - id: 9
+    check: Document rollback strategy
+    status: Pass
+  - id: 10
+    check: Verify archive paths
+    status: Pass
+  - id: 11
+    check: Verify supersedes list
+    status: Pass
+  - id: 12
+    check: Verify version bumps
+    status: Pass
+  - id: 13
+    check: SDD-first implementation order
+    status: Pass
+  - id: 14
+    check: 'CHG scope: governance, not implementation plan'
+    status: Pass
+  - id: 15
+    check: Mandatory formal decision block
+    status: Pass
+validation:
+  document_structure:
+  - id_match: Verified CHG-012 matches filename
+  decision_block:
+  - decision_present: Verified DEC-CHG-012 present
+  scope:
+  - governance_only: Verified only sdd_lifecycle, iplan_creation, and documentation_sync steps present
+diff:
+  diff_stat: "Wave P2 PLAN-026 TASK-3 (CHG-012)"
+  breaking_changes: false

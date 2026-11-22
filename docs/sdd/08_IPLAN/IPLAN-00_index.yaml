@@ -5,8 +5,8 @@ metadata:
   schema_version: "1.0"
   document_type: "iplan-registry"
   layer: 8
-  total_plans: 11
-  last_updated: "2026-11-21"
+  total_plans: 12
+  last_updated: "2026-11-22"
 
 registry:
   plans:
@@ -153,7 +153,20 @@ registry:
       files_done: 59
       skipped: []
       depends_on: ["IPLAN-10"]
+    - id: "IPLAN-12"
+      title: "Wave P2 Audit Remediation (C11, H13-H14, M3, M6-M7, L2, L5)"
+      source_spec: "@spec: SPEC-01"
+      scope: "Hardened PG18 compose/Dockerfile, OpenBao /dev/shm contracts, stack-policy & pypdf unification, authentic harness.lock.json, Astro Starlight portal on :4321, and pinned split-forge CI gates"
+      status: "Completed"
+      status_date: "2026-11-22"
+      complexity: 5
+      session_count: 1
+      sessions_completed: 1
+      files_declared: 82
+      files_done: 82
+      skipped: []
+      depends_on: ["IPLAN-11"]
 
 # Build order (topological): IPLAN-06 (ports) → IPLAN-02 (store) →
-# IPLAN-03/04 (retrieval/distillation) → IPLAN-01 (access) → IPLAN-05/07/08/09 (KB compat, CLI, Multimodal CAS, Virtual Employee Brain) → IPLAN-10 (Wave P0) → IPLAN-11 (Wave P1).
-build_order: ["IPLAN-06", "IPLAN-02", "IPLAN-03", "IPLAN-04", "IPLAN-01", "IPLAN-05", "IPLAN-07", "IPLAN-08", "IPLAN-09", "IPLAN-10", "IPLAN-11"]
+# IPLAN-03/04 (retrieval/distillation) → IPLAN-01 (access) → IPLAN-05/07/08/09 (KB compat, CLI, Multimodal CAS, Virtual Employee Brain) → IPLAN-10 (Wave P0) → IPLAN-11 (Wave P1) → IPLAN-12 (Wave P2).
+build_order: ["IPLAN-06", "IPLAN-02", "IPLAN-03", "IPLAN-04", "IPLAN-01", "IPLAN-05", "IPLAN-07", "IPLAN-08", "IPLAN-09", "IPLAN-10", "IPLAN-11", "IPLAN-12"]

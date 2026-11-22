@@ -12,7 +12,7 @@ watched_paths:
   - "src/engramory/ports/vector.py"
   - "src/engramory/access/surface.py"
   - "db/migrations/0001_init_memory.sql"
-last_verified: "2026-11-21"
+last_verified: "2026-11-22"
 ---
 
 # Engramory — Target Architecture
@@ -399,7 +399,7 @@ Phases 0–2 are entirely free/self-hosted. Phase 3 is a **configuration + adapt
 
 ## Recommended dev stack (Phase 0 docker-compose)
 
-Provisioned in `docker-compose.yml` **today:** `postgres` (PostgreSQL 18 + `pgvector` + `ts_blob_cold` Chunked Blob CAS) · `redis` · `ghcr.io/berriai/litellm` + `ollama` (`--profile local-ai`) · `neo4j` (`neo4j:5.26-community`, `Decision D17`) · `mcp` (MCP gateway, authenticating against Stage Authentik or `--profile legacy-idp` `keycloak`) · `worker` (reflection/consolidation). Optional observability connects via OTel (`docs/OBSERVABILITY.md`).
+Provisioned in `docker-compose.yml` **today:** `postgres` (PostgreSQL 18 at `/var/lib/postgresql` + `pgvector` + `ts_blob_cold` Chunked Blob CAS) · `valkey` (`valkey/valkey:8-alpine`) · `nats` (`nats:2.10-alpine` JetStream) · `ghcr.io/berriai/litellm` + `ollama` (`--profile local-ai`, 1536d `embed`) · `neo4j` (`neo4j:5.26-community`, `Decision D17`) · `mcp` (hardened MCP gateway on `127.0.0.1:8000` with dependency-aware `/health`, authenticating against Authentik) · `worker` (hardened reflection/consolidation daemon). Stage deployment (`compose.platform.yaml`) uses OpenBao `/dev/shm` fail-closed secrets and declarative `platform-stage-ops` OpenTofu/`pyinfra` EaC. Optional observability connects via OTel (`docs/OBSERVABILITY.md`).
 
 All open-source, all free, all with a documented GCP **and** Azure adapter for later. Start here; the cloud is a swap, not a rebuild.
 

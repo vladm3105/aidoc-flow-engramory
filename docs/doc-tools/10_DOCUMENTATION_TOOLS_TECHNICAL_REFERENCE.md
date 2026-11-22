@@ -46,7 +46,7 @@ watched_paths:
   - "src/engramory/core/portal_builder.py"
   - ".vale.ini"
   - "portal/package.json"
-last_verified: 2026-11-21
+last_verified: 2026-11-22
 ---
 
 # Documentation Tools Technical Reference: Vale, Starlight, Scalar, Docling, Engramory & Copybara Evaluation
@@ -59,9 +59,9 @@ Every documentation tool in the ecosystem is governed by `25-approved-tooling-in
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **`engramory-docs-engine`** | `engramory.core.docs_tools` (`engramory docs` CLI) | Apache-2.0 / Internal | **Adopt** | Frontmatter AST (`DocumentFrontmatter`), `{id, tier, mode}` executable runbooks, `INV-STEP-01`/`02` safety gates, drift detection, `/llms.txt` export, and MCP `docs_*` server. | `platform-engramory` |
 | **`vale`** | `errata-ai/vale` (Go binary + `.vale/styles/AIOpsAgent/`) | MIT | **Adopt** | Prose linter for AI-agent chunk independence (`NoCrossChunkDeictics`, `NoAmbiguousSubjectStart`, `BannedRetiredTools`, `DeterministicPortFormat`). | `platform-engramory` |
-| **`astro-starlight`** | `@astrojs/starlight` (`v0.32+`) | MIT | **Trial** | Zero-JS static multi-repo developer portal rendering `docs/*.md`, Mermaid v11 diagrams, runbook tier badges, and `/llms.txt` routes. | `platform-engramory` (`portal/`) |
-| **`scalar`** | `@scalar/api-reference` & `@scalar/astro` | MIT | **Trial** | Interactive OpenAPI 3.1, JSONSchema, FastMCP (`DOCS_TOOLS_SCHEMA`), and Protobuf HTTP playground embedded at `/contracts/<service>`. | `platform-engramory` (`portal/`) |
-| **`docling`** | `docling>=2.0` (`PyMuPDF` + `BeautifulSoup4`) | MIT | **Adopt** | Layout-aware document extraction (`SmartExtractionRouter`) converting complex PDFs, DOCX tables, and HTML into structured Markdown for L0 RAG. | `platform-engramory` |
+| **`astro-starlight`** | `@astrojs/starlight` (`v0.32+`) | MIT | **Trial** | Zero-JS static multi-repo developer portal rendering `docs/*.md`, `runbooks/`, `contracts/`, Mermaid v11 diagrams, and `/llms.txt` routes on `127.0.0.1:4321`. | `platform-engramory` (`portal/`) |
+| **`scalar`** | `@scalar/api-reference` & `@scalar/astro` | MIT | **Trial** | Interactive OpenAPI 3.1, JSONSchema, FastMCP (`DOCS_TOOLS_SCHEMA`), and Protobuf HTTP playground embedded at `/contracts/playground`. | `platform-engramory` (`portal/`) |
+| **`docling`** | `docling>=2.0` (`pypdf` + `BeautifulSoup4`) | MIT / BSD-3-Clause | **Adopt** | Layout-aware document extraction (`SmartExtractionRouter`) converting complex PDFs, DOCX tables, and HTML into structured Markdown for L0 RAG. | `platform-engramory` |
 | **`mermaid`** | `mermaid` (`v11+` / `@mermaid-js/mermaid-cli`) | MIT | **Adopt** | Declarative Diagrams-as-Code (`flowchart`, `sequenceDiagram`, `stateDiagram-v2`, `erDiagram`) inside Markdown and SDD artifacts. | All 35+ repositories |
 | **`markdownlint-cli2`** | `markdownlint-cli2` | MIT | **Adopt** | Fast Markdown AST structure, heading hierarchy, and code-fence syntax validation in Tier-1 `lefthook` gates. | `aiops-harness` & `platform-engramory` |
 | **`yamllint`** | `yamllint` | GPL-3.0 (CLI tool) | **Adopt** | Fast YAML schema, SDD layer, ADR/CHG manifest, and frontmatter syntax validation in Tier-1 `lefthook` gates. | `aiops-harness` & `platform-engramory` |
@@ -112,14 +112,14 @@ Standard Markdown linters only validate syntax (such as list indentation or head
 
 ### 4.1 Technical Architecture & Build Pipeline
 
-`Astro Starlight` (`@astrojs/starlight`, MIT License) is the static documentation portal framework configured in `portal/package.json` and `portal/astro.config.mjs`.
+`Astro Starlight` (`@astrojs/starlight`, MIT License) is the static documentation portal framework configured in `portal/package.json` and `portal/astro.config.mjs` (Astro Content Layer `src/content.config.ts` with `docsLoader()`, `runbooks/`, `contracts/`, and local loopback `127.0.0.1:4321` so `127.0.0.1:8005` stays reserved for stage MCP).
 
 1. **Multi-Repo Content Staging (`engramory docs build-portal`):**
-   `src/engramory/core/portal_builder.py` (`stage_portal_bundle`) confines scans strictly to `docs/` inside approved ecosystem repositories (`platform-*`, `aidoc-*`, `aiops-*`), validates symlink-free path confinement (`resolve_confined_repo_path` + `has_symlink_component` + `_is_within_root`), scrubs every Markdown file through Rule D14 (`_scrub_manifest_text`), and stages clean `.md` files into `portal/src/content/docs/reference/`.
+   `src/engramory/core/portal_builder.py` (`stage_portal_bundle`) confines scans strictly to `docs/` inside approved ecosystem repositories (`platform-*`, `aidoc-*`, `aiops-*`), validates symlink-free path confinement (`resolve_confined_repo_path` + `has_symlink_component` + `_is_within_root`), injects synthesized `title:` fields even when YAML frontmatter omits `title`, scrubs every Markdown file through Rule D14 (`_scrub_manifest_text`), writes `.md` files into `portal/src/content/docs/reference/`, and prunes orphaned/deprecated staged files.
 2. **Zero-JavaScript Static Output & Raw Markdown Routes:**
    Starlight compiles `portal/src/content/docs/` into static HTML assets with built-in Pagefind full-text search, native Mermaid v11 diagram rendering, and alongside raw `.md` and `/llms.txt` endpoints for LLM agents.
 3. **Why Starlight Over Alternatives:**
-   Unlike `MkDocs Material Insiders` (sponsorware/commercial features) or `Mintlify` (proprietary SaaS), `@astrojs/starlight` is 100% MIT-licensed, builds on the already-approved Node.js 24 LTS + `pnpm` toolchain (`25-approved-tooling-inventory.md`), and natively embeds Astro components such as `@scalar/astro`.
+   Unlike `MkDocs Material Insiders` (sponsorware/commercial features) or `Mintlify` (proprietary SaaS), `@astrojs/starlight` is 100% MIT-licensed, builds on the already-approved Node.js 24 LTS + `pnpm` toolchain (`25-approved-tooling-inventory.md`), and natively embeds Astro components such as `@scalar/astro` (`/contracts/playground`).
 
 ---
 
@@ -127,7 +127,7 @@ Standard Markdown linters only validate syntax (such as list indentation or head
 
 ### 5.1 Technical Architecture & Supported Specifications
 
-`Scalar` (`@scalar/api-reference` and `@scalar/astro`, MIT License) provides the interactive API and contract reference console embedded inside the Starlight portal at `/contracts/<service>`:
+`Scalar` (`@scalar/api-reference` and `@scalar/astro`, MIT License) provides the interactive API and contract reference console embedded inside the Starlight portal at `/contracts/playground`:
 
 1. **OpenAPI 3.1 & FastAPI Service Specs:**
    Renders interactive REST API documentation for `platform-engramory` (`127.0.0.1:8000`), `platform-paperclip` (`127.0.0.1:3100`), `aidoc-flow-support-desk` (`127.0.0.1:8090`), and `platform-security` (`127.0.0.1:8095`).
@@ -138,14 +138,14 @@ Standard Markdown linters only validate syntax (such as list indentation or head
 
 ---
 
-## 6. `Docling` (`docling>=2.0`, MIT) + `PyMuPDF` + `BeautifulSoup4` — Smart Document Extraction
+## 6. `Docling` (`docling>=2.0`, MIT) + `pypdf` + `BeautifulSoup4` — Smart Document Extraction
 
 ### 6.1 `SmartExtractionRouter` in `platform-engramory`
 
-While `docs/*.md` files are authored directly in Markdown, the ecosystem also ingests external PDFs, architectural RFCs, vendor datasheets, `.docx` files, and HTML snapshots into the `platform-engramory` L0 Knowledge Core (`src/engramory/core/extraction.py`):
+While `docs/*.md` files are authored directly in Markdown, the ecosystem also ingests external PDFs, architectural RFCs, vendor datasheets, `.docx` files, and HTML snapshots into the `platform-engramory` L0 Knowledge Core (`src/engramory/core/extraction/`):
 
-1. **Fast Path (`PyMuPDF` / `fitz` + `BeautifulSoup4` + `DocumentDetector`):**
-   Digital-native text PDFs (`<= 50 MiB` native buffer with `max_pages=500` and `max_total_chars=5_000_000` resource caps) and HTML documents extract via `PyMuPDF` (`fitz.open` in `try/finally`) and `BeautifulSoup4`, while `DocumentDetector` checks known filename extensions prior to heuristic `@section:` markers and empty docs emit zero sections.
+1. **Fast Path (`pypdf` BSD-3-Clause + `BeautifulSoup4` + `DocumentDetector`):**
+   Digital-native text PDFs (`<= 50 MiB` native buffer with `max_pages=500` and `max_total_chars=5_000_000` resource caps) and HTML documents extract via `pypdf` (replacing AGPL-3.0 `pymupdf`) and `BeautifulSoup4`, while `DocumentDetector` checks known filename extensions prior to heuristic `@section:` markers and empty docs emit zero sections.
 2. **Deep Layout & Table Path (`Docling`, `docling>=2.0.0`, MIT License):**
    When `SmartExtractionRouter` detects complex multi-column layouts, embedded tables, or ZIP-container office files (`.docx`, `.xlsx`, `.pptx`, `.odt`), `DoclingExtractor` enforces ZIP-bomb limits (`MAX_ZIP_ENTRIES=10_000`, `MAX_ZIP_UNCOMPRESSED_BYTES=250 MiB`, `MAX_ZIP_RATIO=100.0`) and writes tenant-scoped caches atomically via temporary files and `os.replace`.
 

@@ -1163,11 +1163,11 @@ def _cmd_mcp_serve(args: argparse.Namespace) -> int:
 
         jwks_url = os.environ.get(
             "AUTHENTIK_JWKS_URL",
-            "https://auth-stage.aiops-flow.io/application/o/engramory/jwks/",
+            "https://auth.int.aiops-flow.io/application/o/engramory/jwks/",
         )
         issuer = os.environ.get(
             "AUTHENTIK_ISSUER",
-            "https://auth-stage.aiops-flow.io/application/o/engramory/",
+            "https://auth.int.aiops-flow.io/application/o/engramory/",
         )
         audience = os.environ.get("AUTHENTIK_AUDIENCE", "engramory")
         token_validator = JWKSValidator(jwks_url, issuer=issuer, audience=audience)

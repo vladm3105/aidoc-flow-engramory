@@ -1715,6 +1715,14 @@ class StackPolicyValidator:
         """Scan source files for prohibited AST / string patterns (skipping Python docstrings)."""
         violations: list[str] = []
         excluded_dirs = _EXCLUDED_SCAN_DIRS | {"tests", "test"}
+        compiled_patterns: list[tuple[str, re.Pattern[str]]] = []
+        for pattern in banned_patterns:
+            escaped = re.escape(pattern)
+            if pattern and (pattern[0].isalnum() or pattern[0] == "_"):
+                regex = re.compile(rf"(?<![A-Za-z0-9_]){escaped}")
+            else:
+                regex = re.compile(escaped)
+            compiled_patterns.append((pattern, regex))
 
         for root, dirs, files in os.walk(self.root_dir, followlinks=False):
             dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in excluded_dirs)
@@ -1734,8 +1742,8 @@ class StackPolicyValidator:
                     if line_no in doc_lines:
                         continue
                     code_part = self._strip_inline_comment(line, is_python=is_py)
-                    for pattern in banned_patterns:
-                        if pattern in code_part:
+                    for pattern, regex in compiled_patterns:
+                        if regex.search(code_part):
                             violations.append(
                                 f"Banned pattern '{pattern}' detected in {rel_path}:{line_no}"
                             )

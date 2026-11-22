@@ -87,6 +87,15 @@ HEARTBEAT_PATH = Path(
         os.path.join(tempfile.gettempdir(), "engramory-worker.heartbeat"),
     )
 )
+HEARTBEAT_TICK_MAX_SEC = 60.0
+
+
+def _touch_heartbeat(heartbeat_path: Path) -> None:
+    """Write fresh epoch timestamp for Docker worker HEALTHCHECK."""
+    try:
+        heartbeat_path.write_text(f"{time.time()}\n", encoding="utf-8")
+    except OSError as err:
+        logger.warning("Could not write heartbeat to %s: %s", heartbeat_path, err)
 
 
 async def run_worker_loop(
@@ -139,9 +148,12 @@ async def run_worker_loop(
         except Exception as rec_exc:
             logger.warning("Startup CAS blob reconciliation skipped: %s", rec_exc)
 
+    _touch_heartbeat(heartbeat_path)
+
     try:
         while not shutdown_event.is_set():
             start_time = time.monotonic()
+            pass_ok = True
             try:
                 # 0. Drain pending experience events from EventsPort if configured
                 if events is not None:
@@ -258,19 +270,27 @@ async def run_worker_loop(
                         logger.debug("CAS orphan chunk GC skipped: %s", gc_exc)
 
             except Exception as exc:
+                pass_ok = False
                 logger.error("Error during distillation pass: %s", exc, exc_info=True)
             finally:
-                # 2. Always touch heartbeat file for Docker HEALTHCHECK
-                try:
-                    heartbeat_path.write_text(f"{time.time()}\n", encoding="utf-8")
-                except OSError as err:
-                    logger.warning("Could not write heartbeat to %s: %s", heartbeat_path, err)
+                # 2. Refresh heartbeat file for Docker HEALTHCHECK when pass succeeded
+                if pass_ok:
+                    _touch_heartbeat(heartbeat_path)
 
-            # 3. Wait for interval or shutdown signal
-            try:
-                await asyncio.wait_for(shutdown_event.wait(), timeout=interval)
-            except TimeoutError:
-                pass
+            # 3. Wait for interval or shutdown signal while keeping heartbeat fresh
+            deadline = time.monotonic() + interval
+            while not shutdown_event.is_set():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    await asyncio.wait_for(
+                        shutdown_event.wait(),
+                        timeout=min(HEARTBEAT_TICK_MAX_SEC, remaining),
+                    )
+                except TimeoutError:
+                    if pass_ok:
+                        _touch_heartbeat(heartbeat_path)
     finally:
         for adapter in (events, storage):
             if adapter is not None and hasattr(adapter, "close"):

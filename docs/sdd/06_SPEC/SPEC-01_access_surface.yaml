@@ -15,9 +15,9 @@ title: "Access Surface & Authorization"
 
 document_control:
   status: Approved
-  version: "1.3"
+  version: "1.4"
   date_created: "2026-06-22T00:00:00"
-  last_updated: "2026-11-21T00:00:00"
+  last_updated: "2026-11-22T00:00:00"
   author: "Engramory team"
   component: "AccessSurface"
   tdd_ready_score: "98/100"
@@ -204,7 +204,7 @@ behavior:
     - { rule: "Agent offboarding (agent_space_offboard) enforces same-agent/explicit-admin authz, audits denials, and never soft-deletes space-scoped shared memories", source: "@ears: EARS.01.03.e020" }
     - { rule: "Documentation smoke runners execute only strict shlex-allowlisted non-shell commands with scrubbed env and symlink-free workspace confinement", source: "@ears: EARS.01.04.c300" }
     - { rule: "MCP Brain Passport import hard-enforces verify_integrity=True, allow_type_override=False, single-transaction dedup, and schema_version; department_focus and docs_ingest_runbook enforce _enforce_domain_boundary", source: "@ears: EARS.01.03.e020" }
-    - { rule: "MCP gateway supports ping/notifications, thread-offloaded blocking tools, cross-platform stdio, blob_put/blob_get, and accurate readOnlyHint", source: "@ears: EARS.01.03.e020" }
+    - { rule: "MCP gateway supports ping/notifications, thread-offloaded blocking tools, cross-platform stdio, blob_put/blob_get, accurate readOnlyHint, and bounded dependency readiness probes on /health and /ready (503 when canonical store is unreachable)", source: "@ears: EARS.01.03.e020" }
   state_transitions:
     - { from: "Received", to: "Denied", trigger: "scope check fails OR missing evidence", source: "@bdd: BDD.01.03.e500" }
     - { from: "Received", to: "Executed", trigger: "authorized", source: "@bdd: BDD.01.03.a100" }

@@ -18,7 +18,7 @@ tags:
   - mermaid
   - d14-redaction
 endpoints:
-  host_loopback: "http://127.0.0.1:8005"
+  host_loopback: "http://127.0.0.1:4321"
   container_gateway: "http://10.250.0.1:8000"
 watched_paths:
   - "portal/package.json"
@@ -29,7 +29,7 @@ triggers:
     - "engramory docs build-portal"
   mcp_tools:
     - "docs_build_portal"
-last_verified: 2026-11-09
+last_verified: 2026-11-22
 ---
 
 # Astro Starlight + Scalar Human Supervision Portal (`portal/`)
