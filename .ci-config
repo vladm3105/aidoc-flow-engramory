@@ -137,7 +137,7 @@ REVIEW_MAX_DIFF_BYTES=150000
 REVIEW_EXCLUDE=.agents/** .unified-test-suite/**
 REVIEW_TIMEOUT=900
 # Environment variables passed to the reviewer (everything else is dropped).
-REVIEW_ENV=LLM_URL LLM_API_KEY ANTHROPIC_API_KEY OPENAI_API_KEY
+REVIEW_ENV=LLM_URL LLM_API_KEY
 # isolated (empty temp dir, diff-only review) | repo (reviewer CLI may read the repository)
 REVIEW_CWD=isolated
 # Inbox `stale-review` threshold: hours a REVISE/BLOCK verdict may sit before flagging.
