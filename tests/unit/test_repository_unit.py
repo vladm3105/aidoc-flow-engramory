@@ -5,8 +5,11 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from typing import Any
+from unittest.mock import patch
 
 import pytest
+from psycopg.rows import dict_row
+from psycopg_pool import AsyncConnectionPool, PoolClosed, PoolTimeout
 
 from engramory.adapters.dev.vector_pg import PgVectorAdapter
 from engramory.core.models import (
@@ -20,7 +23,7 @@ from engramory.core.models import (
     Memory,
     ValidationError,
 )
-from engramory.core.repository import Repository
+from engramory.core.repository import Repository, StoreUnavailable
 
 _MEM_ROW: dict[str, Any] = {
     "id": "mem-1",
@@ -580,3 +583,108 @@ async def test_repository_kb_graph_audits_and_runbooks_unit() -> None:
     assert await repo.count_kb_sections(tenant_id="t1") == 4
     assert await repo.count_graph_entities(tenant_id="t1") == 4
     assert await repo.count_graph_relations(tenant_id="t1") == 4
+
+
+class _StubAsyncPool:
+    """Minimal AsyncConnectionPool test double supporting open/close/connection lifecycle."""
+
+    def __init__(
+        self,
+        *,
+        fail_exc: Exception | None = None,
+        closed: bool = False,
+    ) -> None:
+        self.fail_exc = fail_exc
+        self.closed = closed
+        self.open_calls = 0
+        self.close_calls = 0
+
+    async def open(self, *, wait: bool = False) -> None:
+        self.open_calls += 1
+
+    async def close(self) -> None:
+        self.close_calls += 1
+        self.closed = True
+
+    @asynccontextmanager
+    async def connection(self, *, timeout: float = 5.0) -> AsyncIterator[_FakeConn]:
+        if self.fail_exc is not None:
+            raise self.fail_exc
+        yield _FakeConn()
+
+
+@pytest.mark.asyncio
+async def test_repository_pool_configured_with_check_and_timeouts() -> None:
+    captured_kwargs: list[dict[str, Any]] = []
+    stub_pool = _StubAsyncPool()
+
+    def _make_pool(**kwargs: Any) -> _StubAsyncPool:
+        captured_kwargs.append(kwargs)
+        return stub_pool
+
+    repo = Repository("postgresql://127.0.0.1:1/nothing", min_size=1, max_size=4)
+    with patch("engramory.core.repository.AsyncConnectionPool", side_effect=_make_pool) as mock_cls:
+        mock_cls.check_connection = AsyncConnectionPool.check_connection
+        pool = await repo._get_pool()
+
+    assert pool is stub_pool
+    assert stub_pool.open_calls == 1
+    assert len(captured_kwargs) == 1
+    opts = captured_kwargs[0]
+    assert opts["check"] is AsyncConnectionPool.check_connection
+    assert opts["kwargs"] == {"row_factory": dict_row, "connect_timeout": 5}
+    assert opts["max_lifetime"] == 1800.0
+    assert opts["max_idle"] == 300.0
+    assert opts["reconnect_timeout"] == 30.0
+    assert opts["reconnect_failed"] == repo._on_reconnect_failed
+
+
+@pytest.mark.asyncio
+async def test_repository_resets_wedged_pool_on_pool_timeout_and_recovers() -> None:
+    wedged_pool = _StubAsyncPool(fail_exc=PoolTimeout("couldn't get a connection after 5.00 sec"))
+    healthy_pool = _StubAsyncPool()
+    pools = iter([wedged_pool, healthy_pool])
+
+    repo = Repository("postgresql://127.0.0.1:1/nothing")
+    with patch(
+        "engramory.core.repository.AsyncConnectionPool",
+        side_effect=lambda **kwargs: next(pools),
+    ) as mock_cls:
+        mock_cls.check_connection = AsyncConnectionPool.check_connection
+        with pytest.raises(StoreUnavailable, match="couldn't get a connection"):
+            async with repo._conn():
+                pass
+
+        assert wedged_pool.close_calls == 1
+        assert await repo.ping() is True
+        assert healthy_pool.open_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_repository_recovers_after_pool_closed_and_reconnect_failed() -> None:
+    first_pool = _StubAsyncPool()
+    second_pool = _StubAsyncPool(fail_exc=PoolClosed("pool is closed"), closed=True)
+    third_pool = _StubAsyncPool()
+    pools = iter([first_pool, second_pool, third_pool])
+
+    repo = Repository("postgresql://127.0.0.1:1/nothing")
+    with patch(
+        "engramory.core.repository.AsyncConnectionPool",
+        side_effect=lambda **kwargs: next(pools),
+    ) as mock_cls:
+        mock_cls.check_connection = AsyncConnectionPool.check_connection
+
+        # reconnect_failed callback evicts & closes the current pool
+        assert await repo._get_pool() is first_pool
+        await repo._on_reconnect_failed(first_pool)  # type: ignore[arg-type]  # reason: stub pool double
+        assert first_pool.close_calls == 1
+
+        # Next _get_pool() creates second_pool; PoolClosed during _conn() resets it
+        with pytest.raises(StoreUnavailable, match="pool is closed"):
+            async with repo._conn():
+                pass
+        assert second_pool.close_calls == 1
+
+        # Next call allocates third_pool and succeeds
+        assert await repo.ping() is True
+        assert third_pool.open_calls == 1

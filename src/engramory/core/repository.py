@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import weakref
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -22,7 +23,7 @@ from typing import Any, LiteralString, cast
 import psycopg
 from psycopg import sql
 from psycopg.rows import dict_row
-from psycopg_pool import AsyncConnectionPool, PoolTimeout
+from psycopg_pool import AsyncConnectionPool, PoolClosed, PoolTimeout
 
 from engramory.core.models import (
     AUTONOMY_TIERS,
@@ -47,6 +48,7 @@ _FEEDBACK_TARGETS: dict[str, float] = {
     "harmful": 0.0,
 }
 EXPECTED_EMBEDDING_DIMS = 1536
+logger = logging.getLogger(__name__)
 
 
 def _compose_static_sql(template: LiteralString, **clauses: str) -> str:
@@ -398,11 +400,19 @@ class Repository:
         min_size: int = 1,
         max_size: int = 10,
         open_timeout: float = 5.0,
+        connect_timeout: float = 5.0,
+        max_lifetime: float = 1800.0,
+        max_idle: float = 300.0,
+        reconnect_timeout: float = 30.0,
     ) -> None:
         self._dsn = dsn
         self._min_size = max(0, int(min_size))
         self._max_size = max(1, int(max_size))
         self._open_timeout = max(0.05, float(open_timeout))
+        self._connect_timeout = max(1, int(round(float(connect_timeout))))
+        self._max_lifetime = max(1.0, float(max_lifetime))
+        self._max_idle = max(1.0, float(max_idle))
+        self._reconnect_timeout = max(1.0, float(reconnect_timeout))
         self._pools: weakref.WeakKeyDictionary[
             asyncio.AbstractEventLoop,
             AsyncConnectionPool[psycopg.AsyncConnection[dict[str, Any]]],
@@ -419,7 +429,7 @@ class Repository:
         """Lazily initialize and return the AsyncConnectionPool bound to the running loop."""
         loop = asyncio.get_running_loop()
         pool = self._pools.get(loop)
-        if pool is not None:
+        if pool is not None and not getattr(pool, "closed", False):
             return pool
         lock = self._pool_locks.get(loop)
         if lock is None:
@@ -427,7 +437,7 @@ class Repository:
             self._pool_locks[loop] = lock
         async with lock:
             pool = self._pools.get(loop)
-            if pool is not None:
+            if pool is not None and not getattr(pool, "closed", False):
                 return pool
             candidate = cast(
                 AsyncConnectionPool[psycopg.AsyncConnection[dict[str, Any]]],
@@ -436,7 +446,15 @@ class Repository:
                     min_size=self._min_size,
                     max_size=self._max_size,
                     open=False,
-                    kwargs={"row_factory": dict_row},
+                    check=AsyncConnectionPool.check_connection,
+                    max_lifetime=self._max_lifetime,
+                    max_idle=self._max_idle,
+                    reconnect_timeout=self._reconnect_timeout,
+                    reconnect_failed=self._on_reconnect_failed,
+                    kwargs={
+                        "row_factory": dict_row,
+                        "connect_timeout": self._connect_timeout,
+                    },
                 ),
             )
             try:
@@ -446,6 +464,32 @@ class Repository:
                 raise
             self._pools[loop] = candidate
             return candidate
+
+    async def _reset_pool(
+        self, expected: AsyncConnectionPool[psycopg.AsyncConnection[dict[str, Any]]]
+    ) -> None:
+        """Evict and best-effort close a wedged or closed pool if still registered."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        lock = self._pool_locks.get(loop)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._pool_locks[loop] = lock
+        async with lock:
+            if self._pools.get(loop) is not expected:
+                return
+            self._pools.pop(loop, None)
+        try:
+            await asyncio.wait_for(expected.close(), timeout=2.0)
+        except Exception:  # noqa: BLE001  # reason: stale pool teardown must not mask StoreUnavailable
+            logger.warning("Failed or timed out closing stale Postgres pool", exc_info=True)
+
+    async def _on_reconnect_failed(self, pool: AsyncConnectionPool[Any]) -> None:
+        """Reset pool after reconnect_timeout so later requests recover cleanly."""
+        logger.warning("Postgres pool reconnect_timeout reached; resetting pool for recovery")
+        await self._reset_pool(pool)
 
     async def close(self) -> None:
         """Close the AsyncConnectionPool bound to the current running event loop, if any."""
@@ -479,7 +523,15 @@ class Repository:
                         },
                     )
                     yield conn
-        except (psycopg.OperationalError, psycopg.InterfaceError, TimeoutError, PoolTimeout) as exc:
+        except (
+            psycopg.OperationalError,
+            psycopg.InterfaceError,
+            TimeoutError,
+            PoolTimeout,
+            PoolClosed,
+        ) as exc:
+            if isinstance(exc, (PoolTimeout, PoolClosed)) or getattr(pool, "closed", False):
+                await self._reset_pool(pool)
             raise StoreUnavailable(str(exc)) from exc
 
     async def ping(self, *, timeout_sec: float = 2.0) -> bool:
