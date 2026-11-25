@@ -6,7 +6,6 @@ import asyncio
 import http.client
 import json
 import threading
-import urllib.error
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -415,7 +414,9 @@ def test_jwt_key_rotation_preserves_headers_and_revocation_fails_closed() -> Non
         exp=9999999999,
         raw_claims={"jti": "tok-1"},
     )
-    with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("connection refused")):
+    import httpx
+
+    with patch("httpx.Client.get", side_effect=httpx.ConnectError("connection refused")):
         with pytest.raises(AuthenticationError, match="fail-closed"):
             check_token_revocation(
                 claims,

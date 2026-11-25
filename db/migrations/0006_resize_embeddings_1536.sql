@@ -2,50 +2,72 @@
 -- Note: Must drop dependent view v_ambient_memory_active prior to altering column type,
 -- and restore it immediately after.
 
-DROP VIEW IF EXISTS v_ambient_memory_active;
+DO $$
+DECLARE
+    mem_type text;
+    kb_type text;
+BEGIN
+    SELECT format_type(atttypid, atttypmod) INTO mem_type
+    FROM pg_attribute
+    WHERE attrelid = 'public.memories'::regclass AND attname = 'embedding';
 
--- 1. Sanitize memories with mismatched dimensions before altering column type
-UPDATE memories
-SET embedding = NULL, embedding_dims = NULL
-WHERE embedding IS NOT NULL AND vector_dims(embedding) != 1536;
+    IF mem_type IS DISTINCT FROM 'vector(1536)' THEN
+        DROP VIEW IF EXISTS v_ambient_memory_active;
 
-DROP INDEX IF EXISTS idx_memories_embedding_hnsw;
+        -- 1. Sanitize memories with mismatched dimensions before altering column type
+        UPDATE memories
+        SET embedding = NULL, embedding_dims = NULL
+        WHERE embedding IS NOT NULL AND vector_dims(embedding) != 1536;
 
-ALTER TABLE memories ALTER COLUMN embedding TYPE vector(1536);
+        DROP INDEX IF EXISTS idx_memories_embedding_hnsw;
 
-CREATE INDEX IF NOT EXISTS idx_memories_embedding_hnsw
-    ON memories USING hnsw (embedding vector_cosine_ops)
-    WITH (m = 16, ef_construction = 64);
+        ALTER TABLE memories ALTER COLUMN embedding TYPE vector(1536);
 
--- 2. Resize and index kb_sections
-UPDATE kb_sections
-SET embedding = NULL, embedding_dims = NULL
-WHERE embedding IS NOT NULL AND vector_dims(embedding) != 1536;
+        CREATE INDEX IF NOT EXISTS idx_memories_embedding_hnsw
+            ON memories USING hnsw (embedding vector_cosine_ops)
+            WITH (m = 16, ef_construction = 64);
+    END IF;
 
-DROP INDEX IF EXISTS idx_kb_sections_embedding_hnsw;
+    SELECT format_type(atttypid, atttypmod) INTO kb_type
+    FROM pg_attribute
+    WHERE attrelid = 'public.kb_sections'::regclass AND attname = 'embedding';
 
-ALTER TABLE kb_sections ALTER COLUMN embedding TYPE vector(1536);
+    IF kb_type IS DISTINCT FROM 'vector(1536)' THEN
+        -- 2. Resize and index kb_sections
+        UPDATE kb_sections
+        SET embedding = NULL, embedding_dims = NULL
+        WHERE embedding IS NOT NULL AND vector_dims(embedding) != 1536;
 
-CREATE INDEX IF NOT EXISTS idx_kb_sections_embedding_hnsw
-    ON kb_sections USING hnsw (embedding vector_cosine_ops)
-    WITH (m = 16, ef_construction = 64);
+        DROP INDEX IF EXISTS idx_kb_sections_embedding_hnsw;
 
--- 3. Restore v_ambient_memory_active view projection
-CREATE OR REPLACE VIEW v_ambient_memory_active AS
-SELECT
-    m.id,
-    m.tenant_id,
-    m.project_id,
-    m.scope,
-    m.type AS memory_type,
-    COALESCE(m.summary, m.content_raw) AS content,
-    m.content_raw,
-    m.embedding,
-    m.embedding_model,
-    m.embedding_dims,
-    m.source_trust,
-    m.confidence,
-    m.created_at
-FROM memories m
-WHERE m.status = 'active'
-  AND m.valid_to IS NULL;
+        ALTER TABLE kb_sections ALTER COLUMN embedding TYPE vector(1536);
+
+        CREATE INDEX IF NOT EXISTS idx_kb_sections_embedding_hnsw
+            ON kb_sections USING hnsw (embedding vector_cosine_ops)
+            WITH (m = 16, ef_construction = 64);
+    END IF;
+
+    -- 3. Restore v_ambient_memory_active view projection only when absent
+    IF to_regclass('public.v_ambient_memory_active') IS NULL THEN
+        EXECUTE $v$
+            CREATE VIEW v_ambient_memory_active AS
+            SELECT
+                m.id,
+                m.tenant_id,
+                m.project_id,
+                m.scope,
+                m.type AS memory_type,
+                COALESCE(m.summary, m.content_raw) AS content,
+                m.content_raw,
+                m.embedding,
+                m.embedding_model,
+                m.embedding_dims,
+                m.source_trust,
+                m.confidence,
+                m.created_at
+            FROM memories m
+            WHERE m.status = 'active'
+              AND m.valid_to IS NULL
+        $v$;
+    END IF;
+END $$;

@@ -1,0 +1,55 @@
+---
+import { ScalarComponent } from "@scalar/astro";
+
+const openApiSpec = JSON.stringify({
+  openapi: "3.1.0",
+  info: {
+    title: "Engramory Gateway & FastMCP HTTP API",
+    version: "0.3.0",
+    description:
+      "Liveness/readiness probes and Streamable HTTP / SSE MCP transport for platform-engramory.",
+  },
+  paths: {
+    "/healthz": {
+      get: {
+        summary: "Liveness probe",
+        responses: { "200": { description: "Process alive" } },
+      },
+    },
+    "/health": {
+      get: {
+        summary: "Dependency-aware readiness probe (Postgres / Neo4j / JWKS)",
+        responses: {
+          "200": { description: "Healthy" },
+          "503": { description: "Degraded dependency" },
+        },
+      },
+    },
+    "/ready": {
+      get: {
+        summary: "Alias for dependency readiness probe",
+        responses: {
+          "200": { description: "Ready" },
+          "503": { description: "Not ready" },
+        },
+      },
+    },
+    "/mcp": {
+      post: {
+        summary: "MCP JSON-RPC message dispatch",
+        responses: {
+          "200": { description: "JSON-RPC response" },
+          "401": { description: "Authentication failure" },
+        },
+      },
+    },
+  },
+});
+---
+
+<ScalarComponent
+  configuration={{
+    content: openApiSpec,
+    pageTitle: "Engramory API & FastMCP Reference",
+  }}
+/>

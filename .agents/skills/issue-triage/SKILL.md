@@ -114,4 +114,4 @@ Only after §§1–4 are done on the local issue — the triage note carrying th
 
 ## What this skill is not
 
-Capture belongs to `submit-feedback`, continuity to `wrap-session` / `context-handoff`, pre-work re-validation mandates to the repo's own validate-before-work rule (`AGENTS.md` § Repository state and task tracking). Triage sits between capture and implementation; it replaces none of them.
+Capture belongs to `submit-feedback-chatwoot` (`aiops-agent-support` / `aiops_desk_submit`, which correlates intake tickets via deterministic `UUIDv5 request_id`) or `submit-feedback`, continuity to `wrap-session` / `context-handoff`, SDD pre-implementation flow classification to `sdd-chg-triage` and `sdd-chg-flow`, and pre-work re-validation mandates to the repo's own validate-before-work rule (`AGENTS.md` § Repository state and task tracking). Triage sits between capture and implementation; it replaces none of them.

@@ -3,22 +3,27 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "100% MIT Open-Source Human Supervision Portal built on Astro Starlight + Scalar + Mermaid v11",
+  "description": "100% MIT Open-Source Human Supervision Portal built on Astro Starlight + Scalar + Mermaid",
   "license": "MIT",
   "scripts": {
-    "dev": "astro dev --host 127.0.0.1 --port 8005",
+    "dev": "astro dev --host 127.0.0.1 --port 4321",
     "build": "astro build",
-    "preview": "astro preview --host 127.0.0.1 --port 8005",
+    "preview": "astro preview --host 127.0.0.1 --port 4321",
     "stage-docs": "cd .. && uv run engramory docs build-portal --repo-path ."
   },
   "dependencies": {
-    "@astrojs/starlight": "^0.32.0",
-    "@scalar/api-reference": "^1.25.0",
-    "@scalar/astro": "^0.2.0",
-    "astro": "^5.1.0",
-    "mermaid": "^11.4.0"
+    "@astrojs/starlight": "^0.43.1",
+    "@scalar/api-reference": "^1.82.1",
+    "@scalar/astro": "^0.4.40",
+    "astro": "^7.4.13",
+    "mermaid": "^12.3.0"
   },
   "devDependencies": {
     "typescript": "^5.7.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "esbuild": ">=0.28.1"
+    }
   }
 }

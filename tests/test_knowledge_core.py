@@ -209,7 +209,7 @@ Discussion about knowledge architecture.
     )
 
     # Run CLI ingest
-    exit_code = main(["--json", "knowledge", "ingest", str(doc)])
+    exit_code = main(["--json", "knowledge", "ingest", "--evidence-ref", "CHG-011", str(doc)])
     assert exit_code == 0
     out = capsys.readouterr().out
     data = json.loads(out)

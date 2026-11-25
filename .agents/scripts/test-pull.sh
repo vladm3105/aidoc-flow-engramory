@@ -240,10 +240,10 @@ test ! -e "$tmp/repoF/.agents/.canon-sha" \
 # Every mutating global case sets AGENTS_CONFIG_DIR to a fake root; the only
 # case that unsets it is a --dry-run asserting the printed default root.
 FAKEHOME="$tmp/fakehome/.agents"
-env -u AGENTS_CONFIG_DIR bash "$PULL" --global --dry-run >"$tmp/pull-test-M.log" 2>&1 \
+env -u AGENTS_CONFIG_DIR HOME="$tmp/defaulthome" bash "$PULL" --global --dry-run >"$tmp/pull-test-M.log" 2>&1 \
   || { echo "FAIL: default-root dry-run failed"; exit 1; }
-grep -q "user root: $HOME/.agents" "$tmp/pull-test-M.log" \
-  || { echo "FAIL: default user root not $HOME/.agents"; exit 1; }
+grep -q "user root: $tmp/defaulthome/.agents" "$tmp/pull-test-M.log" \
+  || { echo "FAIL: default user root not $tmp/defaulthome/.agents"; exit 1; }
 AGENTS_CONFIG_DIR="$FAKEHOME" bash "$PULL" --global >"$tmp/pull-test-J.log" 2>&1 \
   || { echo "FAIL: fresh --global failed"; cat "$tmp/pull-test-J.log"; exit 1; }
 # user scope = skills + agents, full skill dirs (SKILL.md lives here)

@@ -29,20 +29,22 @@ tasks:
     desc: "Run structural SDD linter over docs/sdd with project overrides"
     cmds:
       - >-
-        if python3 -c "import sdd_doc_lint" 2>/dev/null; then
-          python3 -m sdd_doc_lint "{{.SDD_DIR}}" {{.CLI_ARGS}};
+        PY_BIN="{{.ROOT_DIR}}/.venv/bin/python"; [ -x "$PY_BIN" ] || PY_BIN="python3";
+        if "$PY_BIN" -c "import sdd_doc_lint" 2>/dev/null; then
+          "$PY_BIN" -m sdd_doc_lint "{{.SDD_DIR}}" {{.CLI_ARGS}};
         else
-          echo "sdd:lint: sdd_doc_lint not available; skipping (sync .aidoc/framework to enable).";
+          uv run engramory --json sdd validate-graph;
         fi
 
   review:
     desc: "Execute multi-persona review crew (live or verify-only mode)"
     cmds:
       - >-
-        if python3 -c "import aidoc_flow_langgraph" 2>/dev/null; then
-          python3 -m aidoc_flow_langgraph.cli.main review --config "{{.ENGINE_CONFIG}}" {{.CLI_ARGS}};
+        PY_BIN="{{.ROOT_DIR}}/.venv/bin/python"; [ -x "$PY_BIN" ] || PY_BIN="python3";
+        if "$PY_BIN" -c "import aidoc_flow_langgraph" 2>/dev/null; then
+          "$PY_BIN" -m aidoc_flow_langgraph.cli.main review --config "{{.ENGINE_CONFIG}}" {{.CLI_ARGS}};
         else
-          echo "sdd:review: engine (aiops-harness) in scaffold/verify-only mode; skipping.";
+          echo "sdd:review: engine (aiops-harness) in verify-only mode; skipping.";
         fi
 
   slice:
@@ -104,12 +106,21 @@ tasks:
         fi
 
   check:
-    desc: "Full SDD Gate: adaptation profile + structural linting + cryptographic review verification"
+    desc: "Full SDD Gate: harness sdd_doc_lint when available, or fail-closed standalone Engramory SDD & docs gates"
     cmds:
-      - task: profile-lint
-      - task: lint
-      - task: review
-        vars: { CLI_ARGS: "--verify-only" }
+      - >-
+        PY_BIN="{{.ROOT_DIR}}/.venv/bin/python"; [ -x "$PY_BIN" ] || PY_BIN="python3";
+        if "$PY_BIN" -c "import sdd_doc_lint" 2>/dev/null; then
+          "$PY_BIN" -m sdd_doc_lint.profile_lint .aidoc/profile.yaml &&
+          "$PY_BIN" -m sdd_doc_lint "{{.SDD_DIR}}" &&
+          if "$PY_BIN" -c "import aidoc_flow_langgraph" 2>/dev/null; then
+            "$PY_BIN" -m aidoc_flow_langgraph.cli.main review --config "{{.ENGINE_CONFIG}}" --verify-only;
+          fi;
+        else
+          echo "sdd:check: standalone CI mode (aiops-harness absent) — running fail-closed native SDD & docs gates";
+          uv run engramory --json sdd validate-graph --invariants &&
+          uv run engramory --json docs lint --strict --verify-registry docs/doc-tools;
+        fi
 
   graph-check:
     desc: "Run Binary Topological Validation (BTV) over docs/sdd/graph/"

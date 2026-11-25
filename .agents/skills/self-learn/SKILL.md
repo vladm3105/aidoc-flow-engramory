@@ -8,7 +8,8 @@ description: >-
 
 A lesson learned twice and written nowhere will be learned a third time. This
 skill is the shared loop over the platform memory and learning system (project
-memory, session checkpoint, `recall`, `memory-hygiene`, `aidoc-flow-engramory`,
+memory, session checkpoint, `recall`, `memory-hygiene`, `platform-engramory`
+[`aiops_harness/memory/`, formerly `aidoc-flow-engramory`],
 and `flow-trajectory-logging`): where the active repository declares its own
 learning spec or store, that declaration is authoritative for categories,
 qualification, and file paths, and this skill defers to it.

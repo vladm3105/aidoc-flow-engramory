@@ -11,7 +11,8 @@
 services:
   mcp:
     environment:
-      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://aidoc-otel-collector:4318}
+      - OTEL_ENABLED=${OTEL_ENABLED:-false}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
       - OTEL_SERVICE_NAME=engramory-mcp
     networks:
       - default
@@ -19,7 +20,8 @@ services:
 
   worker:
     environment:
-      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://aidoc-otel-collector:4318}
+      - OTEL_ENABLED=${OTEL_ENABLED:-false}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
       - OTEL_SERVICE_NAME=engramory-worker
     networks:
       - default

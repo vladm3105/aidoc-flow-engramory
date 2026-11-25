@@ -45,12 +45,29 @@ _SDD_REF_RE = re.compile(r"\b(?P<id>(?:BRD|PRD|EARS|BDD|ADR|SPEC|TDD|IPLAN|CHG|E
 _WIKI_CONCEPT_RE = re.compile(r"\[\[(?P<concept>[^\[\]\n]{2,80})\]\]")
 
 
+def _safe_neo4j_label(raw: str) -> str:
+    """Normalize SDD/entity type labels like 'V1.2' into valid Neo4j identifiers ('V1_2')."""
+    cleaned = re.sub(r"[^A-Za-z0-9_]+", "_", str(raw).strip()).strip("_")
+    return cleaned or "Entity"
+
+
+def normalize_neo4j_rel(raw: str, default: str = "DEPENDS_ON") -> str:
+    """Normalize an arbitrary relationship string into a safe uppercase Neo4j type."""
+    cleaned = re.sub(r"[^A-Za-z0-9_]+", "_", str(raw).strip()).strip("_").upper()
+    return cleaned or default
+
+
 def entity_labels_for(entity: GraphEntity) -> list[str]:
     """Compute canonical Neo4j labels for a GraphEntity (GAP-06)."""
-    labels = [entity.entity_type]
-    if entity.entity_type in _SDD_LAYERS or entity.properties.get("sdd"):
+    norm_type = _safe_neo4j_label(entity.entity_type)
+    labels = [norm_type]
+    if (
+        entity.entity_type in _SDD_LAYERS
+        or norm_type in _SDD_LAYERS
+        or entity.properties.get("sdd")
+    ):
         labels.append("SDD")
-    elif entity.entity_type in _KNOWLEDGE_ENTITY_TYPES:
+    elif entity.entity_type in _KNOWLEDGE_ENTITY_TYPES or norm_type in _KNOWLEDGE_ENTITY_TYPES:
         labels.append("Knowledge")
     return labels
 
@@ -152,11 +169,13 @@ def extract_adr_graph(
     *,
     tenant_id: str = "default",
     domain_id: str = "core",
+    project_id: str | None = None,
 ) -> tuple[list[GraphEntity], list[GraphRelation]]:
     """Parse ADR YAML files and extract entities and directed dependency relations."""
     directory = _resolve_sdd_root(adr_dir)
     entities: list[GraphEntity] = []
     relations: list[GraphRelation] = []
+    eff_scope = "domain" if project_id is None else "project"
 
     if not directory.exists():
         logger.warning("ADR directory %s does not exist", directory)
@@ -180,17 +199,22 @@ def extract_adr_graph(
         status = (data.get("document_control") or {}).get("status", "Accepted")
         layer = (data.get("metadata") or {}).get("layer", 5)
 
+        ent_props: dict[str, Any] = {
+            "status": status,
+            "layer": layer,
+            "source_file": file_path.name,
+            "scope": eff_scope,
+            "domain_id": domain_id,
+        }
+        if project_id is not None:
+            ent_props["project_id"] = project_id
         entity = GraphEntity(
             id=adr_id,
             entity_type="ADR",
             name=title,
             tenant_id=tenant_id,
             domain_id=domain_id,
-            properties={
-                "status": status,
-                "layer": layer,
-                "source_file": file_path.name,
-            },
+            properties=ent_props,
         )
         entities.append(entity)
 
@@ -203,19 +227,48 @@ def extract_adr_graph(
             if not dst_adr:
                 continue
             raw_rel = dep.get("relationship", "DEPENDS_ON")
-            rel_type = (
-                re.sub(r"[^A-Za-z0-9_]+", "_", str(raw_rel)).strip("_").upper() or "DEPENDS_ON"
-            )
+            rel_type = normalize_neo4j_rel(str(raw_rel))
             rationale = dep.get("rationale", "")
+            rel_props: dict[str, Any] = {
+                "rationale": rationale,
+                "scope": eff_scope,
+                "domain_id": domain_id,
+            }
+            if project_id is not None:
+                rel_props["project_id"] = project_id
             relations.append(
                 GraphRelation(
                     src_id=adr_id,
                     dst_id=dst_adr,
                     rel_type=rel_type,
                     tenant_id=tenant_id,
-                    properties={"rationale": rationale},
+                    properties=rel_props,
                 )
             )
+
+    entity_ids = {ent.id for ent in entities}
+    for rel in relations:
+        for endpoint in (rel.src_id, rel.dst_id):
+            if endpoint not in entity_ids:
+                stub_props: dict[str, Any] = {
+                    "status": "stub",
+                    "stub": True,
+                    "scope": eff_scope,
+                    "domain_id": domain_id,
+                }
+                if project_id is not None:
+                    stub_props["project_id"] = project_id
+                entities.append(
+                    GraphEntity(
+                        id=endpoint,
+                        entity_type="ADR",
+                        name=f"Stub: {endpoint}",
+                        tenant_id=tenant_id,
+                        domain_id=domain_id,
+                        properties=stub_props,
+                    )
+                )
+                entity_ids.add(endpoint)
 
     return entities, relations
 
@@ -403,10 +456,7 @@ def extract_sdd_graph(
                 for dst in extract_sdd_target_ids(dst_adr):
                     if dst != doc_id:
                         raw_rel = dep.get("relationship", "DEPENDS_ON")
-                        rel_type = (
-                            re.sub(r"[^A-Za-z0-9_]+", "_", str(raw_rel)).strip("_").upper()
-                            or "DEPENDS_ON"
-                        )
+                        rel_type = normalize_neo4j_rel(str(raw_rel))
                         relations_map[(qualified_doc_id, _qualify_id(dst), rel_type)] = dep.get(
                             "rationale", ""
                         )
@@ -443,41 +493,42 @@ def extract_sdd_graph(
                     if key not in relations_map:
                         relations_map[key] = f"lineage_tag_@{kind}"
 
-    # 3. Ensure referential integrity by auto-creating stubs for unresolved relation targets
-    for _src, dst, _rel in sorted(relations_map.keys()):
-        if dst not in entities_map:
-            unprefixed_dst = dst.split(":", 1)[-1]
-            prefix = unprefixed_dst.split("-")[0].upper() if "-" in unprefixed_dst else "SDD"
-            entity_type = (
-                prefix
-                if prefix
-                in (
-                    "BRD",
-                    "PRD",
-                    "EARS",
-                    "BDD",
-                    "ADR",
-                    "SPEC",
-                    "TDD",
-                    "IPLAN",
-                    "CHG",
-                    "EVAL",
+    # 3. Ensure referential integrity by auto-creating stubs for unresolved endpoints
+    for src, dst, _rel in sorted(relations_map.keys()):
+        for endpoint in (src, dst):
+            if endpoint not in entities_map:
+                unprefixed_ep = endpoint.split(":", 1)[-1]
+                prefix = unprefixed_ep.split("-")[0].upper() if "-" in unprefixed_ep else "SDD"
+                entity_type = (
+                    prefix
+                    if prefix
+                    in (
+                        "BRD",
+                        "PRD",
+                        "EARS",
+                        "BDD",
+                        "ADR",
+                        "SPEC",
+                        "TDD",
+                        "IPLAN",
+                        "CHG",
+                        "EVAL",
+                    )
+                    else "SDD"
                 )
-                else "SDD"
-            )
-            entities_map[dst] = GraphEntity(
-                id=dst,
-                entity_type=entity_type,
-                name=f"Stub: {unprefixed_dst}",
-                tenant_id=tenant_id,
-                domain_id=domain_id,
-                properties={
-                    "status": "stub",
-                    "stub": True,
-                    "project_id": project_id,
-                    "sdd_id": unprefixed_dst,
-                },
-            )
+                entities_map[endpoint] = GraphEntity(
+                    id=endpoint,
+                    entity_type=entity_type,
+                    name=f"Stub: {unprefixed_ep}",
+                    tenant_id=tenant_id,
+                    domain_id=domain_id,
+                    properties={
+                        "status": "stub",
+                        "stub": True,
+                        "project_id": project_id,
+                        "sdd_id": unprefixed_ep,
+                    },
+                )
 
     relations: list[GraphRelation] = [
         GraphRelation(
@@ -500,9 +551,15 @@ async def ingest_adr_knowledge_graph(
     adr_dir: Path | str = "sdd/05_ADR",
     tenant_id: str = "default",
     domain_id: str = "core",
+    project_id: str | None = None,
 ) -> tuple[int, int]:
     """Ingest ADR dependency graph into PostgreSQL and project to Neo4j."""
-    entities, relations = extract_adr_graph(adr_dir, tenant_id=tenant_id, domain_id=domain_id)
+    entities, relations = extract_adr_graph(
+        adr_dir,
+        tenant_id=tenant_id,
+        domain_id=domain_id,
+        project_id=project_id,
+    )
 
     # 1. Canonical PostgreSQL store
     await repo.bulk_upsert_graph_entities(entities)
@@ -515,17 +572,17 @@ async def ingest_adr_knowledge_graph(
 
         for entity in entities:
             props = {
+                **entity.properties,
                 "name": entity.name,
                 "tenant_id": entity.tenant_id,
                 "domain_id": entity.domain_id,
-                **entity.properties,
             }
             await graph.upsert_node(id=entity.id, labels=[entity.entity_type], props=props)
 
         for relation in relations:
             props = {
-                "tenant_id": relation.tenant_id,
                 **relation.properties,
+                "tenant_id": relation.tenant_id,
             }
             await graph.upsert_edge(
                 src=relation.src_id,
@@ -692,18 +749,18 @@ async def ingest_sdd_knowledge_graph(
 
         for entity in entities:
             props = {
+                **entity.properties,
                 "name": entity.name,
                 "tenant_id": entity.tenant_id,
                 "domain_id": entity.domain_id,
-                **entity.properties,
             }
             labels = entity_labels_for(entity)
             await graph.upsert_node(id=entity.id, labels=labels, props=props)
 
         for relation in relations:
             props = {
-                "tenant_id": relation.tenant_id,
                 **relation.properties,
+                "tenant_id": relation.tenant_id,
             }
             await graph.upsert_edge(
                 src=relation.src_id,
@@ -729,6 +786,8 @@ async def expand_graph_context(
     depth: int = 1,
     tenant_id: str = "default",
     project_id: str | None = None,
+    domain_id: str | None = None,
+    allowed_scopes: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Retrieve connected topological neighborhood for given seed nodes."""
     all_neighbors: dict[str, dict[str, Any]] = {}
@@ -741,6 +800,8 @@ async def expand_graph_context(
                 depth=depth,
                 tenant_id=tenant_id,
                 project_id=project_id,
+                domain_id=domain_id,
+                allowed_scopes=allowed_scopes,
             )
             for hit in hits:
                 nid = hit.get("id")
@@ -759,6 +820,8 @@ async def get_sdd_context_slice(
     depth: int = 6,
     tenant_id: str = "default",
     project_id: str | None = None,
+    domain_id: str | None = None,
+    allowed_scopes: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Retrieve upstream specification contract closure (ancestors) for an IPLAN task."""
     clean_task = normalize_sdd_id(task_id)
@@ -767,6 +830,8 @@ async def get_sdd_context_slice(
         depth=depth,
         tenant_id=tenant_id,
         project_id=project_id,
+        domain_id=domain_id,
+        allowed_scopes=allowed_scopes,
     )
     return [dict(a) for a in ancestors]
 
@@ -778,6 +843,8 @@ async def get_sdd_blast_radius(
     depth: int = 6,
     tenant_id: str = "default",
     project_id: str | None = None,
+    domain_id: str | None = None,
+    allowed_scopes: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Retrieve downstream dependent specifications, tasks, and tests affected by a change."""
     clean_doc = normalize_sdd_id(doc_id)
@@ -786,6 +853,8 @@ async def get_sdd_blast_radius(
         depth=depth,
         tenant_id=tenant_id,
         project_id=project_id,
+        domain_id=domain_id,
+        allowed_scopes=allowed_scopes,
     )
     return [dict(d) for d in descendants]
 
@@ -838,7 +907,7 @@ def extract_docs_graph(
         ent_type = (
             "RUNBOOK"
             if doc.kind == "runbook" or parsed.steps
-            else re.sub(r"[^A-Za-z0-9_]", "_", doc.kind.upper())
+            else _safe_neo4j_label(doc.kind.upper())
         )
         entities[doc.doc_id] = GraphEntity(
             id=doc.doc_id,
@@ -981,7 +1050,7 @@ def extract_knowledge_and_media_graph(
             tenant_id=tenant_id,
             domain_id=domain_id,
             properties={
-                "project_id": eff_project,
+                "scope": "shared",
                 "sha256": b.sha256,
                 "media_type": b.media_type,
                 "byte_size": b.byte_size,
@@ -1051,7 +1120,7 @@ def extract_knowledge_and_media_graph(
                         tenant_id=tenant_id,
                         domain_id=sec.domain_id or eff_domain,
                         properties={
-                            "project_id": sec.project_id or eff_project,
+                            "scope": "shared",
                             "sha256": sec.blob_sha256,
                             "media_type": (
                                 matched_blob.media_type
@@ -1125,7 +1194,7 @@ def extract_knowledge_and_media_graph(
                         name=raw_concept,
                         tenant_id=tenant_id,
                         domain_id=sec.domain_id or eff_domain,
-                        properties={"project_id": sec.project_id or eff_project},
+                        properties={"scope": "shared"},
                     )
                 _add_rel(sec_node_id, concept_id, "MENTIONS_ENTITY")
 

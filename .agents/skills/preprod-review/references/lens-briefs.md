@@ -53,7 +53,10 @@ Hunt, in your FILE LIST only:
   (see the `platform-standards` rule)? Specifically flag any script, runbook, or
   workflow that performs manual/direct changes on `stage` containers or configs
   instead of routing through OpenTofu and declarative configuration management
-  (manual changes are permitted on `dev` only during development/testing/debug).
+  (manual changes are permitted on `dev` only during development/testing/debug),
+  or that bypasses OpenBao `/dev/shm` (`0600`) secret delivery, `platform-security`
+  Security Gate (`X-Agent-Warrant` / `IntentCapsule`), Paperclip v0.4.2 lease-epoch
+  fencing (`X-Paperclip-Lease-Epoch`), or `[I-04]` monotonic test baselines.
   A stack violation is a finding even when the code "works".
 
 **If the artifact is GitHub Actions**, first read

@@ -52,7 +52,7 @@ async def test_ungranted_scope_levels_never_leak(pg_dsn: str) -> None:
     ctx = ActorContext(
         agent_id="agent-a", project_id="p1", tenant_id="t-cont", scopes=frozenset({"agent"})
     )
-    hits = await surface.memory_search(ctx, query="anything", k=10)
+    hits = await surface.memory_search(ctx, query="lesson", k=10)
     assert {h.summary for h in hits} == {"own private"}
 
 

@@ -43,9 +43,13 @@ scan_project() {  # ROOT — print compact items, one per line; never fails the 
     local gitdir prs promo base_branch stale_h
     gitdir=$(git rev-parse --absolute-git-dir)
     promo=" $(ci_list PROMOTION_BRANCHES "") "
+    promo_auto=" $(ci_list PROMOTION_AUTONOMOUS "") "
+    ship_auto=" $(ci_list SHIP_AUTONOMOUS_BRANCHES "") "
     base_branch=$(ci_base_branch)
     stale_h=$(ci_config CHECK_STALE_H 2)
+    stuck_min=$(ci_config AUTO_MERGE_STUCK_MIN 10)
     [[ $stale_h =~ ^[0-9]+$ ]] || stale_h=2
+    [[ $stuck_min =~ ^[0-9]+$ ]] || stuck_min=10
     # --- forge signals ---------------------------------------------------------
     if prs=$(forge_pr_list 2>/dev/null); then
       local prow num head title pbase
@@ -54,7 +58,7 @@ scan_project() {  # ROOT — print compact items, one per line; never fails the 
         if jq -e '.labels | index("conflict:human")' <<<"$prow" >/dev/null; then
           emit "$root" conflict-pr "merge conflict needs a human decision" "$num" "$head" "$title"
         fi
-        if [[ $promo == *" $pbase "* ]]; then
+        if [[ $promo == *" $pbase "* && $promo_auto != *" $pbase "* ]]; then
           emit "$root" pending-approval "promotion PR awaits a human approve+merge" "$num" "$head" "$title"
         fi
         if jq -e '.labels | index("ci:auto-retried")' <<<"$prow" >/dev/null; then
@@ -77,6 +81,31 @@ scan_project() {  # ROOT — print compact items, one per line; never fails the 
               age=$(forge_oldest_pending_age "$sha2" 2>/dev/null) || age=""
               if [[ $age =~ ^[0-9]+$ && $age -gt $stale_h ]]; then
                 emit "$root" stuck-pending "checks pending for ${age}h (threshold ${stale_h}h — runner may be hung)" "$num" "$head" "$title" "$age"
+              fi
+            fi
+          fi
+        fi
+        # stuck-green: non-draft autonomous PRs that are mergeable and green past AUTO_MERGE_STUCK_MIN
+        if [[ " $ship_auto " == *" $pbase "* || $promo_auto == *" $pbase "* ]] \
+          && ! jq -e '.labels | index("conflict:human")' <<<"$prow" >/dev/null \
+          && ! jq -e '.isDraft // false' <<<"$prow" >/dev/null; then
+          local pv_g sha3 st3 m3 u3 upd_ep now_ep age_m
+          if pv_g=$(forge_pr_view "$head" 2>/dev/null) && [[ -n $pv_g ]]; then
+            sha3=$(jq -r '.headRefOid // empty' <<<"$pv_g")
+            m3=$(jq -r '.mergeable // empty' <<<"$pv_g")
+            u3=$(jq -r '.updatedAt // empty' <<<"$pv_g")
+            if [[ $m3 == MERGEABLE && -n $sha3 && $sha3 != null ]]; then
+              st3=$(forge_commit_status "$sha3" 2>/dev/null) || st3=unknown
+              if [[ $st3 == success ]]; then
+                age_m=0
+                if [[ -n $u3 && $u3 != null ]]; then
+                  upd_ep=$(date -u -d "$u3" +%s 2>/dev/null || echo "")
+                  now_ep=$(date -u +%s)
+                  [[ $upd_ep =~ ^[0-9]+$ ]] && age_m=$(( (now_ep - upd_ep) / 60 ))
+                fi
+                if [[ $age_m -gt $stuck_min ]]; then
+                  emit "$root" stuck-green "PR mergeable and green for ${age_m}m (threshold ${stuck_min}m) without auto-merging" "$num" "$head" "$title" "$age_m"
+                fi
               fi
             fi
           fi

@@ -8,7 +8,7 @@ description: >-
 
 Autonomous coding agents must never ingest unbounded document dumps or perform blind full-repository grep searches when implementing a scoped task. Context bloat triggers attention degradation ("context amnesia") and wastes LLM token budgets.
 
-This skill governs the use of **`aidoc-context-tools` (`aidoc-ctx`)** to extract minimal, deterministic context closures and enforce pre-merge anti-erosion invariant gates.
+This skill governs the use of **`aidoc-context-tools` (`aidoc-ctx`)** and the embedded **`aiops-harness` in-process Kùzu context engine** (`aidoc_slice_context`, `aidoc_validate_graph`, `aidoc_check_invariants` MCP tools / `aiops-harness sdd slice-context` CLI, enforcing `[I-07]` single-writer lock cleanup and `[I-12]` fail-closed empty slice protection) to extract minimal, deterministic context closures and enforce pre-merge anti-erosion invariant gates.
 
 ---
 
@@ -18,6 +18,7 @@ This skill governs the use of **`aidoc-context-tools` (`aidoc-ctx`)** to extract
    $$\text{Slice}(T) = \text{Ancestors}(T) \cap \{\text{SPEC}, \text{BDD}, \text{EARS}, \text{ADR}, \text{TDD}\}$$
 2. **Zero-Drift Resolution**: Cross-repository dependencies referenced as `@project-id:layer:tag-id` (e.g. `@auth-core:06_SPEC:SPEC-TOKEN-V1`) are resolved against the local contract cache or Git submodule (`.aidoc/contracts/cache/`).
 3. **Fail-Closed Invariant Gate**: If a change attempts to alter public API signatures or state graphs while classified under a non-architectural flow (`CODE2C` or `DIR2C`), the commit is rejected.
+4. **Seed & SDD Prerequisite Check**: Before slicing context or writing code, verify that `docs/seed/00_index.md` and the upstream SDD layers (`01_BRD..08_IPLAN`) exist for the target feature; if missing, route to `sdd-seed` (for greenfield/unseeded repos) or the upstream `sdd-*` skills before implementing code.
 
 ---
 
@@ -29,6 +30,8 @@ Before authoring or editing code for a specific IPLAN task or feature:
 
 ```bash
 aidoc-ctx slice --task <TASK_OR_SPEC_ID> --sdd-dir docs/sdd
+# Or via the embedded aiops-harness CLI / MCP tool (aidoc_slice_context):
+uv run aiops-harness sdd slice-context --slice-id <SLICE_OR_TASK_ID> --json
 ```
 
 Flags:

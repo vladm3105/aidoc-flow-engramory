@@ -7,8 +7,12 @@ architecture.
 
 from __future__ import annotations
 
+import asyncio
+import dataclasses
+import hashlib
 import json
 import logging
+import os
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -28,7 +32,7 @@ from engramory.core.extraction.multimodal import (
 )
 from engramory.core.extraction.router import MAX_NATIVE_TEXT_BYTES, SmartExtractionRouter
 from engramory.core.kb_graph import entity_labels_for, extract_knowledge_and_media_graph
-from engramory.core.models import KB_SECTION_MODALITIES, KBBlob, KBSection
+from engramory.core.models import KB_SECTION_MODALITIES, KBBlob, KBSection, thaw_mapping
 from engramory.core.repository import Repository
 from engramory.ports.graph import GraphPort
 from engramory.ports.llm import LLMPort
@@ -70,10 +74,13 @@ class KnowledgeCore:
         *,
         tenant_id: str = "default",
         project_id: str | None = None,
+        domain_id: str | None = None,
         scope: str = "project",
+        agent_id: str = "system",
         evidence_ref: str | None = None,
         version: int = 1,
         embed: bool = True,
+        ingest_runbooks: bool = False,
         repo_root: Path | None = None,
     ) -> list[str]:
         """Ingest a single document into kb_sections."""
@@ -85,10 +92,13 @@ class KnowledgeCore:
             [p],
             tenant_id=tenant_id,
             project_id=project_id,
+            domain_id=domain_id,
             scope=scope,
+            agent_id=agent_id,
             evidence_ref=evidence_ref,
             version=version,
             embed=embed,
+            ingest_runbooks=ingest_runbooks,
             repo_root=repo_root,
         )
         return batch_result.get(str(p), [])
@@ -99,7 +109,9 @@ class KnowledgeCore:
         *,
         tenant_id: str = "default",
         project_id: str | None = None,
+        domain_id: str | None = None,
         scope: str = "project",
+        agent_id: str = "system",
         evidence_ref: str | None = None,
         version: int = 1,
         embed: bool = True,
@@ -107,18 +119,32 @@ class KnowledgeCore:
         repo_root: Path | None = None,
     ) -> dict[str, Any]:
         """Ingest a multimodal file (image, audio, video, PDF) into CAS + kb_sections + graph."""
+        from engramory.core.docs_tools import has_symlink_component
+        from engramory.core.models import ValidationError
+
         p = Path(path)
+        if has_symlink_component(p, repo_root):
+            raise PermissionError(f"Refusing symlinked media file: {p}")
         if not p.exists():
             raise FileNotFoundError(f"Media file not found: {p}")
+        ext = p.suffix.lstrip(".").lower()
+        if ext not in _BINARY_DOC_EXTENSIONS:
+            raise ValidationError(
+                f"Unsupported media file extension {p.suffix or '<none>'!r}; "
+                f"expected one of {sorted(_BINARY_DOC_EXTENSIONS)}"
+            )
         batch_res = await self.ingest_documents_batch(
             [p],
             tenant_id=tenant_id,
             project_id=project_id,
+            domain_id=domain_id,
             scope=scope,
+            agent_id=agent_id,
             evidence_ref=evidence_ref,
             version=version,
             embed=embed,
             project_graph=project_graph,
+            ingest_runbooks=False,
             repo_root=repo_root,
         )
         sec_ids = batch_res.get(str(p), [])
@@ -141,22 +167,46 @@ class KnowledgeCore:
         *,
         tenant_id: str = "default",
         project_id: str | None = None,
+        domain_id: str | None = None,
         scope: str = "project",
+        agent_id: str = "system",
         evidence_ref: str | None = None,
         version: int = 1,
         embed: bool = True,
         project_graph: bool = False,
+        ingest_runbooks: bool = False,
         repo_root: Path | None = None,
     ) -> dict[str, list[str]]:
         """Ingest multiple documents into kb_sections with batch upsert and batch embedding."""
-        from engramory.access.poisoning_guard import MemoryPoisoningError, inspect_memory_write
+        from engramory.core.docs_tools import _is_within_root, has_symlink_component
         from engramory.core.models import ValidationError
+        from engramory.core.poisoning_guard import MemoryPoisoningError, inspect_memory_write
 
+        eff_project_id = None if scope in ("domain", "space") else project_id
         all_sections: list[KBSection] = []
         all_blobs: list[KBBlob] = []
         path_to_sections: dict[str, list[KBSection]] = {}
         pending_doc_upserts: list[tuple[Any, Sequence[Any]]] = []
+        candidate_blob_targets: dict[str, tuple[Path, str, str, str | None]] = {}
         resolved_root = repo_root.resolve() if repo_root is not None else None
+        cwd_resolved = Path.cwd().resolve()
+
+        common_root: Path | None = None
+        if repo_root is None and len(paths) > 1:
+            resolved_inputs: list[Path] = []
+            for p_raw in paths:
+                cand = Path(p_raw)
+                if cand.exists() and not has_symlink_component(cand, None):
+                    resolved_inputs.append(cand.resolve())
+            if len(resolved_inputs) > 1:
+                try:
+                    cp = Path(os.path.commonpath([str(rp) for rp in resolved_inputs]))
+                    if not cp.is_dir():
+                        cp = cp.parent
+                    if cp != Path(cp.anchor):
+                        common_root = cp
+                except ValueError:
+                    common_root = None
 
         for p_raw in paths:
             p = Path(p_raw)
@@ -164,14 +214,27 @@ class KnowledgeCore:
                 logger.warning("Skipping non-existent file in batch: %s", p)
                 continue
 
+            if has_symlink_component(p, repo_root):
+                logger.warning("Skipping symlink path in batch: %s", p)
+                continue
+
             p_res = p.resolve()
-            if resolved_root is not None:
-                if not p_res.is_relative_to(resolved_root):
+            if repo_root is not None and resolved_root is not None:
+                if not _is_within_root(p, repo_root):
                     logger.warning("Skipping file outside repo_root (%s): %s", resolved_root, p)
                     continue
                 rel_key = p_res.relative_to(resolved_root).as_posix()
+            elif common_root is not None:
+                try:
+                    rel_key = p_res.relative_to(common_root).as_posix()
+                except ValueError:
+                    rel_key = p.name
             else:
-                rel_key = p.name
+                try:
+                    rel_key = p_res.relative_to(cwd_resolved).as_posix()
+                except ValueError:
+                    p_hash = hashlib.sha256(str(p_res.parent).encode()).hexdigest()[:8]
+                    rel_key = f"{p_hash}/{p.name}"
 
             ext = p.suffix.lstrip(".").lower()
             file_size = p.stat().st_size
@@ -197,25 +260,15 @@ class KnowledgeCore:
                 except UnicodeDecodeError:
                     full_text = ""
 
-            doc_id = build_doc_id(project_id, rel_key)
-            doc_blob: KBBlob | None = None
-            if self.storage is not None and (
+            doc_id = build_doc_id(eff_project_id, rel_key)
+            will_store_blob = self.storage is not None and (
                 file_size > INLINE_BLOB_THRESHOLD_BYTES
                 or ext in _BINARY_DOC_EXTENSIONS
                 or inferred_mod in {"image", "audio", "video"}
-            ):
+            )
+            if will_store_blob:
                 content_type = "application/pdf" if ext == "pdf" else inferred_mime
-                try:
-                    doc_blob = await self.storage.put_file(
-                        file_path=p_res,
-                        content_type=content_type,
-                        tenant_id=tenant_id,
-                        project_id=project_id,
-                        metadata={"source_file": p.name, "doc_id": doc_id},
-                    )
-                    all_blobs.append(doc_blob)
-                except Exception as exc:
-                    logger.warning("Failed to store CAS blob for %s: %s", p, exc)
+                candidate_blob_targets[doc_id] = (p_res, content_type, p.name, eff_project_id)
 
             # Optional multimodal LLM captioning / transcription
             if (
@@ -234,12 +287,14 @@ class KnowledgeCore:
                     )
                 except Exception as exc:
                     logger.debug("Optional vision captioning skipped for %s: %s", p, exc)
-                extract_res = self.router.image_extractor.extract(p_res, caption_text=caption_text)
+                extract_res = await asyncio.to_thread(
+                    self.router.image_extractor.extract, p_res, caption_text=caption_text
+                )
             elif (
                 ext in (AUDIO_EXTENSIONS | VIDEO_EXTENSIONS) or inferred_mod in {"audio", "video"}
             ) and self.llm is not None:
                 va_ext = self.router.video_audio_extractor
-                probe = va_ext.probe_media(p_res)
+                probe = await asyncio.to_thread(va_ext.probe_media, p_res)
                 dur = probe.get("duration_seconds")
                 total_wins = (
                     1
@@ -259,7 +314,9 @@ class KnowledgeCore:
                 for w_idx in range(total_wins):
                     w_start = float(w_idx * va_ext.segment_seconds)
                     if inferred_mod == "video" and hasattr(self.llm, "describe_image"):
-                        frame_png = va_ext.extract_keyframe_png(p_res, w_start)
+                        frame_png = await asyncio.to_thread(
+                            va_ext.extract_keyframe_png, p_res, w_start
+                        )
                         if frame_png:
                             try:
                                 seg_captions[w_idx] = await self.llm.describe_image(
@@ -271,8 +328,11 @@ class KnowledgeCore:
                                     "Keyframe caption skipped for %s#%d: %s", p, w_idx, exc
                                 )
                     if hasattr(self.llm, "transcribe_audio"):
-                        wav_bytes = va_ext.extract_audio_window_wav(
-                            p_res, w_start, float(va_ext.segment_seconds)
+                        wav_bytes = await asyncio.to_thread(
+                            va_ext.extract_audio_window_wav,
+                            p_res,
+                            w_start,
+                            float(va_ext.segment_seconds),
                         )
                         if wav_bytes:
                             try:
@@ -287,15 +347,18 @@ class KnowledgeCore:
                                 logger.debug(
                                     "Audio transcription skipped for %s#%d: %s", p, w_idx, exc
                                 )
-                extract_res = va_ext.extract(
+                extract_res = await asyncio.to_thread(
+                    va_ext.extract,
                     p_res,
                     segment_transcripts=seg_transcripts,
                     segment_captions=seg_captions,
                 )
             else:
-                extract_res = self.router.extract_document(p)
+                extract_res = await asyncio.to_thread(self.router.extract_document, p)
 
-            extracted_sections = extract_res.sections
+            extracted_sections = [
+                s for s in extract_res.sections if s.content and s.content.strip()
+            ]
 
             has_media_modality = any(
                 (sec.metadata or {}).get("modality") in {"image", "audio", "video"}
@@ -307,6 +370,9 @@ class KnowledgeCore:
                 and self.chunker is not getattr(self.router, "chunker", None)
             ):
                 extracted_sections = self.chunker.refine_sections(extracted_sections)
+                extracted_sections = [
+                    s for s in extracted_sections if s.content and s.content.strip()
+                ]
 
             line_spans = [
                 (1, 1)
@@ -335,11 +401,6 @@ class KnowledgeCore:
                 if cit in seen_citations:
                     cit = f"{cit}-{idx}"
                 seen_citations.add(cit)
-                sec_domain = (
-                    str(sec.metadata["domain"]).strip()
-                    if sec.metadata and sec.metadata.get("domain")
-                    else None
-                )
                 raw_mod = str((sec.metadata or {}).get("modality") or "").strip().lower()
                 if raw_mod in KB_SECTION_MODALITIES:
                     sec_modality = raw_mod
@@ -350,28 +411,24 @@ class KnowledgeCore:
                 else:
                     sec_modality = "text"
 
-                sec_sha = (
-                    doc_blob.sha256
-                    if doc_blob is not None
-                    else (
-                        str(sec.metadata["sha256"])
-                        if sec.metadata
-                        and sec.metadata.get("sha256")
-                        and sec_modality in {"image", "audio", "video"}
-                        else None
-                    )
-                )
-                sec_uri = f"pgblob://{tenant_id}/{sec_sha}" if sec_sha else None
+                # Defer blob_sha256/blob_uri until storage.put_file() persists the kb_blobs row
+                sec_sha = None
+                sec_uri = None
+                has_media_sha = bool(sec.metadata and sec.metadata.get("sha256"))
                 sec_media_meta = (
                     {k: v for k, v in (sec.metadata or {}).items() if k != "domain"}
-                    if (sec_modality in {"image", "audio", "video", "pdf", "document"} or sec_sha)
+                    if (
+                        sec_modality in {"image", "audio", "video", "pdf", "document"}
+                        or has_media_sha
+                        or will_store_blob
+                    )
                     else {}
                 )
 
                 kb_sec = KBSection(
                     tenant_id=tenant_id,
-                    project_id=project_id,
-                    domain_id=sec_domain,
+                    project_id=eff_project_id,
+                    domain_id=domain_id,
                     scope=scope,
                     doc_id=doc_id,
                     citation=cit,
@@ -385,21 +442,25 @@ class KnowledgeCore:
                 inspect_memory_write(
                     kb_sec.text,
                     tenant_id=tenant_id,
-                    writer_agent_id="knowledge-core",
+                    writer_agent_id=agent_id,
                     target=kb_sec.doc_id,
                 )
                 if kb_sec.media_metadata:
                     inspect_memory_write(
-                        json.dumps(dict(kb_sec.media_metadata), sort_keys=True),
+                        json.dumps(thaw_mapping(kb_sec.media_metadata), sort_keys=True),
                         tenant_id=tenant_id,
-                        writer_agent_id="knowledge-core",
+                        writer_agent_id=agent_id,
                         target=kb_sec.doc_id,
                     )
                 file_secs.append(kb_sec)
                 all_sections.append(kb_sec)
 
             path_to_sections[str(p)] = file_secs
-            if p.suffix.lower() == ".md" and hasattr(self.repo, "upsert_kb_document"):
+            if (
+                ingest_runbooks
+                and p.suffix.lower() == ".md"
+                and hasattr(self.repo, "upsert_kb_document")
+            ):
                 try:
                     from engramory.core.docs_tools import parse_markdown_document
 
@@ -416,34 +477,36 @@ class KnowledgeCore:
                         p,
                         repo_root=inferred_root,
                         tenant_id=tenant_id,
-                        project_id=project_id,
+                        project_id=eff_project_id,
+                        domain_id=domain_id,
                         scope=scope,
+                        trust_frontmatter_domain=False,
                     )
                     if parsed.has_frontmatter and parsed.kb_document is not None:
                         inspect_memory_write(
                             parsed.kb_document.title,
                             tenant_id=tenant_id,
-                            writer_agent_id="knowledge-core",
+                            writer_agent_id=agent_id,
                             target=parsed.kb_document.doc_id,
                         )
                         for st in parsed.steps:
                             inspect_memory_write(
                                 st.heading_path,
                                 tenant_id=tenant_id,
-                                writer_agent_id="knowledge-core",
+                                writer_agent_id=agent_id,
                                 target=parsed.kb_document.doc_id,
                             )
                             if st.prose_context:
                                 inspect_memory_write(
                                     st.prose_context,
                                     tenant_id=tenant_id,
-                                    writer_agent_id="knowledge-core",
+                                    writer_agent_id=agent_id,
                                     target=parsed.kb_document.doc_id,
                                 )
                             inspect_memory_write(
                                 st.command_body,
                                 tenant_id=tenant_id,
-                                writer_agent_id="knowledge-core",
+                                writer_agent_id=agent_id,
                                 target=parsed.kb_document.doc_id,
                             )
                         pending_doc_upserts.append((parsed.kb_document, parsed.steps))
@@ -452,18 +515,56 @@ class KnowledgeCore:
                 except Exception as exc:
                     logger.debug("Skipping kb_documents extraction for %s: %s", p, exc)
 
-        for kb_doc, kb_steps in pending_doc_upserts:
-            await self.repo.upsert_kb_document(kb_doc)
-            await self.repo.upsert_kb_runbook_steps(tenant_id, kb_doc.doc_id, kb_steps)
-
         if not all_sections:
+            for kb_doc, kb_steps in pending_doc_upserts:
+                await self.repo.upsert_kb_document(kb_doc)
+                await self.repo.upsert_kb_runbook_steps(tenant_id, kb_doc.doc_id, kb_steps)
             return {}
 
-        # Deduplicate sections for upsert and embedding
+        # Deduplicate sections before storing CAS blobs (C9: never persist CAS before screening)
         deduped: dict[tuple[str, str, str, int], KBSection] = {}
         for s in all_sections:
             deduped[(s.tenant_id, s.doc_id, s.citation, s.version)] = s
         unique_sections = list(deduped.values())
+
+        if self.storage is not None and candidate_blob_targets:
+            active_doc_ids = {s.doc_id for s in unique_sections}
+            stored_doc_blobs: dict[str, KBBlob] = {}
+            for target_doc_id, (
+                fp_res,
+                content_type,
+                src_name,
+                target_pid,
+            ) in candidate_blob_targets.items():
+                if target_doc_id not in active_doc_ids:
+                    continue
+                try:
+                    doc_blob = await self.storage.put_file(
+                        file_path=fp_res,
+                        content_type=content_type,
+                        tenant_id=tenant_id,
+                        project_id=target_pid,
+                        metadata={"source_file": src_name, "doc_id": target_doc_id},
+                    )
+                    stored_doc_blobs[target_doc_id] = doc_blob
+                    all_blobs.append(doc_blob)
+                except Exception as exc:
+                    logger.warning("Failed to store CAS blob for %s: %s", fp_res, exc)
+            if stored_doc_blobs:
+                unique_sections = [
+                    dataclasses.replace(
+                        s,
+                        blob_sha256=stored_doc_blobs[s.doc_id].sha256,
+                        blob_uri=f"pgblob://{tenant_id}/{stored_doc_blobs[s.doc_id].sha256}",
+                    )
+                    if s.doc_id in stored_doc_blobs
+                    else s
+                    for s in unique_sections
+                ]
+
+        for kb_doc, kb_steps in pending_doc_upserts:
+            await self.repo.upsert_kb_document(kb_doc)
+            await self.repo.upsert_kb_runbook_steps(tenant_id, kb_doc.doc_id, kb_steps)
 
         section_map = await self.repo.upsert_kb_sections_batch(unique_sections)
 
@@ -496,6 +597,7 @@ class KnowledgeCore:
                     )
                     await self.repo.set_kb_sections_embedding_batch(
                         valid_updates,
+                        tenant_id=tenant_id,
                         embedding_model=embed_model,
                     )
             except Exception as e:
@@ -519,7 +621,8 @@ class KnowledgeCore:
                     unique_sections,
                     blobs=all_blobs,
                     tenant_id=tenant_id,
-                    project_id=project_id,
+                    project_id=eff_project_id,
+                    domain_id=domain_id or "default",
                 )
                 await self.repo.bulk_upsert_graph_entities(g_ents)
                 await self.repo.bulk_upsert_graph_relations(g_rels)
@@ -529,10 +632,10 @@ class KnowledgeCore:
                             id=ent.id,
                             labels=entity_labels_for(ent),
                             props={
+                                **thaw_mapping(ent.properties),
                                 "name": ent.name,
-                                "tenant_id": ent.tenant_id,
                                 "domain_id": ent.domain_id,
-                                **ent.properties,
+                                "tenant_id": ent.tenant_id,
                             },
                         )
                     for rel in g_rels:
@@ -540,7 +643,10 @@ class KnowledgeCore:
                             src=rel.src_id,
                             dst=rel.dst_id,
                             rel=rel.rel_type,
-                            props={"tenant_id": rel.tenant_id, **rel.properties},
+                            props={
+                                **thaw_mapping(rel.properties),
+                                "tenant_id": rel.tenant_id,
+                            },
                         )
             except Exception as exc:
                 logger.warning("Failed to project knowledge/media graph: %s", exc)

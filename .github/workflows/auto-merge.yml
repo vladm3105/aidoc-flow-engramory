@@ -1,0 +1,257 @@
+# Server-side GitHub auto-merge workflow (Split-Forge promotion & Pro/Free dual-mode).
+# Executes check-gated merge on workflow_run completion (compatible with GitHub Free private repos
+# returning HTTP 403 on rulesets/branch protections) and arms native --auto only when branch protection is active.
+name: auto-merge
+
+'on':
+  workflow_run:
+    workflows: ["verify", "Branch promotion policy"]
+    types: [completed]
+  pull_request:
+    branches: ["staging", "main"]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  statuses: read
+
+concurrency:
+  group: auto-merge-${{ github.repository }}-${{ github.event.pull_request.number || github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  auto-merge:
+    runs-on: [self-hosted, ci, ephemeral]
+    timeout-minutes: 10
+    steps:
+      - name: Evaluate checks and merge green PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          WR_EVENT: ${{ github.event.workflow_run.event || '' }}
+          WR_CONCLUSION: ${{ github.event.workflow_run.conclusion || '' }}
+          WR_HEAD_SHA: ${{ github.event.workflow_run.head_sha || '' }}
+          WR_PRS_JSON: ${{ toJson(github.event.workflow_run.pull_requests) }}
+          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$EVENT_NAME" == "workflow_run" ]]; then
+            if [[ "$WR_EVENT" != "pull_request" || "$WR_CONCLUSION" != "success" ]]; then
+              echo "auto-merge: ignoring workflow_run (event=${WR_EVENT}, conclusion=${WR_CONCLUSION})"
+              exit 0
+            fi
+          fi
+
+          parse_cfg_key() {
+            local raw="$1" key="$2" default="${3:-}"
+            local val
+            val=$(printf '%s\n' "$raw" | sed -n "s/^[[:space:]]*${key}=//p" | head -n1 | tr -d '\r')
+            val="${val#\"}" ; val="${val%\"}"
+            val="${val#\'}" ; val="${val%\'}"
+            if [[ -n "$val" ]]; then printf '%s' "$val"; else printf '%s' "$default"; fi
+          }
+
+          contains_word() {
+            local list="$1" target="$2"
+            [[ " $list " == *" $target "* ]]
+          }
+
+          evaluate_and_merge_pr() {
+            local pr_num="$1" expected_sha="${2:-}"
+            local pr_json state head_repo draft title base_ref head_ref head_sha mergeable
+
+            pr_json=$(gh api "repos/${REPO}/pulls/${pr_num}") || return 0
+            state=$(jq -r '.state // ""' <<<"$pr_json")
+            head_repo=$(jq -r '.head.repo.full_name // ""' <<<"$pr_json")
+            draft=$(jq -r '.draft // false' <<<"$pr_json")
+            title=$(jq -r '.title // ""' <<<"$pr_json")
+            base_ref=$(jq -r '.base.ref // ""' <<<"$pr_json")
+            head_ref=$(jq -r '.head.ref // ""' <<<"$pr_json")
+            head_sha=$(jq -r '.head.sha // ""' <<<"$pr_json")
+
+            if [[ "$state" != "open" ]]; then
+              echo "auto-merge: PR #${pr_num} state=${state}, skipping"
+              return 0
+            fi
+            if [[ "$head_repo" != "$REPO" ]]; then
+              echo "auto-merge: PR #${pr_num} originates from external repo (${head_repo}), refusing"
+              return 0
+            fi
+            if [[ -n "$expected_sha" && "$head_sha" != "$expected_sha" ]]; then
+              echo "auto-merge: PR #${pr_num} head (${head_sha:0:12}) moved past ${expected_sha:0:12}, waiting"
+              return 0
+            fi
+            if [[ "$draft" == "true" ]] || grep -qiE '^[[:space:]]*(\[?WIP\]?:?|\bWIP\b)' <<<"$title"; then
+              echo "auto-merge: PR #${pr_num} is draft/WIP, skipping"
+              return 0
+            fi
+            if jq -e '[.labels[]?.name] | any(. == "conflict:human" or . == "blocked: founder" or . == "hold" or . == "review:blocked")' <<<"$pr_json" >/dev/null; then
+              echo "auto-merge: PR #${pr_num} carries a human-blocking label, skipping"
+              return 0
+            fi
+
+            local cfg_b64 cfg_raw promo_branches promo_auto ship_auto promo_req promo_src int_src review_mode extra_checks method cfg_ref
+            cfg_ref="${base_ref}"
+            if [[ "${base_ref}:${head_ref}" == "staging:dev" || "${base_ref}:${head_ref}" == "main:staging" ]]; then
+              cfg_ref="${head_ref}"
+            fi
+            cfg_b64=$(gh api "repos/${REPO}/contents/.ci-config?ref=${cfg_ref}" --jq '.content // ""' 2>/dev/null || true)
+            if [[ -z "$cfg_b64" && "$cfg_ref" != "$base_ref" ]]; then
+              cfg_b64=$(gh api "repos/${REPO}/contents/.ci-config?ref=${base_ref}" --jq '.content // ""' 2>/dev/null || true)
+            fi
+            if [[ -z "$cfg_b64" ]]; then
+              echo "auto-merge: PR #${pr_num} base '${base_ref}' has no .ci-config, skipping"
+              return 0
+            fi
+            cfg_raw=$(printf '%s' "$cfg_b64" | tr -d '\n' | base64 -d)
+
+            promo_branches=$(parse_cfg_key "$cfg_raw" PROMOTION_BRANCHES "")
+            promo_auto=$(parse_cfg_key "$cfg_raw" PROMOTION_AUTONOMOUS "")
+            ship_auto=$(parse_cfg_key "$cfg_raw" SHIP_AUTONOMOUS_BRANCHES "")
+            promo_req=$(parse_cfg_key "$cfg_raw" PROMOTION_REQUIRED_CHECKS "verify")
+            promo_src=$(parse_cfg_key "$cfg_raw" PROMOTION_SOURCE_CHECK "1")
+            int_src=$(parse_cfg_key "$cfg_raw" INTEGRATION_SOURCE_CHECK "1")
+            review_mode=$(parse_cfg_key "$cfg_raw" REVIEW "off")
+            extra_checks=$(parse_cfg_key "$cfg_raw" RULESET_EXTRA_CHECKS "")
+            method=$(parse_cfg_key "$cfg_raw" AUTO_MERGE_METHOD "merge")
+
+            local is_promo=0
+            local -a req_checks=()
+            if contains_word "$promo_branches" "$base_ref"; then
+              is_promo=1
+              if ! contains_word "$promo_auto" "$base_ref"; then
+                echo "auto-merge: PR #${pr_num} target '${base_ref}' is not listed in PROMOTION_AUTONOMOUS, skipping"
+                return 0
+              fi
+              if [[ "${base_ref}:${head_ref}" != "staging:dev" && "${base_ref}:${head_ref}" != "main:staging" ]]; then
+                echo "auto-merge: PR #${pr_num} pair ${head_ref} -> ${base_ref} violates promotion policy, refusing"
+                return 0
+              fi
+              for c in $promo_req; do
+                req_checks+=("$c")
+              done
+              if [[ "$promo_src" != "0" ]]; then
+                req_checks+=("verify-source")
+              fi
+              method="merge"
+            elif contains_word "$ship_auto" "$base_ref"; then
+              req_checks+=("signoff")
+              [[ "$review_mode" == "required" ]] && req_checks+=("review")
+              [[ -n "$promo_branches" && "$int_src" != "0" ]] && req_checks+=("verify-integration-source")
+              for c in $extra_checks; do
+                c="${c#!}"
+                [[ -n "$c" ]] && req_checks+=("$c")
+              done
+              case "$method" in merge|squash|rebase) ;; *) method="merge" ;; esac
+            else
+              echo "auto-merge: PR #${pr_num} target '${base_ref}' is not autonomous, skipping"
+              return 0
+            fi
+
+            local attempt=1
+            mergeable=$(jq -r '.mergeable' <<<"$pr_json")
+            while [[ "$mergeable" == "null" && $attempt -le 3 ]]; do
+              sleep 5
+              pr_json=$(gh api "repos/${REPO}/pulls/${pr_num}") || return 0
+              mergeable=$(jq -r '.mergeable' <<<"$pr_json")
+              head_sha=$(jq -r '.head.sha // ""' <<<"$pr_json")
+              attempt=$((attempt + 1))
+            done
+            if [[ "$mergeable" != "true" ]]; then
+              echo "auto-merge: PR #${pr_num} mergeable=${mergeable}, skipping"
+              return 0
+            fi
+
+            local runs_json statuses_json all_green=1 any_failed=0 ctx run_state run_conc st_state
+            runs_json=$(gh api --paginate "repos/${REPO}/commits/${head_sha}/check-runs?per_page=100" \
+              | jq -s '{check_runs: [.[].check_runs[]]}')
+            statuses_json=$(gh api "repos/${REPO}/commits/${head_sha}/status")
+
+            for ctx in "${req_checks[@]}"; do
+              # Fail closed on any pending or failed GitHub Actions check-run for required context
+              if jq -e --arg ctx "$ctx" '
+                [.check_runs[] | select(.name == $ctx and .app.slug == "github-actions")]
+                | sort_by(.id) | last // null
+                | if . == null then false
+                  elif (.status != "completed") then false
+                  elif (.conclusion != "success") then true
+                  else false end' <<<"$runs_json" >/dev/null; then
+                any_failed=1
+                all_green=0
+                echo "auto-merge: PR #${pr_num} check-run '${ctx}' failed/cancelled"
+                break
+              fi
+
+              run_conc=$(jq -r --arg ctx "$ctx" '
+                [.check_runs[] | select(.name == $ctx and .app.slug == "github-actions" and .status == "completed")]
+                | sort_by(.id) | last | .conclusion // ""' <<<"$runs_json")
+              run_state=$(jq -r --arg ctx "$ctx" '
+                [.check_runs[] | select(.name == $ctx and .app.slug == "github-actions")]
+                | sort_by(.id) | last | .status // ""' <<<"$runs_json")
+              st_state=$(jq -r --arg ctx "$ctx" '
+                [.statuses[] | select(.context == $ctx)] | sort_by(.id) | last | .state // ""' <<<"$statuses_json")
+
+              if [[ "$st_state" == "failure" || "$st_state" == "error" ]]; then
+                any_failed=1
+                all_green=0
+                echo "auto-merge: PR #${pr_num} commit status '${ctx}' is ${st_state}"
+                break
+              fi
+
+              if [[ "$run_state" != "" && "$run_state" != "completed" ]]; then
+                all_green=0
+                echo "auto-merge: PR #${pr_num} waiting on in-progress check-run '${ctx}' (${run_state})"
+              elif [[ "$run_conc" == "success" || "$st_state" == "success" ]]; then
+                :
+              else
+                all_green=0
+                echo "auto-merge: PR #${pr_num} waiting on missing/uncompleted check '${ctx}'"
+              fi
+            done
+
+            if [[ $any_failed -eq 1 ]]; then
+              return 0
+            fi
+
+            if [[ $all_green -eq 1 ]]; then
+              if [[ $is_promo -eq 1 ]]; then
+                gh pr merge "$pr_num" --repo "$REPO" --merge --match-head-commit "$head_sha"
+              else
+                gh pr merge "$pr_num" --repo "$REPO" "--${method}" --delete-branch --match-head-commit "$head_sha"
+              fi
+              echo "auto-merge: merged PR #${pr_num} (${head_ref} -> ${base_ref}) via ${method}"
+            else
+              local allow_auto protected
+              allow_auto=$(gh api "repos/${REPO}" --jq '.allow_auto_merge // false' 2>/dev/null || echo "false")
+              protected=$(gh api "repos/${REPO}/branches/${base_ref}" --jq '.protected // false' 2>/dev/null || echo "false")
+              if [[ "$allow_auto" == "true" && "$protected" == "true" ]]; then
+                gh pr merge "$pr_num" --repo "$REPO" --auto "--${method}" --match-head-commit "$head_sha" || true
+              else
+                echo "auto-merge: PR #${pr_num} checks still pending (protected=${protected}; will merge on next workflow_run)"
+              fi
+            fi
+          }
+
+          if [[ "$EVENT_NAME" == "pull_request" && -n "$PR_NUMBER" ]]; then
+            evaluate_and_merge_pr "$PR_NUMBER" "$PR_HEAD_SHA"
+            exit 0
+          fi
+
+          # workflow_run path: resolve PR numbers from event payload, commit/pulls fallback, or open PRs matching head SHA
+          pr_nums=$(jq -r '.[].number // empty' <<<"${WR_PRS_JSON:-[]}" 2>/dev/null || true)
+          if [[ -z "$pr_nums" && -n "$WR_HEAD_SHA" ]]; then
+            pr_nums=$(gh api --paginate "repos/${REPO}/pulls?state=open&per_page=100" \
+              --jq ".[] | select(.head.sha == \"${WR_HEAD_SHA}\") | .number" 2>/dev/null || true)
+          fi
+          if [[ -z "$pr_nums" ]]; then
+            echo "auto-merge: no open PR found for head SHA ${WR_HEAD_SHA:0:12}"
+            exit 0
+          fi
+          while IFS= read -r n; do
+            [[ -n "$n" ]] && evaluate_and_merge_pr "$n" "$WR_HEAD_SHA"
+          done <<<"$pr_nums"

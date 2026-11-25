@@ -15,9 +15,9 @@ title: "Knowledge & Memory Store"
 
 document_control:
   status: Draft
-  version: "1.0"
+  version: "1.2"
   date_created: "2026-06-22T00:00:00"
-  last_updated: "2026-06-22T00:00:00"
+  last_updated: "2026-11-21T00:00:00"
   author: "Engramory team"
   component: "MemoryStore"
   tdd_ready_score: "[Pending]/100"
@@ -93,7 +93,8 @@ data_models:
     - name: "KBSection"
       type: "dataclass"
       fields:
-        - { name: "doc_id", type: "str", required: true, description: "Source document/artifact id" }
+        - { name: "doc_id", type: "str", required: true, description: "Source document/artifact id (rejects '#' delimiter)" }
+        - { name: "agent_id", type: "str", required: false, description: "Owning agent identity (default: 'system'; migration 0011)" }
         - { name: "text", type: "str", required: true, description: "Section content" }
         - { name: "citation", type: "str", required: true, description: "Citation anchor" }
         - { name: "modality", type: "str", required: false, description: "text|markdown|pdf|document|image|audio|video (default: text; migration 0010)" }
@@ -138,6 +139,9 @@ behavior:
   validation_rules:
     - { rule: "Every distilled memory carries provenance + embedding_model", source: "@ears: EARS.01.03.f030" }
     - { rule: "Canonical relational store is source of truth; embeddings/graph are projections", source: "@ears: EARS.01.03.a040" }
+    - { rule: "Postgres connections set transaction-scoped app.tenant_id via _conn(tenant_id=...) and FORCE ROW LEVEL SECURITY across all 14 canonical tables; v_ambient_memory_active uses security_invoker = true; chunk ingestion uses parameterized binary INSERT (no COPY FROM under RLS)", source: "@ears: EARS.01.03.e020" }
+    - { rule: "kb_runbook_steps enforces composite PK (tenant_id, doc_id, step_uid) where step_uid == f'{doc_id}#{step_id}' (migration 0011)", source: "@ears: EARS.01.03.e020" }
+    - { rule: "Migration 0012 tracks CAS project ownership via kb_blob_projects (with RLS backfill and alias lookup), rescopes uq_episodes_event_id to (tenant_id, coalesce(project_id, ''), agent_id, event_id), clears stale kb_section embeddings on text updates, coalesces episode brain_variant in get_unreflected_episodes, and wires ts_lex + domain_id filtering in get_memories", source: "@ears: EARS.01.03.e020" }
   state_transitions:
     - { from: "Episode", to: "Memory", trigger: "distillation reflection pass", source: "@bdd: BDD.01.03.d400" }
     - { from: "Memory", to: "Superseded", trigger: "correction (valid_to set, supersedes link)", source: "@bdd: BDD.01.03.a700" }

@@ -12,12 +12,10 @@ scratch, a commit message, or a session handoff.
 
 > [!IMPORTANT]
 > **Single Standard Ingress:** For autonomous spoke agents, sandboxed CI runners,
-> and cross-repository defect reporting, use **`submit-feedback-chatwoot`**. That
-> skill routes via the Chatwoot API to `aidoc-flow-support-desk`, which performs
-> automated secret scrubbing, target repo authorization, deduplication, and GitHub
-> issue dispatch. This direct skill (`submit-feedback`) is a maintainer-only path
-> used when direct write credentials to the repository's GitHub tracker are already
-> present in the session.
+> and cross-repository defect reporting, use **`submit-feedback-chatwoot`** (or the
+> `aiops_desk_submit` MCP tool / `aiops-harness desk submit` CLI). For internal
+> repository execution TODOs and CHG/IPLAN backlog items, route directly into
+> `platform-paperclip` via `aiops_paperclip_queue_todo` / `aiops-harness paperclip queue-backlog` (`submit-feedback` remains the maintainer path for direct external GitHub Issue writes).
 
 A finding also has to carry **where it came from**. A defect a real project hit
 and a defect a review pass went looking for read identically once written up,

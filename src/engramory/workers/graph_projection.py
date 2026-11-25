@@ -26,10 +26,10 @@ async def project_entities(
     count = 0
     for entity in entities:
         props = {
+            **entity.properties,
             "name": entity.name,
             "domain_id": entity.domain_id,
             "tenant_id": entity.tenant_id,
-            **entity.properties,
         }
         labels = entity_labels_for(entity)
         await graph.upsert_node(
@@ -52,8 +52,8 @@ async def project_relations(
     count = 0
     for rel in relations:
         props = {
-            "tenant_id": rel.tenant_id,
             **rel.properties,
+            "tenant_id": rel.tenant_id,
         }
         await graph.upsert_edge(
             src=rel.src_id,
@@ -79,7 +79,11 @@ async def reproject_all(
     if hasattr(graph, "purge_stale_nodes"):
         entities = await repo.list_graph_entities(tenant_id=tenant_id)
         canonical_ids = [e.id for e in entities]
-        purged = await graph.purge_stale_nodes(tenant_id=tenant_id, active_ids=canonical_ids)
+        purged = await graph.purge_stale_nodes(
+            tenant_id=tenant_id,
+            active_ids=canonical_ids,
+            exclude_kb_labels=False,
+        )
         if isinstance(purged, int) and purged > 0:
             logger.info("Purged %d stale graph nodes for tenant %s", purged, tenant_id)
 

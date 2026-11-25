@@ -1,14 +1,10 @@
-# Caller for aidoc-flow-ci's reusable docs-sync workflow (@ci/v1.9.5).
-# DRY-RUN rollout: computes proposed mechanical doc-fixes post-merge and
-# comments them on the PR — no push-back, no bot App needed (bot secrets are
-# only referenced by the live-mode Apply step, gated by dry_run != true).
-# Graduate to live mode (dry_run: false + aidoc-flow-bot App/secrets) per
-# IPLAN-0018 §3.7 after >=5 clean merges. Config: .github/docs-sync.json.
+# Caller for aidoc-flow-ci's reusable docs-sync workflow.
+# DRY-RUN rollout: computes proposed mechanical doc-fixes post-merge and comments on PR.
 name: docs-sync
 
 on:
   push:
-    branches: [main]
+    branches: [dev]
 
 permissions:
   contents: read
@@ -16,4 +12,6 @@ permissions:
 
 jobs:
   call:
-    uses: vladm3105/aidoc-flow-ci/.github/workflows/docs-sync.yml@ci/v1.9.5
+    uses: vladm3105/aidoc-flow-ci/.github/workflows/docs-sync.yml@845964a439747001b5e3febbeebde4aa5a551d20 # ci/v1.9.5
+    with:
+      runner_labels: '["self-hosted", "ci", "ephemeral"]'

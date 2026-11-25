@@ -62,10 +62,11 @@ async def test_ingest_adr_knowledge_graph_and_traverse_surface(
             agent_id="test-agent",
             project_id="test-proj",
             tenant_id=tenant_id,
-            scopes=frozenset({"agent", "project"}),
+            domain_id="core",
+            scopes=frozenset({"agent", "project", "domain"}),
         )
 
-        neighbors = await surface.graph_neighbors(ctx, id="ADR-03", depth=1)
+        neighbors = await surface.graph_neighbors(ctx, id="ADR-03", depth=1, scope="domain")
         assert len(neighbors) > 0
         neighbor_ids = {n["id"] for n in neighbors}
         assert "ADR-01" in neighbor_ids or "ADR-02" in neighbor_ids

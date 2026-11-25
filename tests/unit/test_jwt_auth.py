@@ -257,3 +257,172 @@ def test_check_token_revocation_kill_switch() -> None:
 
     # Unrevoked token passes
     check_token_revocation(claims, revoked_identifiers={"unrelated-jti"})
+
+
+def test_c7_fail_closed_claims_and_revocation_hardening() -> None:
+    # 1. Missing tenant_id or project_id fails closed
+    with pytest.raises(AuthenticationError, match="tenant_id"):
+        claims_to_actor_context(
+            TokenClaims(
+                sub="a1", iss="iss", aud="aud", exp=9999999999, raw_claims={"projects": ["p1"]}
+            )
+        )
+    with pytest.raises(AuthenticationError, match="project_id"):
+        claims_to_actor_context(
+            TokenClaims(
+                sub="a1", iss="iss", aud="aud", exp=9999999999, raw_claims={"tenant_id": "t1"}
+            )
+        )
+
+    # 2. String 'false' is_superuser cannot grant 'space', and domain_id never grants 'domain'
+    claims_str_false = TokenClaims(
+        sub="a1",
+        iss="iss",
+        aud="aud",
+        exp=9999999999,
+        raw_claims={
+            "tenant_id": "t1",
+            "projects": ["p1"],
+            "domain_id": "billing",
+            "is_superuser": "false",
+        },
+    )
+    ctx = claims_to_actor_context(claims_str_false)
+    assert ctx.scopes == frozenset({"agent", "project"})
+    assert "domain" not in ctx.scopes
+    assert "space" not in ctx.scopes
+
+    # 3. Non-list memory_scopes or groups fail closed
+    with pytest.raises(AuthenticationError, match="memory_scopes"):
+        claims_to_actor_context(
+            TokenClaims(
+                sub="a1",
+                iss="iss",
+                aud="aud",
+                exp=9999999999,
+                raw_claims={"tenant_id": "t1", "projects": ["p1"], "memory_scopes": "space"},
+            )
+        )
+    with pytest.raises(AuthenticationError, match="groups"):
+        _ = TokenClaims(
+            sub="a1",
+            iss="iss",
+            aud="aud",
+            exp=9999999999,
+            raw_claims={"tenant_id": "t1", "projects": ["p1"], "groups": "admin"},
+        ).groups
+
+    # 4. External plaintext http security_gate_url is rejected & null revocations fails closed
+    from unittest.mock import MagicMock
+
+    from engramory.access.jwt_auth import validate_security_gate_url
+
+    with pytest.raises(ValueError, match="Plaintext HTTP is prohibited"):
+        validate_security_gate_url("http://evil.example.com:8095")
+    assert validate_security_gate_url("http://security-gate:8095")[1] is None
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = b'{"revocations": null}'
+    with patch("httpx.Client.get", return_value=mock_resp):
+        with pytest.raises(AuthenticationError, match="fail-closed"):
+            check_token_revocation(
+                claims_str_false,
+                security_gate_url="http://127.0.0.1:8095",
+                fail_closed=True,
+            )
+
+
+def test_wave_p3_token_claims_immutability_actor_and_jwt_rejections(
+    rsa_keypair: tuple[rsa.RSAPrivateKey, bytes],
+) -> None:
+    priv_key, _ = rsa_keypair
+    jwks_data = build_jwks_dict(priv_key.public_key(), kid="test-key-1")
+
+    # 1. Deep immutability of TokenClaims.raw_claims + independent mutable actor copy
+    claims = TokenClaims(
+        sub="sub-immut",
+        iss="https://auth-stage.aiops-flow.io/application/o/engramory/",
+        aud="engramory",
+        exp=9999999999,
+        raw_claims={
+            "roles": ["developer", "reviewer"],
+            "act": {"sub": "supervisor-1", "nested": {"scope": "project"}},
+        },
+    )
+    with pytest.raises(TypeError):
+        claims.raw_claims["sub"] = "hijacked"  # type: ignore[index]  # reason: immutable
+    with pytest.raises(TypeError):
+        claims.raw_claims["act"]["sub"] = "hijacked"
+    assert isinstance(claims.raw_claims["roles"], tuple)
+
+    actor = claims.actor
+    assert actor == {"sub": "supervisor-1", "nested": {"scope": "project"}}
+    assert actor is not None
+    actor["sub"] = "mutated-copy"
+    assert claims.raw_claims["act"]["sub"] == "supervisor-1"
+
+    validator = JWKSValidator(
+        jwks_url="https://mock.auth/jwks/",
+        issuer="https://auth-stage.aiops-flow.io/application/o/engramory/",
+        audience="engramory",
+    )
+
+    with patch.object(validator._jwks_client, "fetch_data", return_value=jwks_data):
+        # 2. Unsigned 'none' algorithm token rejected
+        unsigned_token = jwt.encode(
+            {
+                "sub": "agent-none",
+                "iss": "https://auth-stage.aiops-flow.io/application/o/engramory/",
+                "aud": "engramory",
+                "iat": int(time.time()),
+                "exp": int(time.time()) + 600,
+            },
+            key=None,
+            algorithm="none",
+        )
+        with pytest.raises(AuthenticationError):
+            validator.validate_token(unsigned_token)
+
+        # 3. Missing kid rejected when JWKS keys require matching kid
+        no_kid_token = jwt.encode(
+            {
+                "sub": "agent-nokid",
+                "iss": "https://auth-stage.aiops-flow.io/application/o/engramory/",
+                "aud": "engramory",
+                "iat": int(time.time()),
+                "exp": int(time.time()) + 600,
+            },
+            priv_key,
+            algorithm="RS256",
+        )
+        with pytest.raises(AuthenticationError):
+            validator.validate_token(no_kid_token)
+
+        # 4. Missing or invalid exp rejected
+        missing_exp = jwt.encode(
+            {
+                "sub": "agent-noexp",
+                "iss": "https://auth-stage.aiops-flow.io/application/o/engramory/",
+                "aud": "engramory",
+            },
+            priv_key,
+            algorithm="RS256",
+            headers={"kid": "test-key-1"},
+        )
+        with pytest.raises(AuthenticationError):
+            validator.validate_token(missing_exp)
+
+        bad_exp = jwt.encode(
+            {
+                "sub": "agent-badexp",
+                "iss": "https://auth-stage.aiops-flow.io/application/o/engramory/",
+                "aud": "engramory",
+                "exp": "not-a-timestamp",
+            },
+            priv_key,
+            algorithm="RS256",
+            headers={"kid": "test-key-1"},
+        )
+        with pytest.raises(AuthenticationError):
+            validator.validate_token(bad_exp)

@@ -21,6 +21,9 @@ def test_migrations_exist_and_ordered() -> None:
         "0008_runbooks_and_doc_governance.sql",
         "0009_tenant_profiles_and_experience_dedup.sql",
         "0010_multimodal_rag_and_blob_cas.sql",
+        "0011_wave_p0_isolation_and_rls.sql",
+        "0012_wave_p1_cas_projects_and_dedup.sql",
+        "0013_wave_p3_indexes_and_hygiene.sql",
     ]
 
 
@@ -129,3 +132,75 @@ def test_migration_0009_tenant_profiles_and_experience_dedup() -> None:
     assert "PRIMARY KEY (tenant_id, agent_id)" in sql
     assert "CREATE UNIQUE INDEX IF NOT EXISTS uq_episodes_event_id" in sql
     assert "CREATE INDEX IF NOT EXISTS idx_episodes_tenant_project_ts" in sql
+
+
+def test_migration_0011_wave_p0_isolation_and_rls() -> None:
+    """0011 enforces FORCE RLS on 14 canonical tables, security_invoker view, and composite PK."""
+    sql = (MIGRATIONS / "0011_wave_p0_isolation_and_rls.sql").read_text()
+    down_sql = (MIGRATIONS / "down" / "0011_wave_p0_isolation_and_rls.sql").read_text()
+    assert "FORCE ROW LEVEL SECURITY" in sql
+    assert "DROP POLICY IF EXISTS" in down_sql
+    assert "NO FORCE ROW LEVEL SECURITY" in down_sql
+    assert "security_invoker = true" in sql
+    assert "PRIMARY KEY (tenant_id, doc_id, step_uid)" in sql
+    assert "applied_delta DOUBLE PRECISION NOT NULL DEFAULT 0.0" in sql
+    assert "NULLIF(current_setting(''app.tenant_id'', true), '''')" in sql
+    for table in (
+        "agent_profiles",
+        "episodes",
+        "memories",
+        "consolidation_runs",
+        "memory_retrievals",
+        "audit_records",
+        "kb_sections",
+        "graph_entities",
+        "graph_relations",
+        "kb_documents",
+        "kb_runbook_steps",
+        "kb_blobs",
+        "kb_blob_chunks",
+        "kb_blob_chunks_large",
+    ):
+        assert f"'{table}'" in sql
+
+
+def test_migration_0012_wave_p1_cas_projects_and_dedup() -> None:
+    """0012 creates kb_blob_projects/kb_blob_aliases with FORCE RLS, backfill, and event index."""
+    sql = (MIGRATIONS / "0012_wave_p1_cas_projects_and_dedup.sql").read_text()
+    down_sql = (MIGRATIONS / "down" / "0012_wave_p1_cas_projects_and_dedup.sql").read_text()
+    assert "CREATE TABLE IF NOT EXISTS public.kb_blob_projects" in sql
+    assert "CREATE TABLE IF NOT EXISTS public.kb_blob_aliases" in sql
+    assert "INSERT INTO public.kb_blob_projects" in sql
+    assert "FORCE ROW LEVEL SECURITY" in sql
+    assert "uq_episodes_event_id" in sql
+    assert "agent_id" in sql
+    assert "NULLIF(metadata->>'event_id', '') IS NOT NULL" in sql
+    assert "DROP TABLE IF EXISTS public.kb_blob_projects" in down_sql
+    assert "DROP TABLE IF EXISTS public.kb_blob_aliases" in down_sql
+    assert "CREATE UNIQUE INDEX IF NOT EXISTS uq_episodes_event_id" in down_sql
+
+
+def test_migration_0013_wave_p3_indexes_and_hygiene() -> None:
+    """0013 adds hot-path indexes, kb_blobs trigger, nullable embedding_model, and blob FK."""
+    sql = (MIGRATIONS / "0013_wave_p3_indexes_and_hygiene.sql").read_text()
+    down_sql = (MIGRATIONS / "down" / "0013_wave_p3_indexes_and_hygiene.sql").read_text()
+    assert "BEGIN;" in sql and "SET LOCAL lock_timeout = '5s';" in sql and "COMMIT;" in sql
+    assert "BEGIN;" in down_sql and "SET LOCAL lock_timeout = '5s';" in down_sql
+    for idx_name in (
+        "idx_memories_tenant_domain_live",
+        "idx_memories_tenant_variant_live",
+        "idx_kb_sections_tenant_doc_ver",
+        "idx_memory_retrievals_tenant_mem",
+        "idx_audit_records_tenant_ts",
+        "idx_kb_blobs_status_updated",
+    ):
+        assert idx_name in sql
+        assert f"DROP INDEX IF EXISTS {idx_name}" in down_sql
+    assert "set_kb_blobs_updated_at" in sql
+    assert "DROP TRIGGER IF EXISTS trg_kb_blobs_updated_at ON kb_blobs" in sql
+    assert "ALTER TABLE memories ALTER COLUMN embedding_model DROP NOT NULL" in sql
+    assert "fk_kb_sections_blob" in sql
+    assert "ON DELETE SET NULL (blob_sha256)" in sql
+    assert "DROP CONSTRAINT IF EXISTS fk_kb_sections_blob" in down_sql
+    assert "DROP FUNCTION IF EXISTS set_kb_blobs_updated_at()" in down_sql
+    assert "ALTER TABLE memories ALTER COLUMN embedding_model SET NOT NULL" in down_sql

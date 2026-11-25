@@ -18,13 +18,13 @@ uses GitHub issues or permits autonomous remote writes.
 
 ## 2. Capture durable findings first
 
-Route each actionable defect or improvement through `submit-feedback` before
+Route each actionable defect or improvement through `submit-feedback-chatwoot` (`aiops-agent-support` / `aiops_desk_submit`) or `submit-feedback` (when direct GitHub tracker write access is authorized) before
 writing resume state. A task-scoped note dies when the task finishes and is not
 a durable defect tracker.
 
 ## 3. Record resumable task state
 
-Use the repository's declared in-progress work item. Prefer a comment on the
+Use the repository's declared in-progress work item (and if a Paperclip v0.4.2 task lease is active, record the `task_id` and `lease_epoch` or release the lock cleanly via `PaperclipLeaseGuard`). Prefer a comment on the
 active issue when GitHub is authorized; otherwise use its declared WIP or local
 handoff mechanism. Do not edit the session handoff unless the repository says it
 also owns mid-task state.
@@ -37,6 +37,7 @@ The resume record contains:
 - Done and verified: <work plus verification>
 - Done, not verified: <remaining checks>
 - In flight: <files and partial state>
+- Documentation & SDD state: <touched docs/seed/, docs/sdd/, plans/, and pending docs-lint / docs-drift checks>
 - Not started: <remaining scope>
 - Next action: <one action requiring no rediscovery>
 - Blockers: <reason and clearing condition>

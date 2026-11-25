@@ -2,6 +2,7 @@
 paths:
   - "**/PLAN-*.md"
   - "**/IPLAN-*.md"
+  - "**/docs/sdd/08_IPLAN/**"
   - "**/plans/**"
   - "**/work_plans/**"
 ---
@@ -50,22 +51,19 @@ to a later cleanup pass:
 
 ## When a plan is a DOCUMENT rather than an issue
 
-**A `plans/` file is warranted only when the work needs something an issue
-cannot hold:** a **gated Claim ledger** with `file:line` citations, or a design
-that a review pass has to verify. **Everything else is an issue** — a
-`work_plans/` file for a bug fix is a queue entry in the wrong place, and
-`NEXT_TASKS.md` is superseded outright by the tracker's open list.
+Follow the **4-Stage Planning & Change Pipeline** in SDD-governed repos (sole exemption: pre-first-BRD seed drafting per `SEED_CONTRACT R1`):
+- **Stage 0 (Classify):** Route via `sdd-chg-flow` (`HOTFIX`, `CODE2S`, `CODE2C`, `SEED2C`, `DIR2C` [strictly `C1`], `SDD2C`, or `GATE-SPEC` for `.aidoc/framework/framework/**`).
+- **Stage 1 (Upstream Design — `plans/PLAN-NNN_<slug>.md`):** Warranted when work needs a gated **Claim ledger** (`file:line` + `symbol`), Two-Tier evaluation, or multi-lens independent review (`check_plan.py`). **Trivial `C1` docs/typos or single-line bugfixes skip `plans/`** and track directly via GitHub Issue + `C1 CHG` + scoped `IPLAN`. Never let `plans/PLAN-NNN_<slug>.md` replace `09_CHG` or `08_IPLAN` in SDD-governed repos (`NEXT_TASKS.md` and `work_plans/` bugfix files are superseded by the issue tracker).
+- **Stage 2–4 (`09_CHG` + `08_IPLAN` + `graph/` + Paperclip/Engramory Flywheel):** `CHG-NN` authorizes without code steps; `IPLAN-NN` (`In Progress`) + `SLICE-NN` bind execution and verify strict **3-way YAML manifest parity** via `aiops-harness iplan verify` (`CHG-NN.yaml` ↔ `IPLAN-NN.swf.yaml` ↔ `SLICE-NN.graph.yaml`). Ingest `CHG-NN` + `IPLAN-NN` into centralized `platform-paperclip` via `aiops_chg_sync_paperclip`, log notices (`aiops_paperclip_post_notice`), queue follow-up TODOs (`aiops_paperclip_queue_todo`), and distill completion into Engramory (`aiops_task_distill_engramory`). Standalone non-SDD repos without `docs/sdd/` use `plans/PLAN-NNN_<slug>.md` alone.
 
-**The test is not size, it is whether a check reads it.** One repo's 22 plans
-carry **441 line-citations into code** that a citation gate verifies; that is
-why those stay files. A plan with no ledger and no review residual is an issue
-that grew a filename.
+**The test is not size, it is whether a gate reads it.** `check_plan.py` validates upstream design plans (`plans/PLAN-NNN_<slug>.md`); `chg_lint.py`, `swf_lint.py`, and `iplan verify` validate Layer 09/08 execution contracts.
 
-Naming, where a file *is* warranted: `plans/PLAN-NNN_{slug}.md` for feature and
-roadmap work; `work_plans/` for the disposable remainder.
+Naming, where an upstream design file *is* warranted: `plans/PLAN-NNN_<slug>.md` (with `PLAN-001-ONBOARDING.md`, `PLAN-001-FOUNDATION-AND-INCEPTION.md`, and `PLAN-001-ARCHITECTURE-AND-MODERNIZATION-BASELINE.md` as Phase-1 kickoff aliases).
 
-**Paths are per-repo.** Read them from the repo's own governance table (its
-`AGENTS.md`) — a global rule caching another workspace's paths bakes in
-staleness that nothing here can detect. In aidoc-flow, the umbrella `AGENTS.md`'s
-per-surface table declares plans **"Not adopted"** at umbrella level; the
-submodule's own declaration is canonical.
+**Paths are per-repo.** Read them from the repo's own governance table (its `AGENTS.md`). In `aiops-harness`-governed spokes, upstream design plans live in `plans/PLAN-NNN_<slug>.md`, paired downstream with Layer-09 change requests in `docs/sdd/09_CHG/CHG-NN_<slug>.yaml`, Layer-08 workflow execution plans in `docs/sdd/08_IPLAN/IPLAN-NN_<slug>.swf.yaml`, and graph slices in `docs/sdd/graph/SLICE-NN_<slug>.graph.yaml`. In `aidoc-flow`, the umbrella `AGENTS.md` declares plans **"Not adopted"** at umbrella level; the submodule's own declaration is canonical.
+
+## Task Convergence & CHG Chain Sync (`plan-gate: v2`)
+
+- Plans opting into `<!-- plan-gate: v2 -->` / `check_plan.py --v2` must keep `## Task convergence` hash-pinned rows (`LOCKED`, `FIX`, `STALE`, `PROBE`, `REDESIGN`) synchronized with execution state across `IPLAN-NN_*.swf.yaml` and `SLICE-NN_*.graph.yaml` (mapping Stage-1 `TASK-1..N` hashes via `check_plan.py --hash-tasks [--fix]` to Stage-3 `TASK.08.NN.a001..a00N` graph nodes).
+- Distinguish external Claim-ledger phase gates (`PROBE[experiment]: <cmd>`) from Link-0 read-only local diagnostic probes (`PROBE[link0]: <readonly_cmd>` restricted to `pytest`, `ruff`, `mypy`, `true`, `echo`, `test`, `git` with zero shell metacharacters). Keep `## Review log` within `2..3` `### Pass N` headings (`_TASK_PASS_CAP_V2 = 3`).
+- When a `v2` review ends with `**Disposition:** SPLIT_TO_CHAIN (CHG-<N>)`, register every generated Link 0..N sub-IPLAN under the governing CHG's `implementation.chain_control` / `implementation.iplan_chain` within `scope.files_to_touch` and reconcile all upstream links before marking `Completed`.

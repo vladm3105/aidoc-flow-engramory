@@ -59,7 +59,7 @@ async def test_reflect_populates_embedding_projection_and_ambient_view(pg_dsn: s
     assert hits[0][1] == pytest.approx(0.0, abs=1e-5)
 
     # 5. Verify memory is visible in v_ambient_memory_active with non-null embedding
-    async with repo._conn() as conn:
+    async with repo._conn(tenant_id="tenant-embed-test") as conn:
         row = await (
             await conn.execute(
                 """

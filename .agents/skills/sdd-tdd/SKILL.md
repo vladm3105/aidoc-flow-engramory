@@ -6,10 +6,10 @@ description: >-
 
 # SDD TDD Author
 
-> Framework skill — routes to `framework/layers/07_TDD/TDD-TEMPLATE.yaml`
+> Framework skill — routes to `.aidoc/framework/framework/layers/07_TDD/TDD-TEMPLATE.yaml`
 > (or `TDD-SWF-TEMPLATE.yaml` + `TDD-GRAPH-TEMPLATE.yaml` for stateful/agentic test workflows)
 > and `TDD_WORKFLOW_STANDARD.md` (entry gate GATE-06).
-> Paths below use `<skills-root>` = this `framework/skills/` directory.
+> Paths below use `<skills-root>` = `.agents/skills/` (framework root: `.aidoc/framework/framework/`).
 > Upstream: `sdd-spec` interfaces are the test surface.
 
 ## 1. Assert the contract, arrange the fixtures

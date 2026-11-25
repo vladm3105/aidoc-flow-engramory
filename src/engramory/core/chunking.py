@@ -10,11 +10,13 @@ import logging
 import re
 import subprocess  # nosec B404 # reason: read-only git log/rev-parse metadata queries
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from engramory.access.authz import ActorContext
-from engramory.access.surface import AccessSurface
 from engramory.core.repository import Repository
+
+if TYPE_CHECKING:
+    from engramory.access.authz import ActorContext
+    from engramory.access.surface import AccessSurface
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +26,11 @@ MAX_CHUNK_WORDS = 300
 def get_git_commit_hash(file_path: Path) -> str:
     """Return latest commit hash for file, or current HEAD."""
     try:
+        resolved_dir = (file_path.parent if file_path.is_file() else file_path).resolve()
+        cwd_str = str(resolved_dir) if resolved_dir.is_dir() else None
         res = subprocess.run(  # nosec B603 B607 # reason: fixed git log call with -- separator
             ["git", "log", "-1", "--format=%H", "--", str(file_path)],
+            cwd=cwd_str,
             capture_output=True,
             text=True,
             check=False,
@@ -35,6 +40,7 @@ def get_git_commit_hash(file_path: Path) -> str:
             return out
         head_res = subprocess.run(  # nosec B603 B607 # reason: fixed git rev-parse HEAD call
             ["git", "rev-parse", "HEAD"],
+            cwd=cwd_str,
             capture_output=True,
             text=True,
             check=False,
@@ -218,7 +224,7 @@ async def ingest_file(
         if embed and adapters is not None and getattr(adapters, "llm", None) is not None:
             try:
                 embeddings = await adapters.llm.embed(texts=[text])
-                if embeddings:
+                if embeddings and len(embeddings[0]) == 1536:
                     embed_model = next(
                         (
                             val
@@ -230,6 +236,7 @@ async def ingest_file(
                     )
                     await repo.set_kb_sections_embedding_batch(
                         [(sec_id, embeddings[0])],
+                        tenant_id=ctx.tenant_id,
                         embedding_model=embed_model,
                     )
             except Exception as exc:

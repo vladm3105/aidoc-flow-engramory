@@ -93,16 +93,27 @@ nothing, put the artifact in the session report and say plainly that no durable
 queue exists — that absence is itself worth surfacing, and inventing a directory
 nobody reads is not a fix.
 
-### Conversational Steward Approvals (Chatwoot & Support Desk)
+### Conversational Steward, Paperclip SoD & Security Gate Approvals
 
-Where workflows integrate with Chatwoot and `aidoc-flow-support-desk`:
+Where workflows integrate with Chatwoot, `aiops-agent-support` (Support Desk), `aiops-agent-pm`, Paperclip v0.4.2, and `platform-security`:
 
 - 🟡 and 🔴 approval requests post an interactive challenge-and-response card
-  into the Chatwoot conversation thread.
+  into the Chatwoot conversation thread (`aiops-agent-support`) or emit a NATS
+  JetStream CloudEvents 1.0 envelope (`subject`, `expirytime`, stream
+  `EVENTS_PAPERCLIP` / `DESK_EVENTS`).
 - A verified human administrator or steward delivers authorization directly
-  in-thread by posting `/approve` or `approve`.
-- The Support Desk Agent Bot verifies sender role credentials (`role: administrator`
-  or `agent`) before promoting the ticket or unblocking execution.
+  in-thread by posting `/approve` or `approve`, or via the Paperclip Control
+  Plane Web UI (`:13100` / `:3100`, Doc 06 S6/S7 human Separation-of-Duties gate
+  `approve_gate` with `approver_id != assignee_agent_id`).
+- The Support Desk Agent Bot (`aiops-agent-support`) verifies sender role
+  credentials (`role: administrator` or `agent`), and `platform-temporal`
+  (`ExecutePaperclipTaskWorkflow` / `DeskBridgeWorker`) validates SHA- and
+  attempt-bound SoD signals (`commit_sha == expected_head_sha`) before promoting
+  the ticket or unblocking execution.
+- High-risk tool invocations require an Ed25519 `X-Agent-Warrant` from the
+  Security Gate (`127.0.0.1:18095` / `10.250.0.1:8095` / UDS) bound to
+  `paperclip_task_id` and `max_budget_usd` (enforced by LiteLLM
+  `paperclip_spend_hook.py` and harness `SpendTripwire`).
 
 ## Repository-specific contracts
 

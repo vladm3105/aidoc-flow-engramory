@@ -1,0 +1,381 @@
+# SLICE-12_audit-wave-p2-infra-stack-ci.graph.yaml — Layer 08 Graph Slice
+
+schema_version: 2.0-graph
+slice_id: IPLAN-12_audit-wave-p2-infra-stack-ci
+initiative_ref: INIT-12_audit-wave-p2-infra-stack-ci
+metadata:
+  author: Antigravity + Operator
+  created_date: '2026-11-22'
+  last_updated: '2026-11-22'
+  status: Completed
+  framework_version: 0.96.25
+  description: Machine-executable DAG and SAGA rollback for PLAN-026 Wave P2 (CHG-012, C11 + H13-H14 + M3 + M6-M7 + L2 + L5)
+  layer: 08_IPLAN
+  flow: sdd_to_code
+  flow_code: SDD2C
+  tdd_consistency:
+    status: complete
+    coverage_percentage: 100
+nodes:
+- id: CHG-012
+  type: change_request
+  title: "Wave P2 Audit Remediation — Infra, Stack Policy, Astro Starlight Portal & CI Governance (PLAN-026 TASK-3)"
+  properties:
+    change_level: C3
+    flow_code: SDD2C
+    status: Completed
+    execution_status: DONE
+    files_to_touch:
+    - .aidoc/Taskfile.yml
+    - .aidoc/harness.lock.json
+    - .aidoc/litellm.env.example
+    - .aidoc/security.env.example
+    - .aidoc/stack-policy.yaml
+    - .ci-config
+    - .github/actions/pre-commit/action.yml
+    - .github/dependabot.yml
+    - .github/docs-sync.json
+    - .github/workflows/ai-review.yml
+    - .github/workflows/audit-trail.yml
+    - .github/workflows/auto-merge-ai-prs.yml
+    - .github/workflows/bot-signoff.yml
+    - .github/workflows/branch-promotion.yml
+    - .github/workflows/ci.yml
+    - .github/workflows/composition.yml
+    - .github/workflows/docs-sync.yml
+    - .github/workflows/labeler.yml
+    - .github/workflows/links.yml
+    - .github/workflows/markdown-lint.yml
+    - .github/workflows/nightly-audit.yml
+    - .github/workflows/pre-commit.yml
+    - .github/workflows/quick-gates.yml
+    - .github/workflows/secret-scan.yml
+    - .github/workflows/standards-drift.yml
+    - .github/workflows/verify.yml
+    - .gitleaks.toml
+    - .pre-commit-config.yaml
+    - .secret-scan-allow
+    - .semgrepignore
+    - .vale/styles/AIOpsAgent/BannedRetiredTools.yml
+    - Dockerfile
+    - Makefile
+    - Taskfile.yml
+    - compose.platform.yaml
+    - config/litellm.config.yaml
+    - docker-compose.telemetry-net.yml
+    - docker-compose.yml
+    - docs/ARCHITECTURE.md
+    - docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md
+    - docs/archive/CHG-012/SPEC-01_access_surface_v1.3.yaml
+    - docs/archive/CHG-012/SPEC-06_ports_portability_v1.2.yaml
+    - docs/archive/CHG-012/SPEC-07_cli_face_v1.2.yaml
+    - docs/doc-tools/00_INDEX.md
+    - docs/doc-tools/07_PORTAL_API_CONTRACTS_AND_DEPLOYMENT_RUNBOOK.md
+    - docs/doc-tools/10_DOCUMENTATION_TOOLS_TECHNICAL_REFERENCE.md
+    - docs/sdd/06_SPEC/SPEC-01_access_surface.yaml
+    - docs/sdd/06_SPEC/SPEC-06_ports_portability.yaml
+    - docs/sdd/06_SPEC/SPEC-07_cli_face.yaml
+    - docs/sdd/08_IPLAN/IPLAN-00_index.yaml
+    - docs/sdd/08_IPLAN/IPLAN-12_audit-wave-p2-infra-stack-ci.swf.yaml
+    - docs/sdd/09_CHG/CHG-012_audit-wave-p2-infra-stack-ci.yaml
+    - docs/sdd/graph/SLICE-12_audit-wave-p2-infra-stack-ci.graph.yaml
+    - mise.toml
+    - portal/README.md
+    - portal/astro.config.mjs
+    - portal/package.json
+    - portal/pnpm-lock.yaml
+    - portal/src/content.config.ts
+    - portal/src/content/docs/contracts/index.md
+    - portal/src/content/docs/index.mdx
+    - portal/src/content/docs/runbooks/index.md
+    - portal/src/pages/contracts/playground.astro
+    - pyproject.toml
+    - scripts/deploy-stage.sh
+    - scripts/ingest_docs.py
+    - scripts/pre_push_guard.sh
+    - scripts/secret_scan.py
+    - skills/engramory-memory/SKILL.md
+    - src/engramory/adapters/factory.py
+    - src/engramory/cli.py
+    - src/engramory/core/context_tools.py
+    - src/engramory/core/docs_tools.py
+    - src/engramory/core/portal_builder.py
+    - src/engramory/core/repository.py
+    - src/engramory/mcp/server.py
+    - src/engramory/workers/runner.py
+    - tests/security/test_wave_p2_infra_governance.py
+    - tests/steps/static.list
+    - tests/test_docs_tools.py
+    - unified-test-suite.config.json
+    - uv.lock
+- id: TDD.01.04.c300
+  type: test_fixture
+  title: Wave P2 Infra, Stack Policy, Portal & CI Governance Regression Suite
+  properties:
+    test_file: tests/security/test_wave_p2_infra_governance.py
+- id: TASK.08.12.a001
+  type: task_action
+  title: "Phase 0-1: SDD2C Baseline, Stack Policy, pyproject.toml & Toolchain"
+  action: apply_patch
+  target_file: pyproject.toml
+  target_files: &id001
+  - .aidoc/stack-policy.yaml
+  - docs/archive/CHG-012/SPEC-01_access_surface_v1.3.yaml
+  - docs/archive/CHG-012/SPEC-06_ports_portability_v1.2.yaml
+  - docs/archive/CHG-012/SPEC-07_cli_face_v1.2.yaml
+  - docs/sdd/06_SPEC/SPEC-01_access_surface.yaml
+  - docs/sdd/06_SPEC/SPEC-06_ports_portability.yaml
+  - docs/sdd/06_SPEC/SPEC-07_cli_face.yaml
+  - docs/sdd/08_IPLAN/IPLAN-00_index.yaml
+  - docs/sdd/08_IPLAN/IPLAN-12_audit-wave-p2-infra-stack-ci.swf.yaml
+  - docs/sdd/09_CHG/CHG-012_audit-wave-p2-infra-stack-ci.yaml
+  - docs/sdd/graph/SLICE-12_audit-wave-p2-infra-stack-ci.graph.yaml
+  - mise.toml
+  - pyproject.toml
+  - src/engramory/core/context_tools.py
+  - uv.lock
+  command: uv lock && uv sync --locked
+  compensation: git checkout 217bed7 -- .aidoc/stack-policy.yaml pyproject.toml uv.lock mise.toml docs/sdd/ docs/archive/
+  properties:
+    session: 1
+    execution_status: DONE
+    target_files: *id001
+- id: TASK.08.12.a001_rollback
+  type: task_action
+  title: Rollback Phase 0-1 SDD & Stack Policy
+  action: run_script
+  target_file: pyproject.toml
+  target_files: *id001
+  command: git checkout 217bed7 -- .aidoc/stack-policy.yaml pyproject.toml uv.lock mise.toml docs/sdd/ docs/archive/
+  properties:
+    saga_step: compensate_task_a001
+- id: TASK.08.12.a002
+  type: task_action
+  title: "Phase 2: Runtime Profiles, Readiness/Heartbeat Probes, Docker/Compose & Stage Stub"
+  action: apply_patch
+  target_file: compose.platform.yaml
+  target_files: &id002
+  - Dockerfile
+  - Makefile
+  - compose.platform.yaml
+  - config/litellm.config.yaml
+  - docker-compose.telemetry-net.yml
+  - docker-compose.yml
+  - scripts/deploy-stage.sh
+  - src/engramory/adapters/factory.py
+  - src/engramory/cli.py
+  - src/engramory/core/repository.py
+  - src/engramory/mcp/server.py
+  - src/engramory/workers/runner.py
+  depends_on:
+  - TASK.08.12.a001
+  command: docker compose -f docker-compose.yml config >/dev/null
+  compensation: git checkout 217bed7 -- Dockerfile Makefile compose.platform.yaml docker-compose*.yml config/litellm.config.yaml scripts/deploy-stage.sh src/
+  properties:
+    session: 1
+    execution_status: DONE
+    target_files: *id002
+- id: TASK.08.12.a002_rollback
+  type: task_action
+  title: Rollback Phase 2 Runtime & Containers
+  action: run_script
+  target_file: compose.platform.yaml
+  target_files: *id002
+  command: git checkout 217bed7 -- Dockerfile Makefile compose.platform.yaml docker-compose*.yml config/litellm.config.yaml scripts/deploy-stage.sh src/
+  properties:
+    saga_step: compensate_task_a002
+- id: TASK.08.12.a003
+  type: task_action
+  title: "Phase 3: Harness Lockfile, Governance Configs, Retired Tools & Astro Starlight Portal"
+  action: apply_patch
+  target_file: portal/astro.config.mjs
+  target_files: &id003
+  - .aidoc/Taskfile.yml
+  - .aidoc/harness.lock.json
+  - .aidoc/litellm.env.example
+  - .aidoc/security.env.example
+  - .secret-scan-allow
+  - .vale/styles/AIOpsAgent/BannedRetiredTools.yml
+  - portal/README.md
+  - portal/astro.config.mjs
+  - portal/package.json
+  - portal/pnpm-lock.yaml
+  - portal/src/content.config.ts
+  - portal/src/content/docs/contracts/index.md
+  - portal/src/content/docs/index.mdx
+  - portal/src/content/docs/runbooks/index.md
+  - portal/src/pages/contracts/playground.astro
+  - scripts/ingest_docs.py
+  - scripts/secret_scan.py
+  - skills/engramory-memory/SKILL.md
+  - src/engramory/core/docs_tools.py
+  - src/engramory/core/portal_builder.py
+  - tests/steps/static.list
+  - unified-test-suite.config.json
+  depends_on:
+  - TASK.08.12.a002
+  command: uv run engramory docs build-portal --repo-path . && pnpm --dir portal build
+  compensation: git checkout 217bed7 -- .aidoc/ portal/ scripts/ skills/ src/ tests/steps/ unified-test-suite.config.json .vale/
+  properties:
+    session: 1
+    execution_status: DONE
+    target_files: *id003
+- id: TASK.08.12.a003_rollback
+  type: task_action
+  title: Rollback Phase 3 Lockfile, Governance & Portal
+  action: run_script
+  target_file: portal/astro.config.mjs
+  target_files: *id003
+  command: git checkout 217bed7 -- .aidoc/ portal/ scripts/ skills/ src/ tests/steps/ unified-test-suite.config.json .vale/
+  properties:
+    saga_step: compensate_task_a003
+- id: TASK.08.12.a004
+  type: task_action
+  title: "Phase 4: Protected CI Workflows, .ci-config, .gitleaks.toml & Pre-Push Hook"
+  action: apply_patch
+  target_file: .github/workflows/verify.yml
+  target_files: &id004
+  - .ci-config
+  - .github/actions/pre-commit/action.yml
+  - .github/dependabot.yml
+  - .github/docs-sync.json
+  - .github/workflows/ai-review.yml
+  - .github/workflows/audit-trail.yml
+  - .github/workflows/auto-merge-ai-prs.yml
+  - .github/workflows/bot-signoff.yml
+  - .github/workflows/branch-promotion.yml
+  - .github/workflows/ci.yml
+  - .github/workflows/composition.yml
+  - .github/workflows/docs-sync.yml
+  - .github/workflows/labeler.yml
+  - .github/workflows/links.yml
+  - .github/workflows/markdown-lint.yml
+  - .github/workflows/nightly-audit.yml
+  - .github/workflows/pre-commit.yml
+  - .github/workflows/quick-gates.yml
+  - .github/workflows/secret-scan.yml
+  - .github/workflows/standards-drift.yml
+  - .github/workflows/verify.yml
+  - .gitleaks.toml
+  - .pre-commit-config.yaml
+  - .semgrepignore
+  - Taskfile.yml
+  - scripts/pre_push_guard.sh
+  depends_on:
+  - TASK.08.12.a003
+  command: actionlint
+  compensation: git checkout 217bed7 -- .ci-config .github/ .gitleaks.toml .pre-commit-config.yaml .semgrepignore Taskfile.yml scripts/pre_push_guard.sh
+  properties:
+    session: 1
+    execution_status: DONE
+    target_files: *id004
+- id: TASK.08.12.a004_rollback
+  type: task_action
+  title: Rollback Phase 4 Protected CI Workflows
+  action: run_script
+  target_file: .github/workflows/verify.yml
+  target_files: *id004
+  command: git checkout 217bed7 -- .ci-config .github/ .gitleaks.toml .pre-commit-config.yaml .semgrepignore Taskfile.yml scripts/pre_push_guard.sh
+  properties:
+    saga_step: compensate_task_a004
+- id: TASK.08.12.a005
+  type: task_action
+  title: "Phase 5-6: Governed Docs Sync, Wave P2 Tests & Full CI Verification"
+  action: apply_patch
+  target_file: tests/security/test_wave_p2_infra_governance.py
+  target_files: &id005
+  - docs/ARCHITECTURE.md
+  - docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md
+  - docs/doc-tools/00_INDEX.md
+  - docs/doc-tools/07_PORTAL_API_CONTRACTS_AND_DEPLOYMENT_RUNBOOK.md
+  - docs/doc-tools/10_DOCUMENTATION_TOOLS_TECHNICAL_REFERENCE.md
+  - tests/security/test_wave_p2_infra_governance.py
+  - tests/test_docs_tools.py
+  depends_on:
+  - TASK.08.12.a004
+  command: task doctor && task check && task sdd:check && task ci
+  compensation: git checkout 217bed7 -- docs/ tests/
+  properties:
+    session: 1
+    execution_status: DONE
+    target_files: *id005
+- id: TASK.08.12.a005_rollback
+  type: task_action
+  title: Rollback Phase 5-6 Docs & Tests
+  action: run_script
+  target_file: tests/security/test_wave_p2_infra_governance.py
+  target_files: *id005
+  command: git checkout 217bed7 -- docs/ tests/
+  properties:
+    saga_step: compensate_task_a005
+edges:
+- from: CHG-012
+  to: TASK.08.12.a001
+  relation: authorized_by
+  notes: CHG-012 authorizes Phase 0-1 SDD baseline & stack policy
+- from: CHG-012
+  to: TASK.08.12.a002
+  relation: authorized_by
+  notes: CHG-012 authorizes Phase 2 runtime profiles, health/heartbeat probes, compose, and deploy-stage stub
+- from: CHG-012
+  to: TASK.08.12.a003
+  relation: authorized_by
+  notes: CHG-012 authorizes Phase 3 lockfile, governance scripts, and Astro Starlight portal
+- from: CHG-012
+  to: TASK.08.12.a004
+  relation: authorized_by
+  notes: CHG-012 authorizes Phase 4 protected CI workflows, .ci-config, and hooks
+- from: CHG-012
+  to: TASK.08.12.a005
+  relation: authorized_by
+  notes: CHG-012 authorizes Phase 5-6 governed docs sync and Wave P2 tests
+- from: TASK.08.12.a002
+  to: TASK.08.12.a001
+  relation: verifies
+  properties:
+    verification_type: preflight_attestation
+- from: TASK.08.12.a003
+  to: TASK.08.12.a002
+  relation: verifies
+  properties:
+    verification_type: preflight_attestation
+- from: TASK.08.12.a004
+  to: TASK.08.12.a003
+  relation: verifies
+  properties:
+    verification_type: preflight_attestation
+- from: TASK.08.12.a005
+  to: TASK.08.12.a004
+  relation: verifies
+  properties:
+    verification_type: preflight_attestation
+- from: TASK.08.12.a001
+  to: TDD.01.04.c300
+  relation: implements
+- from: TASK.08.12.a002
+  to: TDD.01.04.c300
+  relation: implements
+- from: TASK.08.12.a003
+  to: TDD.01.04.c300
+  relation: implements
+- from: TASK.08.12.a004
+  to: TDD.01.04.c300
+  relation: implements
+- from: TASK.08.12.a005
+  to: TDD.01.04.c300
+  relation: implements
+- from: TASK.08.12.a001
+  to: TASK.08.12.a001_rollback
+  relation: compensated_by
+- from: TASK.08.12.a002
+  to: TASK.08.12.a002_rollback
+  relation: compensated_by
+- from: TASK.08.12.a003
+  to: TASK.08.12.a003_rollback
+  relation: compensated_by
+- from: TASK.08.12.a004
+  to: TASK.08.12.a004_rollback
+  relation: compensated_by
+- from: TASK.08.12.a005
+  to: TASK.08.12.a005_rollback
+  relation: compensated_by

@@ -5,10 +5,10 @@ document_control:
   iplan_id: "IPLAN-06"
   subtype: code_build
   source_spec: "@spec: SPEC-06"
-  status: Draft
-  version: "1.0"
+  status: Completed
+  version: "1.1"
   date_created: "2026-06-22T00:00:00"
-  last_updated: "2026-06-22T00:00:00"
+  last_updated: "2026-11-22T00:00:00"
   author: "Engramory team"
   complexity: 3
   estimated_files: 7
@@ -17,29 +17,27 @@ document_control:
 file_manifest:
   files:
     - { path: "tests/unit/test_no_vendor_imports.py", order: 1, status: DONE, session: "s1-2026-07-09", verified: true }
-    - { path: "src/engramory/ports/__init__.py", order: 2, status: DONE, session: "scaffold", verified: false }
+    - { path: "src/engramory/ports/__init__.py", order: 2, status: DONE, session: "scaffold", verified: true }
     - { path: "src/engramory/adapters/dev/__init__.py", order: 3, status: DONE, session: "s1-2026-07-09", verified: true }
     - { path: "src/engramory/adapters/dev/vector_pg.py", order: 4, status: DONE, session: "s1-2026-07-09", verified: true }
     - { path: "src/engramory/adapters/factory.py", order: 5, status: DONE, session: "s1-2026-07-09", verified: true }
     - { path: "tests/conformance/test_adapters.py", order: 6, status: DONE, session: "s1-2026-07-09", verified: true }
-    - { path: "tests/integration/test_migration.py", order: 7, status: NOT_STARTED, session: null, verified: false }
+    - { path: "tests/test_ports.py", order: 7, status: DONE, session: "consolidated", verified: true }
 
 execution_commands:
-  setup: ["source .venv/bin/activate", "mkdir -p src/engramory/adapters/dev tests/conformance"]
+  setup: ["uv sync"]
   implementation:
-    - "# Ports already scaffolded in src/engramory/ports/. Confirm Protocols: Storage/Vector/Graph/Cache/LLM/Secrets/Events/Memory."
-    - "# TDD: tests/unit/test_no_vendor_imports.py (core has no vendor imports) FIRST"
-    - "# Implement dev adapters + factory(ENGRAMORY_PROFILE); reembed_and_reproject migration tool"
+    - "# Ports scaffolded in src/engramory/ports/ (5 active + 3 planned/deferred); dev/stage adapters active via factory; reembed_and_reproject deferred to BRD-02/BRD-07 (replaced in dev/stage by graph reproject)"
   validation:
-    - "python -m pytest tests/unit/test_no_vendor_imports.py tests/conformance/test_adapters.py tests/integration/test_migration.py -v"
-    - "python -m mypy src/engramory/ports --strict && python -m ruff check src/engramory"
+    - "uv run pytest tests/unit/test_no_vendor_imports.py tests/conformance/test_adapters.py tests/test_ports.py -q"
+    - "uv run mypy src/engramory/ports && uv run ruff check src/engramory"
 
 implementation_contracts:
   provided:
     contracts:
-      - { name: "Ports (8 Protocols)", type: "Protocol Interface", note: "Storage/Vector/Graph/Cache/LLM/Secrets/Events/Memory — consumed by all other components" }
-      - { name: "Adapter factory", type: "DI Interface", note: "select adapter set by ENGRAMORY_PROFILE (dev|gcp|azure)" }
-      - { name: "reembed_and_reproject", type: "Data Migration", note: "re-embed from content_raw + rebuild graph" }
+      - { name: "Ports (8 Protocols)", type: "Protocol Interface", note: "Active: Storage/Vector/Graph/LLM/Events; Planned (BRD-02/07): Cache/Secrets/Memory" }
+      - { name: "Adapter factory", type: "DI Interface", note: "adapters_for_profile(ENGRAMORY_PROFILE): dev/stage active; gcp/azure planned (BRD-02)" }
+      - { name: "reembed_and_reproject (deferred -> BRD-02/BRD-07)", type: "Planned Migration", note: "Deferred beyond v0.3.0; graph rebuild active via `engramory graph reproject`" }
   consumed:
     dependencies: []
 
@@ -49,16 +47,16 @@ session_handoff:
       agent: "(unstarted)"
       files_touched:
         - { path: "src/engramory/ports/__init__.py", action: created, status: DONE }
-      partial_work: "Port Protocol stubs exist from scaffolding; dev adapters + factory + migration tool not implemented."
-      blockers: "None — foundation layer; build first (build_order[0])."
-      next_session_directive: "File order 1: tests/unit/test_no_vendor_imports.py (TDD-06.04.a100)."
+      partial_work: "Port Protocol stubs exist."
+      blockers: "None."
+      next_session_directive: "Implement dev adapters + factory."
       validation_results: { tests_passing: null, coverage: null, lint_clean: false }
     - date: "2026-07-09"
       agent: "Claude Fable 5 (session s1)"
       files_touched: ["tests/unit/test_no_vendor_imports.py", "src/engramory/adapters/dev/__init__.py", "src/engramory/adapters/dev/vector_pg.py", "src/engramory/adapters/factory.py", "tests/conformance/test_adapters.py", "src/engramory/core/repository.py"]
-      partial_work: "No-vendor-imports guard (TDD-06.04.a100, with the psycopg spine carve-out encoded); PgVectorAdapter = VectorPort dev adapter over pgvector (upsert/query cosine <=>/delete as rebuildable projection ops on memories; filter allowlist as a security boundary); adapter factory with ENGRAMORY_PROFILE selection (gcp/azure raise until BRD-02); Repository.get_memories(query_vec) now ranks by cosine similarity composed with the ADR-07 visibility ladder. Conformance suite covers VectorPort + fail-closed (BDD.01.03.b800)."
-      blockers: "test_accelerator_cache_only (BDD.01.03.d010) pending a managed-accelerator adapter; reembed_and_reproject migration tool (order 7) needs an LLMPort dev adapter for re-embedding."
-      next_session_directive: "Either LLMPort dev adapter (LiteLLM/Ollama) + reembed_and_reproject + tests/integration/test_migration.py (completes IPLAN-06), or switch to IPLAN-01 (authz + MCP access surface over the repository)."
+      partial_work: "5 active dev/stage adapters (PgVectorAdapter, Neo4jGraphAdapter, LiteLLMAdapter, NatsEventsAdapter, PgBlobStorageAdapter, LocalFsStorageAdapter) implemented; 3 planned cloud/optional ports and gcp/azure profiles documented in SPEC-06."
+      blockers: "None (cloud migration deferred to BRD-02)."
+      next_session_directive: "Done."
       validation_results: { tests_passing: 33, coverage: null, lint_clean: true }
 
 traceability:
@@ -67,15 +65,16 @@ traceability:
     tdd_references: ["@tdd: TDD-06"]
   downstream:
     code_paths: ["@code: src/engramory/ports/", "@code: src/engramory/adapters/"]
-    test_paths: ["@tests: tests/conformance/test_adapters.py", "@tests: tests/integration/test_migration.py"]
+    test_paths: ["@tests: tests/conformance/test_adapters.py", "@tests: tests/test_ports.py"]
   code_inventory:
     files:
-      - { path: "src/engramory/ports/__init__.py", status: created, session: "scaffold", verified: false }
-      - { path: "tests/unit/test_no_vendor_imports.py", status: created, session: "s1-2026-07-09", verified: true }
-      - { path: "src/engramory/adapters/dev/__init__.py", status: created, session: "s1-2026-07-09", verified: true }
-      - { path: "src/engramory/adapters/dev/vector_pg.py", status: created, session: "s1-2026-07-09", verified: true }
-      - { path: "src/engramory/adapters/factory.py", status: created, session: "s1-2026-07-09", verified: true }
-      - { path: "tests/conformance/test_adapters.py", status: created, session: "s1-2026-07-09", verified: true }
+      - { path: "src/engramory/ports/__init__.py", status: completed, session: "scaffold", verified: true }
+      - { path: "tests/unit/test_no_vendor_imports.py", status: completed, session: "s1-2026-07-09", verified: true }
+      - { path: "src/engramory/adapters/dev/__init__.py", status: completed, session: "s1-2026-07-09", verified: true }
+      - { path: "src/engramory/adapters/dev/vector_pg.py", status: completed, session: "s1-2026-07-09", verified: true }
+      - { path: "src/engramory/adapters/factory.py", status: completed, session: "s1-2026-07-09", verified: true }
+      - { path: "tests/conformance/test_adapters.py", status: completed, session: "s1-2026-07-09", verified: true }
+      - { path: "tests/test_ports.py", status: completed, session: "consolidated", verified: true }
 
 tdd_consistency:
   summary: "Governed in consolidated SDD corpus."

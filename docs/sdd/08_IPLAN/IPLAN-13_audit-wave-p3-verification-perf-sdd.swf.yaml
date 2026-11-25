@@ -1,0 +1,362 @@
+# IPLAN-13_audit-wave-p3-verification-perf-sdd.swf.yaml — Executable Implementation Plan (CNCF v0.8 DSL)
+# Authorizing CHG: CHG-013 | @spec: SPEC-01 | @tdd: TDD.01.04.d400
+
+doc_id: IPLAN-13
+title: "Wave P3 Audit Remediation — Verification, Connection Pooling, Indexes, Portability, Extraction & SDD Parity (PLAN-026 TASK-4)"
+metadata:
+  id: IPLAN-13
+  title: "Wave P3 Audit Remediation — Verification, Connection Pooling, Indexes, Portability, Extraction & SDD Parity (PLAN-026 TASK-4)"
+  status: Completed
+  version: '1.0'
+  authorizing_chg: CHG-013
+  schema_version: '1.0'
+  framework_version: 0.96.25
+  document_type: iplan-document
+  layer: 8
+  subtype: workflow
+  workflow_spec: CNCF-Serverless-Workflow-v0.8
+  author_persona: tech_lead
+  author_playbook: framework/playbooks/08_IPLAN/tech_lead.md
+  workflow_standard: CNCF-Serverless-Workflow-0.8
+  total_sections: 8
+  last_updated: '2026-11-22'
+  tags:
+  - iplan-document
+  - layer-8-artifact
+  - shared-architecture
+  - cncf-workflow
+document_control:
+  iplan_id: IPLAN-13
+  authorizing_chg: CHG-013
+  flow: sdd_to_code
+  flow_code: SDD2C
+  subtype: workflow
+  source_spec: '@spec: SPEC-01'
+  status: Completed
+  version: '1.0'
+  date_created: '2026-11-22T10:45:00'
+  last_updated: '2026-11-22T12:45:00'
+  author: Antigravity + Operator
+  complexity: 5
+  estimated_files: 95
+  session_count: 1
+file_manifest:
+  files:
+  - {"path":".aidoc/Taskfile.yml","action":"MODIFY","task_id":"TASK.08.13.a004","status":"DONE"}
+  - {"path":".github/workflows/ci.yml","action":"MODIFY","task_id":"TASK.08.13.a004","status":"DONE"}
+  - {"path":"AGENTS.md","action":"MODIFY","task_id":"TASK.08.13.a004","status":"DONE"}
+  - {"path":"Taskfile.yml","action":"MODIFY","task_id":"TASK.08.13.a004","status":"DONE"}
+  - {"path":"config/domains/example-domain.yaml","action":"DELETE","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"db/migrations/0013_wave_p3_indexes_and_hygiene.sql","action":"CREATE","task_id":"TASK.08.13.a002","status":"DONE"}
+  - {"path":"db/migrations/down/0013_wave_p3_indexes_and_hygiene.sql","action":"CREATE","task_id":"TASK.08.13.a002","status":"DONE"}
+  - {"path":"docs/ARCHITECTURE.md","action":"MODIFY","task_id":"TASK.08.13.a004","status":"DONE"}
+  - {"path":"docs/MULTIMODAL_AND_POSTGRES_BLOB_STORAGE.md","action":"MODIFY","task_id":"TASK.08.13.a004","status":"DONE"}
+  - {"path":"docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md","action":"MODIFY","task_id":"TASK.08.13.a004","status":"DONE"}
+  - {"path":"docs/archive/CHANGELOG.md","action":"MODIFY","task_id":"TASK.08.13.a004","status":"DONE"}
+  - {"path":"docs/archive/CHG-013/SPEC-01_access_surface_v1.4.yaml","action":"CREATE","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"docs/archive/CHG-013/SPEC-03_retrieval_graph_v1.0.yaml","action":"CREATE","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"docs/archive/CHG-013/SPEC-04_distillation_engine_v1.2.yaml","action":"CREATE","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"docs/archive/CHG-013/SPEC-06_ports_portability_v1.3.yaml","action":"CREATE","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"docs/archive/CHG-013/SPEC-07_cli_face_v1.3.yaml","action":"CREATE","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"docs/doc-tools/00_INDEX.md","action":"MODIFY","task_id":"TASK.08.13.a004","status":"DONE"}
+  - {"path":"docs/doc-tools/10_DOCUMENTATION_TOOLS_TECHNICAL_REFERENCE.md","action":"MODIFY","task_id":"TASK.08.13.a004","status":"DONE"}
+  - {"path":"docs/sdd/05_ADR/ADR-00_index.md","action":"MODIFY","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"docs/sdd/06_SPEC/SPEC-01_access_surface.yaml","action":"MODIFY","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"docs/sdd/06_SPEC/SPEC-03_retrieval_graph.yaml","action":"MODIFY","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"docs/sdd/06_SPEC/SPEC-04_distillation_engine.yaml","action":"MODIFY","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"docs/sdd/06_SPEC/SPEC-06_ports_portability.yaml","action":"MODIFY","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"docs/sdd/06_SPEC/SPEC-07_cli_face.yaml","action":"MODIFY","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"docs/sdd/08_IPLAN/IPLAN-00_index.yaml","action":"MODIFY","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"docs/sdd/08_IPLAN/IPLAN-01_access_surface.yaml","action":"MODIFY","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"docs/sdd/08_IPLAN/IPLAN-02_memory_store.yaml","action":"MODIFY","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"docs/sdd/08_IPLAN/IPLAN-03_retrieval_graph.yaml","action":"MODIFY","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"docs/sdd/08_IPLAN/IPLAN-04_distillation_engine.yaml","action":"MODIFY","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"docs/sdd/08_IPLAN/IPLAN-05_kb_compatibility.yaml","action":"MODIFY","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"docs/sdd/08_IPLAN/IPLAN-06_ports_portability.yaml","action":"MODIFY","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"docs/sdd/08_IPLAN/IPLAN-07_cli_face.yaml","action":"CREATE","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"docs/sdd/08_IPLAN/IPLAN-08_multimodal_rag_graphrag.yaml","action":"MODIFY","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"docs/sdd/08_IPLAN/IPLAN-13_audit-wave-p3-verification-perf-sdd.swf.yaml","action":"CREATE","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"docs/sdd/09_CHG/CHG-013_audit-wave-p3-verification-perf-sdd.yaml","action":"CREATE","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"docs/sdd/graph/SLICE-13_audit-wave-p3-verification-perf-sdd.graph.yaml","action":"CREATE","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"plans/HANDOFF-PLAN-026_v030-deep-audit-remediation.md","action":"CREATE","task_id":"TASK.08.13.a004","status":"DONE"}
+  - {"path":"pyproject.toml","action":"MODIFY","task_id":"TASK.08.13.a002","status":"DONE"}
+  - {"path":"scripts/deploy-stage.sh","action":"MODIFY","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"scripts/ingest_docs.py","action":"MODIFY","task_id":"TASK.08.13.a002","status":"DONE"}
+  - {"path":"scripts/smoke_preprod.sh","action":"MODIFY","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"src/engramory/access/jwt_auth.py","action":"MODIFY","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"src/engramory/access/poisoning_guard.py","action":"MODIFY","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"src/engramory/access/surface.py","action":"MODIFY","task_id":"TASK.08.13.a002","status":"DONE"}
+  - {"path":"src/engramory/adapters/dev/events_nats.py","action":"MODIFY","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"src/engramory/adapters/dev/graph_neo4j.py","action":"MODIFY","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"src/engramory/adapters/dev/llm_litellm.py","action":"MODIFY","task_id":"TASK.08.13.a003","status":"DONE"}
+  - {"path":"src/engramory/adapters/dev/storage_local.py","action":"MODIFY","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"src/engramory/adapters/dev/storage_pg.py","action":"MODIFY","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"src/engramory/adapters/dev/vector_pg.py","action":"MODIFY","task_id":"TASK.08.13.a002","status":"DONE"}
+  - {"path":"src/engramory/adapters/factory.py","action":"MODIFY","task_id":"TASK.08.13.a002","status":"DONE"}
+  - {"path":"src/engramory/cli.py","action":"MODIFY","task_id":"TASK.08.13.a002","status":"DONE"}
+  - {"path":"src/engramory/core/chunking.py","action":"MODIFY","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"src/engramory/core/citations.py","action":"MODIFY","task_id":"TASK.08.13.a003","status":"DONE"}
+  - {"path":"src/engramory/core/context_tools.py","action":"MODIFY","task_id":"TASK.08.13.a003","status":"DONE"}
+  - {"path":"src/engramory/core/docs_tools.py","action":"MODIFY","task_id":"TASK.08.13.a003","status":"DONE"}
+  - {"path":"src/engramory/core/experience.py","action":"MODIFY","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"src/engramory/core/extraction/enrichment.py","action":"MODIFY","task_id":"TASK.08.13.a003","status":"DONE"}
+  - {"path":"src/engramory/core/extraction/multimodal.py","action":"MODIFY","task_id":"TASK.08.13.a003","status":"DONE"}
+  - {"path":"src/engramory/core/git_sync.py","action":"MODIFY","task_id":"TASK.08.13.a003","status":"DONE"}
+  - {"path":"src/engramory/core/kb_graph.py","action":"MODIFY","task_id":"TASK.08.13.a004","status":"DONE"}
+  - {"path":"src/engramory/core/knowledge.py","action":"MODIFY","task_id":"TASK.08.13.a003","status":"DONE"}
+  - {"path":"src/engramory/core/memory.py","action":"MODIFY","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"src/engramory/core/models.py","action":"MODIFY","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"src/engramory/core/parsers/html.py","action":"MODIFY","task_id":"TASK.08.13.a003","status":"DONE"}
+  - {"path":"src/engramory/core/parsers/markdown.py","action":"MODIFY","task_id":"TASK.08.13.a003","status":"DONE"}
+  - {"path":"src/engramory/core/parsers/text.py","action":"MODIFY","task_id":"TASK.08.13.a003","status":"DONE"}
+  - {"path":"src/engramory/core/poisoning_guard.py","action":"CREATE","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"src/engramory/core/repository.py","action":"MODIFY","task_id":"TASK.08.13.a002","status":"DONE"}
+  - {"path":"src/engramory/mcp/server.py","action":"MODIFY","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"src/engramory/ports/__init__.py","action":"MODIFY","task_id":"TASK.08.13.a002","status":"DONE"}
+  - {"path":"src/engramory/ports/cache.py","action":"MODIFY","task_id":"TASK.08.13.a002","status":"DONE"}
+  - {"path":"src/engramory/ports/memory.py","action":"MODIFY","task_id":"TASK.08.13.a002","status":"DONE"}
+  - {"path":"src/engramory/ports/secrets.py","action":"MODIFY","task_id":"TASK.08.13.a002","status":"DONE"}
+  - {"path":"src/engramory/ports/storage.py","action":"MODIFY","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"src/engramory/workers/distillation.py","action":"MODIFY","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"src/engramory/workers/runner.py","action":"MODIFY","task_id":"TASK.08.13.a002","status":"DONE"}
+  - {"path":"tests/conftest.py","action":"MODIFY","task_id":"TASK.08.13.a004","status":"DONE"}
+  - {"path":"tests/integration/test_graph_reproject.py","action":"MODIFY","task_id":"TASK.08.13.a004","status":"DONE"}
+  - {"path":"tests/security/test_failclosed.py","action":"MODIFY","task_id":"TASK.08.13.a004","status":"DONE"}
+  - {"path":"tests/security/test_wave_p2_infra_governance.py","action":"MODIFY","task_id":"TASK.08.13.a004","status":"DONE"}
+  - {"path":"tests/security/test_wave_p3_verification_perf_sdd.py","action":"CREATE","task_id":"TASK.08.13.a004","status":"DONE"}
+  - {"path":"tests/test_docs_tools.py","action":"MODIFY","task_id":"TASK.08.13.a003","status":"DONE"}
+  - {"path":"tests/test_migrations.py","action":"MODIFY","task_id":"TASK.08.13.a002","status":"DONE"}
+  - {"path":"tests/test_multimodal_extraction_and_graphrag.py","action":"MODIFY","task_id":"TASK.08.13.a003","status":"DONE"}
+  - {"path":"tests/test_storage_pg_blob_cas.py","action":"MODIFY","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"tests/test_virtual_employee_lifecycle.py","action":"MODIFY","task_id":"TASK.08.13.a001","status":"DONE"}
+  - {"path":"tests/unit/test_cli_and_surface_coverage.py","action":"CREATE","task_id":"TASK.08.13.a004","status":"DONE"}
+  - {"path":"tests/unit/test_jwt_auth.py","action":"MODIFY","task_id":"TASK.08.13.a004","status":"DONE"}
+  - {"path":"tests/unit/test_llm_litellm.py","action":"MODIFY","task_id":"TASK.08.13.a003","status":"DONE"}
+  - {"path":"tests/unit/test_mcp_server.py","action":"MODIFY","task_id":"TASK.08.13.a004","status":"DONE"}
+  - {"path":"tests/unit/test_no_vendor_imports.py","action":"MODIFY","task_id":"TASK.08.13.a002","status":"DONE"}
+  - {"path":"tests/unit/test_repository_unit.py","action":"CREATE","task_id":"TASK.08.13.a002","status":"DONE"}
+  - {"path":"unified-test-suite.config.json","action":"MODIFY","task_id":"TASK.08.13.a004","status":"DONE"}
+  - {"path":"uv.lock","action":"MODIFY","task_id":"TASK.08.13.a002","status":"DONE"}
+workflow:
+  id: IPLAN-13
+  name: wave_p3_verification_perf_portability_sdd_remediation
+  specVersion: '0.8'
+  version: '1.0'
+  start: Step1_PreFlightCheck
+  functions:
+  - name: runCommand
+    type: custom
+    operation: shell:exec
+  - name: remediateLayerFindings
+    type: custom
+    operation: sdd:remediate
+  - name: incrementCounter
+    type: custom
+    operation: metrics:counter
+  - name: sealDocumentBaseline
+    type: custom
+    operation: sdd:seal
+  - name: registerGraphBaselineNode
+    type: custom
+    operation: sdd:graph_register
+  - name: emitCloudEvent
+    type: custom
+    operation: cloudevent:emit
+  states:
+  - name: Step1_PreFlightCheck
+    type: operation
+    actions:
+    - name: checkCleanBranchState
+      functionRef:
+        refName: runCommand
+        arguments:
+          command: git status --porcelain
+    transition: Step2_TaskA001ImmutabilityRegexBoundaries
+  - name: Step2_TaskA001ImmutabilityRegexBoundaries
+    type: operation
+    metadata:
+      task_id: TASK.08.13.a001
+    compensatedBy: Rollback_TASK.08.13.a001
+    actions:
+    - name: hardenImmutabilityBoundariesAndScripts
+      functionRef:
+        refName: runCommand
+        arguments:
+          command: uv run pytest -q tests/test_storage_pg_blob_cas.py tests/test_virtual_employee_lifecycle.py
+          task_id: TASK.08.13.a001
+    transition: Step3_TaskA002PoolingMigrationsProfiles
+  - name: Step3_TaskA002PoolingMigrationsProfiles
+    type: operation
+    metadata:
+      task_id: TASK.08.13.a002
+    compensatedBy: Rollback_TASK.08.13.a002
+    actions:
+    - name: hardenPoolingMigrationsProfiles
+      functionRef:
+        refName: runCommand
+        arguments:
+          command: uv lock && uv sync --locked && uv run pytest -q tests/test_migrations.py tests/unit/test_no_vendor_imports.py
+          task_id: TASK.08.13.a002
+    transition: Step4_TaskA003PortabilityExtractionSddGraph
+  - name: Step4_TaskA003PortabilityExtractionSddGraph
+    type: operation
+    metadata:
+      task_id: TASK.08.13.a003
+    compensatedBy: Rollback_TASK.08.13.a003
+    actions:
+    - name: hardenPortabilityExtractionSddGraph
+      functionRef:
+        refName: runCommand
+        arguments:
+          command: uv run engramory --json sdd validate-graph --invariants
+          task_id: TASK.08.13.a003
+    transition: Step5_TaskA004CiCoverageDocsSync
+  - name: Step5_TaskA004CiCoverageDocsSync
+    type: operation
+    metadata:
+      task_id: TASK.08.13.a004
+    compensatedBy: Rollback_TASK.08.13.a004
+    actions:
+    - name: verifyWaveP3SuiteAndCi
+      functionRef:
+        refName: runCommand
+        arguments:
+          command: task doctor && task check && task sdd:check && task ci
+          task_id: TASK.08.13.a004
+    transition: EvaluateLayerConsistency
+  - name: EvaluateLayerConsistency
+    type: switch
+    dataConditions:
+    - condition: ${ .consistencyScore >= 1.0 }
+      transition: PassConsistencyGate
+    defaultCondition:
+      transition: EscalateToRemediation
+  - name: EscalateToRemediation
+    type: operation
+    actions:
+    - name: dispatchRemediationAction
+      functionRef:
+        refName: remediateLayerFindings
+        arguments:
+          layer: 08_IPLAN
+          documentId: IPLAN-13
+    transition: SealLayerDocumentBaseline
+  - name: PassConsistencyGate
+    type: operation
+    actions:
+    - name: logConsistencyPass
+      functionRef:
+        refName: incrementCounter
+        arguments:
+          metric: iplan_consistency_gate_pass
+          layer: 08_IPLAN
+          documentId: IPLAN-13
+    transition: SealLayerDocumentBaseline
+  - name: SealLayerDocumentBaseline
+    type: operation
+    actions:
+    - name: sealFrontmatterStatus
+      functionRef:
+        refName: sealDocumentBaseline
+        arguments:
+          documentId: IPLAN-13
+          layer: 08_IPLAN
+          targetStatus: Baselined
+          checksumAlgorithm: SHA-256
+    transition: RegisterSddGraphBaselineNode
+  - name: RegisterSddGraphBaselineNode
+    type: operation
+    actions:
+    - name: updateGraphNode
+      functionRef:
+        refName: registerGraphBaselineNode
+        arguments:
+          nodeType: IplanNode
+          nodeId: IPLAN-13
+          status: Baselined
+          lockIncomingEdges: true
+    transition: EmitLayerHandoffEvent
+  - name: EmitLayerHandoffEvent
+    type: operation
+    actions:
+    - name: publishCompletionEvent
+      functionRef:
+        refName: emitCloudEvent
+        arguments:
+          event: IplanApprovedEvent
+          iplan_id: IPLAN-13
+    end: true
+  - name: Rollback_TASK.08.13.a001
+    type: operation
+    usedForCompensation: true
+    actions:
+    - name: compensateTaskA001
+      functionRef:
+        refName: runCommand
+        arguments:
+          command: git checkout 9ec5619 -- docs/sdd/ docs/archive/ config/ scripts/ src/ tests/
+    end:
+      terminate: true
+  - name: Rollback_TASK.08.13.a002
+    type: operation
+    usedForCompensation: true
+    actions:
+    - name: compensateTaskA002
+      functionRef:
+        refName: runCommand
+        arguments:
+          command: git checkout 9ec5619 -- pyproject.toml uv.lock db/migrations/ scripts/ingest_docs.py src/ tests/
+    end:
+      terminate: true
+  - name: Rollback_TASK.08.13.a003
+    type: operation
+    usedForCompensation: true
+    actions:
+    - name: compensateTaskA003
+      functionRef:
+        refName: runCommand
+        arguments:
+          command: git checkout 9ec5619 -- src/ tests/
+    end:
+      terminate: true
+  - name: Rollback_TASK.08.13.a004
+    type: operation
+    usedForCompensation: true
+    actions:
+    - name: compensateTaskA004
+      functionRef:
+        refName: runCommand
+        arguments:
+          command: git checkout 9ec5619 -- .aidoc/Taskfile.yml .github/workflows/ci.yml AGENTS.md Taskfile.yml docs/ unified-test-suite.config.json src/ tests/
+    end:
+      terminate: true
+session_handoff:
+  current_phase: Completed
+  completed_states:
+  - Step1_PreFlightCheck
+  - Step2_TaskA001ImmutabilityRegexBoundaries
+  - Step3_TaskA002PoolingMigrationsProfiles
+  - Step4_TaskA003PortabilityExtractionSddGraph
+  - Step5_TaskA004CiCoverageDocsSync
+  pending_states: []
+implementation_contracts:
+  provided:
+    contracts:
+    - { name: "WaveP3PoolingIndexesAndSddSurface", type: "RuntimeGovernance", note: "Lazy per-loop AsyncConnectionPool, 0013 indexes/FK/RLS hygiene, deep frozen models, 0-violation SDD graph invariants, real-DB CI integration, and >=85% test coverage" }
+  consumed:
+    dependencies:
+    - { name: "AccessSurface", from: "@spec: SPEC-01", note: "29 public AccessSurface methods + audit_denial" }
+    - { name: "AdapterFactory", from: "@spec: SPEC-06", note: "Unified adapters_for_profile routing and closed-loop shutdown" }
+tdd_consistency:
+  summary: "Verified via tests/security/test_wave_p3_verification_perf_sdd.py, full integration suite, and >=85% coverage gate."
+traceability:
+  upstream:
+  - '@spec: SPEC-01'
+  - '@spec: SPEC-03'
+  - '@spec: SPEC-04'
+  - '@spec: SPEC-06'
+  - '@spec: SPEC-07'
+  - '@tdd: TDD.01.04.d400'
+  downstream:
+  - '@doc: plans/PLAN-026_v030-deep-audit-remediation.md'
+  - '@test: tests/security/test_wave_p3_verification_perf_sdd.py'

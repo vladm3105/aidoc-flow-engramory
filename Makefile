@@ -10,7 +10,7 @@ endif
 
 POSTGRES_USER ?= engramory
 POSTGRES_DB   ?= engramory
-ENGRAMORY_EMBED_MODEL ?= text-embedding-3-small
+ENGRAMORY_EMBED_MODEL ?= embed
 ENGRAMORY_EMBED_DIMS  ?= 1536
 
 help:          ## Show available targets
@@ -32,21 +32,20 @@ migrate:       ## Apply all database migrations in order
 			-U $(POSTGRES_USER) -d $(POSTGRES_DB) -f /migrations/$$(basename $$f); \
 	done
 
-pull-models:   ## Pull local Ollama models used in dev (llama3.1 and bge-m3)
-	docker compose exec ollama ollama pull llama3.1
-	docker compose exec ollama ollama pull bge-m3
+pull-models:   ## Pull local Ollama chat model (--profile local-ai); embed uses 1536d LiteLLM gateway
+	docker compose --profile local-ai exec ollama ollama pull llama3.1
 
 lint:          ## Lint
-	ruff check src
+	uv run ruff check src tests
 
 typecheck:     ## Static type check
-	mypy src
+	uv run mypy src
 
 fmt:           ## Format
-	ruff format src
+	uv run ruff format src tests
 
 test:          ## Run tests
-	pytest
+	uv run pytest
 
 smoke:         ## Pre-prod smoke: full agent memory loop via the engramory CLI (PLAN-002)
 	bash scripts/smoke_preprod.sh

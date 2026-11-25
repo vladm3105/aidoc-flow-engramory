@@ -21,6 +21,21 @@
 | 1   | <claim>                            | `<symbol>` | <path>:<line>      |
 | 2   | <claim> — **blocks Phase \<N\>**    | `n/a`      | PROBE: <command>   |
 
+> Sub-typed probes (optional in `v1`/`v2`): use `PROBE[experiment]: <cmd>` for external/throwaway experiments that gate `### Phase <N>` without entering a Link-0 SWF, or `PROBE[link0]: <readonly_cmd>` for hermetic Link-0 read-only local checks (`pytest`, `ruff`, `mypy`, `true`, `echo`, `test`, `git` with zero shell metacharacters).
+
+## Architecture Decision Scorecard (100-Point Model)
+
+> Required when evaluating competing technical options in plans. Passing threshold: >= 80/100 total score; no individual pillar < 50% allocated weight.
+
+| Pillar | Max Pts | Option A: <Recommended Approach> | Option B: <Alternative Approach> |
+|---|:---:|:---:|:---:|
+| **1. Security, Fencing & Least Privilege** | 25 | **pts** *(Rationale)* | pts *(Rationale)* |
+| **2. Reliability, Rollback & Blast Radius** | 25 | **pts** *(Rationale)* | pts *(Rationale)* |
+| **3. Operational Excellence & EaC** | 20 | **pts** *(Rationale)* | pts *(Rationale)* |
+| **4. Developer & Agent DX** | 15 | **pts** *(Rationale)* | pts *(Rationale)* |
+| **5. Performance & Token Economy** | 15 | **pts** *(Rationale)* | pts *(Rationale)* |
+| **TOTAL SCORE** | **100** | **pts (APPROVED / REJECTED)** | pts (APPROVED / REJECTED) |
+
 ## Phases
 
 > Phase definitions the ledger's PROBE rows resolve against. Keep the
@@ -55,3 +70,13 @@
 
 > When the final independent pass is clean, end it with an explicit marker the
 > gate recognizes unambiguously: **Result:** ready — no further findings.
+
+<!-- plan-gate-v2-snippet:begin -->
+## Task convergence
+
+> Opt-in for `<!-- plan-gate: v2 -->` / `check_plan.py --v2`: every task carries a canonical 64-hex `SHA-256` (compute/update at Stage 1 with `check_plan.py --hash-tasks --fix <plan>`), 4-pillar scores (`0.0`–`5.0`), and status in `LOCKED | FIX | STALE | PROBE | REDESIGN`. `LOCKED` requires `Total >= 16.0`, every pillar `>= 2.5`, non-zero 64-hex hash, and an independent pass (`2..3` `### Pass N` headings max).
+
+| Task ID | SHA-256 | P1 | P2 | P3 | P4 | Total | Status |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| TASK-1 | `<64-hex-sha256>` | 0.0 | 0.0 | 0.0 | 0.0 | 0.0 | PROBE |
+<!-- plan-gate-v2-snippet:end -->

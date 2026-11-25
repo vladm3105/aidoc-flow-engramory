@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 from engramory.access.surface import AccessSurface
-from engramory.adapters.factory import dev_adapters
+from engramory.adapters.factory import adapters_for_profile
 from engramory.cli import _close_adapters, _load_config
 from engramory.core.chunking import ingest_file
 from engramory.core.kb_graph import _resolve_sdd_root
@@ -25,7 +25,12 @@ async def main_async() -> int:
     parser = argparse.ArgumentParser(description="Ingest markdown documentation into Engramory.")
     parser.add_argument("--dir", default="docs/sdd/05_ADR", help="directory to crawl")
     parser.add_argument("--file", help="single file to ingest")
-    parser.add_argument("--scope", default="project", help="visibility scope (project | global)")
+    parser.add_argument(
+        "--scope",
+        default="project",
+        choices=["agent", "project", "domain", "space"],
+        help="visibility scope (agent | project | domain | space)",
+    )
     parser.add_argument("--config", help="explicit path to .engramory/config.toml")
     parser.add_argument("--no-embed", action="store_true", help="skip generating vector embeddings")
     args = parser.parse_args()
@@ -33,7 +38,7 @@ async def main_async() -> int:
     config = _load_config(args.config)
     repo = Repository(config.dsn)
     surface = AccessSurface(repo)
-    adapters = dev_adapters(config.dsn)
+    adapters = adapters_for_profile(dsn=config.dsn)
     try:
         target_files: list[Path] = []
         if args.file:
@@ -47,6 +52,7 @@ async def main_async() -> int:
                 target_files.extend(crawl_dir.glob(ext))
 
         total_sections = 0
+        errors = 0
         for p in sorted(target_files):
             try:
                 cnt = await ingest_file(
@@ -62,11 +68,12 @@ async def main_async() -> int:
                 total_sections += cnt
             except Exception as exc:
                 print(f"Error ingesting {p}: {exc}", file=sys.stderr)
+                errors += 1
 
-        print(f"Done: {total_sections} total sections ingested into kb_sections.")
-        return 0
+        print(f"Done: {total_sections} total sections ingested into kb_sections (errors={errors}).")
+        return 1 if errors > 0 else 0
     finally:
-        await _close_adapters(adapters)
+        await _close_adapters(adapters, repo=repo)
 
 
 def main() -> None:

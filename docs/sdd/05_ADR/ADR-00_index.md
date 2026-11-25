@@ -8,7 +8,7 @@ custom_fields:
   document_type: adr-index
   artifact_type: ADR-INDEX
   layer: 5
-  last_updated: "2026-07-09"
+  last_updated: "2026-11-22"
 ---
 
 # ADR-00: Architecture Decision Record Index
@@ -20,7 +20,7 @@ Index of Architecture Decision Records for **Engramory**.
 > **This is the canonical, implementing ADR log** for Engramory. The narrative
 > descriptions in `docs/adr/0001–0005` are conceptual/descriptive records of the
 > *desired* decisions; these YAML ADRs are the framework-conformant, implementing
-> form (and add ADR-06 through ADR-09, which have no `docs/adr/` counterpart).
+> form (and add ADR-06 through ADR-11, which have no `docs/adr/` counterpart).
 > When the two differ, this log governs.
 
 ## Document Registry
@@ -37,8 +37,9 @@ Index of Architecture Decision Records for **Engramory**.
 | ADR-08 | Single platform, two bounded cores — Memory and Knowledge | Accepted | Two-way | [ADR-08_two_bounded_cores.yaml](ADR-08_two_bounded_cores.yaml) |
 | ADR-09 | Independent memory storage; integrate the iplan ledger as an episode source | Accepted | Two-way | [ADR-09_independent_memory_storage.yaml](ADR-09_independent_memory_storage.yaml) |
 | ADR-10 | Agent-facing packaging: CLI + reference Skill dev/CI face over AccessSurface; MCP gateway remains the production surface | Accepted | Two-way | [ADR-10_agent_facing_packaging.yaml](ADR-10_agent_facing_packaging.yaml) |
+| ADR-11 | Foundational architecture and 8-canon ecosystem alignment | Accepted | Two-way | [ADR-11_foundation.yaml](ADR-11_foundation.yaml) |
 
-*Last Updated: 2026-07-11*
+*Last Updated: 2026-11-22*
 
 <!-- @ears: EARS-01 -->
 <!-- @bdd: BDD-01 -->

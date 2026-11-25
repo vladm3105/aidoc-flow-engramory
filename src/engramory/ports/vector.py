@@ -23,6 +23,6 @@ class VectorPort(Protocol):
         """Return up to k (id, distance) pairs nearest to `embedding`, closest first."""
         ...
 
-    async def delete(self, *, id: str) -> None:
-        """Remove a vector by id (idempotent)."""
+    async def delete(self, *, id: str, tenant_id: str) -> None:
+        """Remove a vector by id within tenant_id (idempotent)."""
         ...

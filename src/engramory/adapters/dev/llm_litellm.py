@@ -24,6 +24,11 @@ DEFAULT_VISION_MODEL = "vision"
 DEFAULT_AUDIO_MODEL = "audio-transcribe"
 MAX_VISION_IMAGE_BYTES = 20 * 1024 * 1024  # 20 MiB per-frame vision payload guard
 MAX_AUDIO_BYTES = 25 * 1024 * 1024  # 25 MiB per-window audio payload guard
+MAX_RESPONSE_BYTES = 16 * 1024 * 1024  # 16 MiB HTTP response body guard
+
+
+def _strip_crlf(value: str) -> str:
+    return value.replace("\r", "").replace("\n", "").replace('"', "")
 
 
 class LiteLLMAdapter:
@@ -89,7 +94,12 @@ class LiteLLMAdapter:
         req = urllib.request.Request(url, data=data, headers=headers, method="POST")
         # nosemgrep  # reason: url scheme validated to http/https
         with urllib.request.urlopen(req, timeout=self._timeout_sec) as resp:  # nosec B310  # reason: url scheme validated to http/https
-            raw = resp.read().decode("utf-8")
+            raw_bytes = resp.read(MAX_RESPONSE_BYTES + 1)
+            if len(raw_bytes) > MAX_RESPONSE_BYTES:
+                raise RuntimeError(
+                    f"LiteLLM response exceeds MAX_RESPONSE_BYTES ({MAX_RESPONSE_BYTES})"
+                )
+            raw = raw_bytes.decode("utf-8")
             return json.loads(raw)  # type: ignore[no-any-return]  # reason: json.loads returns Any and caller parses structure
 
     def _sync_multipart_request(
@@ -108,18 +118,22 @@ class LiteLLMAdapter:
         boundary = f"----EngramoryBoundary{uuid.uuid4().hex}"
         body = bytearray()
         for k, v in fields.items():
+            safe_k = _strip_crlf(str(k))
+            safe_v = str(v).replace("\r", "").replace("\n", "")
             body.extend(f"--{boundary}\r\n".encode())
-            body.extend(f'Content-Disposition: form-data; name="{k}"\r\n\r\n'.encode())
-            body.extend(f"{v}\r\n".encode())
+            body.extend(f'Content-Disposition: form-data; name="{safe_k}"\r\n\r\n'.encode())
+            body.extend(f"{safe_v}\r\n".encode())
 
-        safe_name = filename.replace('"', "").replace("\r", "").replace("\n", "")
+        safe_field = _strip_crlf(file_field)
+        safe_name = _strip_crlf(filename)
+        safe_mime = str(mime_type).replace("\r", "").replace("\n", "")
         body.extend(f"--{boundary}\r\n".encode())
         body.extend(
             (
-                f'Content-Disposition: form-data; name="{file_field}"; filename="{safe_name}"\r\n'
+                f'Content-Disposition: form-data; name="{safe_field}"; filename="{safe_name}"\r\n'
             ).encode()
         )
-        body.extend(f"Content-Type: {mime_type}\r\n\r\n".encode())
+        body.extend(f"Content-Type: {safe_mime}\r\n\r\n".encode())
         body.extend(file_bytes)
         body.extend(f"\r\n--{boundary}--\r\n".encode())
 
@@ -130,7 +144,12 @@ class LiteLLMAdapter:
         req = urllib.request.Request(url, data=bytes(body), headers=headers, method="POST")
         # nosemgrep  # reason: url scheme validated to http/https
         with urllib.request.urlopen(req, timeout=self._timeout_sec) as resp:  # nosec B310  # reason: url scheme validated to http/https
-            raw = resp.read().decode("utf-8")
+            raw_bytes = resp.read(MAX_RESPONSE_BYTES + 1)
+            if len(raw_bytes) > MAX_RESPONSE_BYTES:
+                raise RuntimeError(
+                    f"LiteLLM response exceeds MAX_RESPONSE_BYTES ({MAX_RESPONSE_BYTES})"
+                )
+            raw = raw_bytes.decode("utf-8")
             return json.loads(raw)  # type: ignore[no-any-return]  # reason: json.loads returns Any and caller parses structure
 
     async def chat(
@@ -170,7 +189,7 @@ class LiteLLMAdapter:
             "model": chosen_model,
             "input": list(texts),
         }
-        if self._default_embed_dims and chosen_model != "embed":
+        if self._default_embed_dims:
             payload["dimensions"] = self._default_embed_dims
         res = await asyncio.to_thread(self._sync_request, "embeddings", payload)
         data = res.get("data", [])

@@ -10,8 +10,10 @@ description: >-
 > **Scope & Architecture Boundary:** This skill strictly governs **Tier-1 local
 > filesystem project memory** (flat-file Markdown stores, e.g. `MEMDIR`).
 > Persistent, cross-project semantic and episodic memory is decoupled into
-> **`aidoc-flow-engramory`** (PostgreSQL/pgvector vector store and REST API),
-> which is maintained via its own service lifecycle, not this file-based linter.
+> **`platform-engramory`** (formerly `aidoc-flow-engramory`; PostgreSQL/pgvector
+> vector store, REST API, and the `aiops-harness` 4-tier hybrid memory adapter
+> in `aiops_harness/memory/`), which is maintained via its own service lifecycle,
+> not this file-based linter.
 
 Nothing reads the memory store except the loader, so drift is silent and
 compounds. Measured on 2026-08-12 across 14 stores and 341 memories: one store

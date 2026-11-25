@@ -52,11 +52,11 @@ people who were not in the room.
    PLAUSIBLE with what would confirm it.
 4. **Deliver one ranked verdict**: `BLOCKER` (do not ship), `SHIP-WITH-FIXES`
    (fixable, enumerated), or `READY`. Lead with the verdict, then the ranked
-   findings, then strong positives to *not* regress.
+   findings, then strong positives to *not* regress. When evaluating governing implementation plans (`plans/PLAN-*.md`), enforce that the plan's 100-Point 5-Pillar Well-Architected Scorecard clears $\ge 80 / 100$ (with no pillar $< 50\%$ weight); any unverified or sub-threshold scorecard requires a `BLOCKER` verdict.
 5. **Promote surviving findings (you, inline — the orchestrator owns this).**
    Lenses must not file; their reports are raw synthesis input. Check every
    surviving BLOCKER and HIGH against the `submit-feedback` promotion bar and
-   file the ones that clear it via `submit-feedback` (search-first,
+   file the ones that clear it via `submit-feedback-chatwoot` (`aiops-agent-support` / `aiops_desk_submit`) or `submit-feedback` (search-first,
    body contract, safe publication). Link the issue numbers from the verdict
    so no finding dies at the transcript boundary.
 
@@ -155,10 +155,7 @@ lenses are that contract applied to a ship decision.
 - **Dedup by file+symbol**, not by wording — the same bug surfaces under
   different names across lenses.
 - **Rank by exploitability/impact**, not by which lens found it.
-- **Map every finding to a disposition.** If the review will produce a fix
-  plan, ensure no finding silently vanishes — each is either a deliverable or
-  an explicit, reasoned deferral. Silent truncation of a findings list reads as
-  "covered everything" when it didn't.
+- **Map every finding to a disposition.** Persist durable review reports under `docs/audits/AUDIT-YYYY-MM-DD_<slug>.md` (`kind: audit` YAML frontmatter) with a single `## Disposition ledger` section (split across `#### Wave ...` subsections so every section stays `<= 450` words) and columns `Finding ID | Severity | Disposition | Target / Ticket | Rationale`. Allowed dispositions: `paperclip` (requires real `pc-task-*` ID), `fixed`, `waived` (`[I-09]` non-agent `waiver:<human-id>` + >= 15-char rationale), `duplicate`, `out-of-scope`, `deferred`, `superseded`, `tracked`. Never leave empty or `UNMAPPED`/`TBD` cells, and validate with `check_audit.py` / `aiops_audit_check` (`aiops-harness audit-check --json`).
 
 ## Output template
 

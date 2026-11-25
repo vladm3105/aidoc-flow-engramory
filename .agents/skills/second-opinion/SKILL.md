@@ -31,7 +31,9 @@ This is the whole mechanism; everything else is packaging.
   a different model tier via the `model` override → a different vendor.
   A different vendor goes through the platform LLM gateway
   **platform-litellm-laya** (OpenAI-compatible `LLM_URL` + the project's virtual
-  key `LLM_API_KEY`, a gateway alias such as `tier-frontier`), the same endpoint
+  key `LLM_API_KEY` from OpenBao `/dev/shm`, a gateway alias such as `tier-frontier`,
+  governed by `paperclip_spend_hook.py` [`PaperclipSpendGuard`] and harness
+  `SpendTripwire`), the same endpoint
   the aidoc-hybrid-ci self-review uses. Never call an upstream vendor API with a
   direct provider key.
 
@@ -51,6 +53,10 @@ what independence means, this file governs.
   `platform-standards` rule) before it reaches approval.
 - **Granularity:** judge the *plan*, the *final*, and any *irreversible step* —
   not every micro-step. Skip trivial green chatter.
+- **Evaluation Framework Verification:** When evaluating technical options or recommendations:
+  - Verify that tactical turn recommendations use the **4-Pillar Persona-Decomposed Matrix** (Architectural & EaC, Security & Blast, End-User DX, Platform Owner Ops) with a justified composite score.
+  - Verify that implementation plans (`plans/PLAN-*.md`) carry the **100-Point 5-Pillar Well-Architected Scorecard** meeting the $\ge 80 / 100$ threshold with no individual pillar $< 50\%$ allocated weight. Mark `revise` if an ungrounded or single-metric evaluation is used.
+  - **Industry Best Practices Mandate:** Require that technical proposals benchmark against proven industry standards (NIST/OWASP for security, CNCF/OpenAPI/MCP for protocols, Google SRE / AWS Well-Architected for reliability, Clean Architecture for code) rather than inventing unvetted custom wheels. Mark `revise` if bespoke patterns substitute for standard industry solutions.
 
 ## Output
 
@@ -119,6 +125,6 @@ not in this canon.
 
 When dispatching a fresh-context subagent judge for plans or code diffs (before outer CI `task review`):
 
-- **Pass caller-selected 2–4 best-fit lenses as context (without altering the canonical judge rubric in `second-opinion-judge.md`):** Use `aiops sdd select-lenses` or `aiops sdd review-clusters` to select the 2–4 best-fit engineering lenses (`google_sre_design`, `anthropic_evaluator_boundary`, `aws_saga_resilience`, `microsoft_stride_contracts`; minimum-2 fallback `google_sre_design` + `microsoft_stride_contracts`) and include `<selected_review_lenses>` plus `<cross_chunk_index>` in the artifact context packet.
+- **Pass caller-selected 2–4 best-fit lenses as context (without altering the canonical judge rubric in `second-opinion-judge.md`):** Select the 2–4 best-fit engineering lenses (`google_sre_design`, `anthropic_evaluator_boundary`, `aws_saga_resilience`, `microsoft_stride_contracts`; minimum-2 fallback `google_sre_design` + `microsoft_stride_contracts`), include `<selected_review_lenses>` plus `<cross_chunk_index>` in the artifact context packet, and seal evidence via `aiops-harness iplan seal-evidence` or `aiops-harness sdd seal`.
 - **2-pass review-and-fold convergence (3 reviews max):** Run **Pass 1** in a fresh-context subagent (`reviewer_id != generator_id`) to surface all Critical, Major, and Medium gaps; fold all fixes and regression tests; then run **Pass 2** to confirm `0` remaining blocking findings before invoking `task review` or arming auto-merge.
 

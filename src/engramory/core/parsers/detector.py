@@ -177,16 +177,17 @@ class DocumentDetector:
         if media_type is not None:
             return media_type
 
-        # 2. Explicit template markers
-        for pattern in self.CONTENT_PATTERNS[DocType.TEMPLATE]:
-            if pattern in content_bytes:
-                return DocType.TEMPLATE
-
-        # 3. Filename extension mapping
+        # 2. Known filename extension mapping (before template marker heuristic
+        # so .md files mentioning '@section:' in prose route to MarkdownParser)
         if filename and "." in filename:
             ext = filename.lower().split(".")[-1]
             if ext in self.EXTENSION_MAP:
                 return self.EXTENSION_MAP[ext]
+
+        # 3. Explicit template markers for extensionless or custom inputs
+        for pattern in self.CONTENT_PATTERNS[DocType.TEMPLATE]:
+            if pattern in content_bytes:
+                return DocType.TEMPLATE
 
         # 4. Content sniffing
         for doc_type in [DocType.HTML, DocType.MARKDOWN]:
