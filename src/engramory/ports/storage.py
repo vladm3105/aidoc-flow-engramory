@@ -19,6 +19,18 @@ from typing import Any, Protocol
 
 VALID_STORAGE_TIERS = frozenset({"logged", "unlogged"})
 VALID_BLOB_STATUSES = frozenset({"uploading", "ready", "failed"})
+MIN_CHUNK_SIZE = 65_536
+MAX_CHUNK_SIZE = 16_777_216
+
+
+def _freeze_storage_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType({k: _freeze_storage_value(v) for k, v in value.items()})
+    if isinstance(value, list | tuple):
+        return tuple(_freeze_storage_value(item) for item in value)
+    if isinstance(value, set | frozenset):
+        return frozenset(_freeze_storage_value(item) for item in value)
+    return value
 
 
 class StorageError(RuntimeError):
@@ -67,8 +79,11 @@ class KBBlob:
             raise ValueError("KBBlob.media_type is required")
         if self.byte_size < 0:
             raise ValueError("KBBlob.byte_size must be >= 0")
-        if self.chunk_size <= 0:
-            raise ValueError("KBBlob.chunk_size must be > 0")
+        if not (MIN_CHUNK_SIZE <= self.chunk_size <= MAX_CHUNK_SIZE):
+            raise ValueError(
+                f"KBBlob.chunk_size must be in [{MIN_CHUNK_SIZE}, {MAX_CHUNK_SIZE}], "
+                f"got {self.chunk_size}"
+            )
         if self.chunk_count < 0:
             raise ValueError("KBBlob.chunk_count must be >= 0")
         if self.storage_tier not in VALID_STORAGE_TIERS:
@@ -80,7 +95,7 @@ class KBBlob:
             raise ValueError(
                 f"KBBlob.status must be one of {sorted(VALID_BLOB_STATUSES)}, got {self.status!r}"
             )
-        object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
+        object.__setattr__(self, "metadata", _freeze_storage_value(dict(self.metadata)))
 
     @property
     def chunk_size_bytes(self) -> int:
@@ -107,19 +122,44 @@ class StoragePort(Protocol):
         """Store an in-memory object at `key` (or by its SHA-256 digest)."""
         ...
 
-    async def get(self, *, key: str, tenant_id: str = "default") -> bytes:
-        """Fetch the full object bytes at `key`. Raises BlobNotFoundError if missing."""
+    async def get(
+        self,
+        *,
+        key: str,
+        tenant_id: str = "default",
+        project_id: str | None = None,
+        max_bytes: int | None = None,
+    ) -> bytes:
+        """Fetch the object bytes at `key`. Raises BlobNotFoundError / BlobTooLargeError."""
         ...
 
-    async def delete(self, *, key: str, tenant_id: str = "default") -> None:
-        """Remove the object and its chunks at `key` within `tenant_id` (idempotent)."""
+    async def delete(
+        self,
+        *,
+        key: str,
+        tenant_id: str = "default",
+        project_id: str | None = None,
+    ) -> None:
+        """Remove the project association and/or object + chunks at `key` within `tenant_id`."""
         ...
 
-    async def exists(self, *, key: str, tenant_id: str = "default") -> bool:
+    async def exists(
+        self,
+        *,
+        key: str,
+        tenant_id: str = "default",
+        project_id: str | None = None,
+    ) -> bool:
         """Return True if a complete, non-truncated object exists at `key`."""
         ...
 
-    async def head(self, *, key: str, tenant_id: str = "default") -> KBBlob | None:
+    async def head(
+        self,
+        *,
+        key: str,
+        tenant_id: str = "default",
+        project_id: str | None = None,
+    ) -> KBBlob | None:
         """Return the KBBlob manifest (verifying chunk completeness) or None if missing."""
         ...
 
@@ -155,6 +195,7 @@ class StoragePort(Protocol):
         *,
         key: str,
         tenant_id: str = "default",
+        project_id: str | None = None,
         chunk_batch_size: int = 4,
     ) -> AsyncIterator[bytes]:
         """Stream chunks for `key` in bounded keyset batches with per-chunk SHA-256 verification."""
@@ -164,6 +205,8 @@ class StoragePort(Protocol):
         """Mark status='failed' on any 'ready' UNLOGGED blob truncated on crash."""
         ...
 
-    async def gc_orphan_chunks(self, *, older_than_seconds: int = 7200) -> int:
+    async def gc_orphan_chunks(
+        self, *, older_than_seconds: int = 7200, tenant_id: str | None = None
+    ) -> int:
         """Delete stale 'uploading'/'failed' manifests and orphan chunk rows."""
         ...

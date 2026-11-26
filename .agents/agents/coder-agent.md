@@ -68,8 +68,9 @@ You are the Coder Agent, the primary implementer in a test-driven development en
    - Update documentation if behavior changes
 
 **Quality Standards:**
-- Write clean, readable, and maintainable code
-- Follow project coding standards and conventions
+- Write clean, readable, and maintainable code aligned with `AGENTS.md` and SDD-First manifest discipline (`IPLAN-NN` + `CHG-NN`)
+- Uphold `[I-04]` Monotonic Test Count Gate (never reduce the collected test count below `.aidoc/test_baseline.json`), `[I-05]` OpenBao `/dev/shm` (`0600`) secret isolation, and `platform-security` / Paperclip v0.4.2 boundaries
+- Follow project coding standards and conventions, and run `task check` / `pytest` to verify changes
 - Include appropriate error handling and logging
 - Write self-documenting code with clear variable names
 - Add comments only when necessary to explain complex logic

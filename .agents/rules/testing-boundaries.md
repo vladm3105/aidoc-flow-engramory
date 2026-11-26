@@ -42,3 +42,11 @@ passed in fixture code, always use the double-comment format:
 The anti-gaming parser requires the `# reason:` explanation clause to permit the
 suppression.
 
+**Monotonic Test Count Gate (`[I-04]`) and Zero-Mock Database Boundary.**
+Never delete, skip (`pytest.skip` / `xfail`), or consolidate existing tests in a
+way that reduces the collected test count below the committed baseline in
+`.aidoc/test_baseline.json` (`verify_monotonic_test_count`). Database and SQL
+migration integration tests must execute against real PostgreSQL / PgBouncer
+containers (`platform-databases`, `db_svc_paperclip`, `db_svc_litellm`) rather
+than in-memory SQLite mocks.
+

@@ -49,7 +49,9 @@ When GitHub is in use, read back the relevant PR and issue state. Distinguish:
 - committed, pushed, merged, and deployed;
 - passing tests from tests not run;
 - verified facts from assumptions;
-- current-session changes from pre-existing worktree changes.
+- current-session changes from pre-existing worktree changes;
+- post-merge branch & worktree hygiene (`[I-02]`): if a PR was merged during the session, confirm the local base branch (`dev`/`main`) was fast-forwarded, any task worktree was removed first (`git worktree remove` before `git branch -D`), the merged local and remote feature branches were deleted, and remote-tracking refs were pruned (`git fetch --prune origin`);
+- documentation-first & SDD-first sync: confirm any code or architectural change in the session has corresponding updates in `docs/seed/`, `docs/sdd/`, or `watched_paths`-governed `docs/`, and that `docs-lint` and `docs-drift` pass (`git add -N .` before `docs-drift` if new files were created).
 
 Do not sweep unrelated changes into the wrap.
 
@@ -91,6 +93,8 @@ where the tracker is not GitHub issues.
 Update a changelog only when the repository declares one and the change meets
 its inclusion policy. Before writing memory, use `recall`; update an existing
 memory rather than creating a duplicate.
+
+When Paperclip tracks the active CHG/IPLAN execution: post a final execution notice (`aiops_paperclip_post_notice`), queue remaining discovered TODOs (`aiops_paperclip_queue_todo`), attach SHA-256 receipts (`aiops_paperclip_record_artifact`), update state (`aiops_paperclip_update`), distill the completed task history into Engramory (`aiops_task_distill_engramory` / `aiops-harness paperclip distill`), and run `aiops-harness audit-check --json` whenever `docs/audits/` changed.
 
 ## 5. Write the declared handoff
 

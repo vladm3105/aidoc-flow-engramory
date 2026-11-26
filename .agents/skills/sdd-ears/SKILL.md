@@ -6,9 +6,9 @@ description: >-
 
 # SDD EARS Author
 
-> Framework skill — routes to `framework/layers/03_EARS/EARS-TEMPLATE.yaml`
+> Framework skill — routes to `.aidoc/framework/framework/layers/03_EARS/EARS-TEMPLATE.yaml`
 > and `EARS_WORKFLOW_STANDARD.md` (entry gate GATE-03).
-> Paths below use `<skills-root>` = this `framework/skills/` directory.
+> Paths below use `<skills-root>` = `.agents/skills/` (framework root: `.aidoc/framework/framework/`).
 > Upstream: `sdd-prd` features are the input; no PRD, no EARS.
 
 ## 1. Enforce the syntactic invariant

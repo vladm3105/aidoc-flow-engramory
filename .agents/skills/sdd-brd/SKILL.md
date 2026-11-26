@@ -6,9 +6,9 @@ description: >-
 
 # SDD BRD Author
 
-> Framework skill — routes to `framework/layers/01_BRD/BRD-TEMPLATE.yaml`
+> Framework skill — routes to `.aidoc/framework/framework/layers/01_BRD/BRD-TEMPLATE.yaml`
 > and `BRD_WORKFLOW_STANDARD.md` (entry gate GATE-01).
-> Paths below use `<skills-root>` = this `framework/skills/` directory.
+> Paths below use `<skills-root>` = `.agents/skills/` (framework root: `.aidoc/framework/framework/`).
 
 ## 1. When this layer runs
 

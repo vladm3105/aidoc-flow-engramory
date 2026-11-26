@@ -1,7 +1,9 @@
-"""SecretsPort — read-only secret resolution.
+"""SecretsPort — read-only secret resolution interface.
 
-Dev: env / SOPS / Infisical. Cloud: Secret Manager / Key Vault. Resolved values never
-land in logs or the canonical store.
+Planned port interface: stage/dev currently consume secrets via OpenBao ``/dev/shm``
+ephemeral env injection and environment variables; dedicated OpenBao / Secret Manager
+/ Key Vault adapter implementations arrive under ``engramory.adapters``. Resolved
+values must never land in logs or the canonical store.
 """
 
 from __future__ import annotations

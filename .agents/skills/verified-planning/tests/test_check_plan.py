@@ -811,3 +811,486 @@ def test_prose_prefixed_citation_still_resolves(tmp_path):
     row = "| 1 | completion is logged | `task_completed` | see src/loop.py:11 in review |\n"
     r = _run(_plan(repo, row))
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+# --- Wave 2 (PLAN-050): Windows/POSIX path hardening + opt-in v2 convergence gate ---
+
+SHA_OK = "a" * 64
+SHA_ALT = "b" * 64
+SHA_ZERO = "0" * 64
+
+TASK_HDR = (
+    "## Task convergence\n\n"
+    "| Task ID | SHA-256 | P1 | P2 | P3 | P4 | Total | Status |\n"
+    "| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |\n"
+)
+
+
+def _v2_plan(
+    repo: Path,
+    task_rows: str,
+    *,
+    ledger_rows: str = GOOD_ROW,
+    review: str = REVIEW_OK,
+    directive: str = "<!-- plan-gate: v2 -->\n",
+    extra: str = "",
+    name: str = "PLAN-099_v2.md",
+) -> Path:
+    p = repo / name
+    p.write_text(directive + "\n" + LEDGER_HEADER + ledger_rows + "\n" + TASK_HDR + task_rows + "\n" + review + extra)
+    return p
+
+
+def test_windows_drive_relative_backtick_and_posix_root_citations_rejected(tmp_path):
+    repo = _repo(tmp_path)
+    for bad in (
+        "C:outside.txt:1",
+        "`C:outside.txt:1`",
+        "`C:\\src\\loop.py:11`",
+        "/outside.py:1",
+        "`/outside.py:1`",
+        "\\outside.py:1",
+        "see /my dir/f.py:1",
+        "\\\\server\\share\\secret.py:1",
+        "//server/share/secret.py:1",
+    ):
+        plan = _plan(repo, f"| 1 | bad path | `task_completed` | {bad} |\n")
+        r = _run(plan)
+        assert r.returncode == 1, f"expected failure for {bad}: {r.stdout}"
+        assert "is absolute" in r.stdout, f"expected 'is absolute' for {bad}: {r.stdout}"
+
+
+def test_relative_backslash_and_phase_colon_prose_resolve(tmp_path):
+    repo = _repo(tmp_path)
+    for good in (
+        "src\\loop.py:11",
+        "Phase A: src/loop.py:11",
+    ):
+        plan = _plan(repo, f"| 1 | good path | `task_completed` | {good} |\n")
+        r = _run(plan)
+        assert r.returncode == 0, f"expected pass for {good}: {r.stdout + r.stderr}"
+
+
+def test_v1_plan_quoting_v2_directive_in_prose_does_not_self_trigger(tmp_path):
+    repo = _repo(tmp_path)
+    p = repo / "PLAN-050_self.md"
+    p.write_text(
+        "<!-- plan-gate: v1 -->\n\n"
+        "- Mentions `<!-- plan-gate: v2 -->` in prose and inside a fence:\n\n"
+        "```markdown\n<!-- plan-gate: v2 -->\n## Review log\n```\n\n"
+        + LEDGER_HEADER
+        + GOOD_ROW
+        + "\n"
+        + REVIEW_OK
+    )
+    r = _run(p)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "health" not in r.stdout
+
+
+def test_conflicting_v1_and_v2_directives_fail(tmp_path):
+    repo = _repo(tmp_path)
+    p = _v2_plan(
+        repo,
+        f"| T1 | `{SHA_OK}` | 4.5 | 4.5 | 4.5 | 4.5 | 18.0 | LOCKED |\n",
+        directive="<!-- plan-gate: v1 -->\n<!-- plan-gate: v2 -->\n",
+    )
+    r = _run(p)
+    assert r.returncode == 1
+    assert "conflicting standalone" in r.stdout
+
+
+def test_v2_plan_without_ledger_or_review_is_not_skipped(tmp_path):
+    repo = _repo(tmp_path)
+    p = repo / "PLAN-099_empty_v2.md"
+    p.write_text("<!-- plan-gate: v2 -->\n# Empty v2 plan\n")
+    r = _run(p)
+    assert r.returncode == 1
+    assert "missing '## Claim ledger'" in r.stdout
+
+
+def test_v2_all_locked_passes_with_health_output(tmp_path):
+    repo = _repo(tmp_path)
+    p = _v2_plan(
+        repo,
+        f"| T1 | `{SHA_OK}` | 4.5 | 4.5 | 4.5 | 5.0 | 18.5 | LOCKED |\n",
+    )
+    r = _run(p)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "health 92.5%" in r.stdout
+
+
+def test_v2_cli_flag_activates_convergence_without_directive(tmp_path):
+    repo = _repo(tmp_path)
+    p = _v2_plan(
+        repo,
+        f"| T1 | `{SHA_OK}` | 4.0 | 4.0 | 4.0 | 4.0 | 16.0 | LOCKED |\n",
+        directive="# Plan\n",
+    )
+    assert _run(p).returncode == 0  # v1 ignores convergence table
+    r_v2 = _run("--v2", p)
+    assert r_v2.returncode == 0, r_v2.stdout
+    assert "health 80.0%" in r_v2.stdout
+
+
+def test_v2_non_ready_zero_findings_still_rejects_unlocked_tasks(tmp_path):
+    repo = _repo(tmp_path)
+    p = _v2_plan(
+        repo,
+        f"| T1 | `{SHA_OK}` | 4.0 | 4.0 | 4.0 | 4.0 | 16.0 | FIX |\n",
+        review=_review("**Result:** green"),
+    )
+    r = _run(p)
+    assert r.returncode == 1
+    assert "non-LOCKED" in r.stdout
+
+
+def test_v2_rejects_bad_hash_zero_hash_score_threshold_duplicate_and_empty(tmp_path):
+    repo = _repo(tmp_path)
+    bad_cases = [
+        ("", "has no rows"),
+        (f"| T1 | `{SHA_ZERO}` | 4.5 | 4.5 | 4.5 | 4.5 | 18.0 | LOCKED |\n", "all-zero"),
+        (f"| T1 | `{SHA_OK}` | 4.5 | 4.5 | 4.5 | 4.5 | 18.0 | LOCKED |\n| T1 | `{SHA_ALT}` | 4.5 | 4.5 | 4.5 | 4.5 | 18.0 | LOCKED |\n", "duplicate Task ID"),
+        (f"| T1 | `{SHA_OK}` | 4.0 | 4.0 | 4.0 | 3.5 | 15.5 | LOCKED |\n", "Total >= 16.0"),
+        (f"| T1 | `{SHA_OK}` | 5.0 | 5.0 | 5.0 | 2.0 | 17.0 | LOCKED |\n", ">= 2.5"),
+        (f"| T1 | `{SHA_OK}` | 4.5 | 4.5 | 4.5 | 4.5 | 19.0 | LOCKED |\n", "does not equal P1..P4 sum"),
+    ]
+    for rows, needle in bad_cases:
+        p = _v2_plan(repo, rows)
+        r = _run(p)
+        assert r.returncode == 1, f"expected fail for {needle}: {r.stdout}"
+        assert needle in r.stdout, f"missing {needle!r} in {r.stdout}"
+
+
+def test_v2_rejects_dual_task_convergence_and_task_scores_headings(tmp_path):
+    repo = _repo(tmp_path)
+    extra = (
+        "\n## Task scores\n\n"
+        "| Task ID | SHA-256 | P1 | P2 | P3 | P4 | Total | Status |\n"
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |\n"
+        f"| T2 | `{SHA_ALT}` | 1.0 | 1.0 | 1.0 | 1.0 | 4.0 | FIX |\n"
+    )
+    p = _v2_plan(
+        repo,
+        f"| T1 | `{SHA_OK}` | 4.5 | 4.5 | 4.5 | 4.5 | 18.0 | LOCKED |\n",
+        extra=extra,
+    )
+    r = _run(p)
+    assert r.returncode == 1
+    assert "duplicate" in r.stdout.lower()
+
+
+def test_v2_ignores_fenced_headers_and_fenced_ready_marker(tmp_path):
+    repo = _repo(tmp_path)
+    review_fenced = (
+        "## Review log\n\n"
+        "### Pass 1 - 2026-06-07\n- self.\n\n"
+        "### Pass 2 - 2026-06-07 - independent\n"
+        "```markdown\n**Result:** ready — no further findings.\n```\n"
+        "- open finding remains.\n"
+    )
+    p = _v2_plan(
+        repo,
+        f"| T1 | `{SHA_OK}` | 4.5 | 4.5 | 4.5 | 4.5 | 18.0 | LOCKED |\n",
+        review=review_fenced,
+    )
+    r = _run(p)
+    assert r.returncode == 1
+    assert "final Pass" in r.stdout
+
+
+def test_v2_pass4_cap_escalate_and_malformed_disposition_fail(tmp_path):
+    repo = _repo(tmp_path)
+    review_4 = (
+        "## Review log\n\n"
+        "### Pass 1 - 2026-06-07\n- self.\n\n"
+        "### Pass 2 - 2026-06-07 - independent\n- fix.\n\n"
+        "### Pass 3 - 2026-06-07 - independent\n- fix.\n\n"
+        "### Pass 4 - 2026-06-07 - independent\n- **Result:** ready — no further findings.\n"
+    )
+    r4 = _run(_v2_plan(repo, f"| T1 | `{SHA_OK}` | 4.5 | 4.5 | 4.5 | 4.5 | 18.0 | LOCKED |\n", review=review_4))
+    assert r4.returncode == 1 and "3 passes max" in r4.stdout
+
+    review_esc = (
+        "## Review log\n\n"
+        "### Pass 1 - 2026-06-07\n- self.\n\n"
+        "### Pass 2 - 2026-06-07 - independent\n"
+        "**Disposition:** ESCALATE\n"
+        "**Result:** ready — no further findings.\n"
+    )
+    resc = _run(_v2_plan(repo, f"| T1 | `{SHA_OK}` | 4.5 | 4.5 | 4.5 | 4.5 | 18.0 | LOCKED |\n", review=review_esc))
+    assert resc.returncode == 1 and "ESCALATE" in resc.stdout
+
+    for bad_disp in ("**Disposition:** DEFER", "**Disposition:** SPLIT_TO_CHAIN (CHG-0)", "**Disposition:** SPLIT_TO_CHAIN"):
+        rev_bad = (
+            "## Review log\n\n### Pass 1 - 2026-06-07\n- self.\n\n"
+            f"### Pass 2 - 2026-06-07 - independent\n{bad_disp}\n**Result:** ready\n"
+        )
+        rbad = _run(_v2_plan(repo, f"| T1 | `{SHA_OK}` | 4.5 | 4.5 | 4.5 | 4.5 | 18.0 | LOCKED |\n", review=rev_bad))
+        assert rbad.returncode == 1 and "invalid '**Disposition:**'" in rbad.stdout
+
+
+def test_v2_split_to_chain_passes_and_stale_zeros_health(tmp_path):
+    repo = _repo(tmp_path)
+    review_split = (
+        "## Review log\n\n"
+        "### Pass 1 - 2026-06-07\n- self.\n\n"
+        "### Pass 2 - 2026-06-07 - independent\n"
+        "- Task T2 became STALE; splitting chain under CHG-28.\n"
+        "**Disposition:** SPLIT_TO_CHAIN (CHG-28)\n"
+    )
+    rows = (
+        f"| T1 | `{SHA_OK}` | 4.5 | 4.5 | 4.5 | 4.5 | 18.0 | LOCKED |\n"
+        f"| T2 | `{SHA_ALT}` | 4.5 | 4.5 | 4.5 | 4.5 | 18.0 | STALE |\n"
+    )
+    r = _run(_v2_plan(repo, rows, review=review_split))
+    assert r.returncode == 0, r.stdout + r.stderr
+    # T1 = 90.0%, T2 (STALE) = 0.0% => average 45.0%
+    assert "health 45.0%" in r.stdout
+
+
+def test_init_v1_unchanged_and_init_v2_scaffolds_convergence(tmp_path):
+    repo = _repo(tmp_path)
+    p1 = repo / "PLAN-010_v1.md"
+    p1.write_text("# Plan v1\n")
+    r1 = _run("--init", p1)
+    assert r1.returncode == 0
+    txt1 = p1.read_text()
+    assert "## Claim ledger" in txt1 and "## Review log" in txt1
+    assert "## Task convergence" not in txt1
+    assert "plan-gate-v2-snippet" not in txt1
+
+    p2 = repo / "PLAN-011_v2.md"
+    p2.write_text("# Plan v2\n")
+    r2 = _run("--init", "--v2", p2)
+    assert r2.returncode == 0
+    txt2 = p2.read_text()
+    assert txt2.startswith("<!-- plan-gate: v2 -->")
+    assert "## Claim ledger" in txt2 and "## Task convergence" in txt2 and "## Review log" in txt2
+
+
+def test_v2_split_to_chain_accepts_zero_padded_and_rejects_zero(tmp_path):
+    repo = _repo(tmp_path)
+    rows = (
+        f"| T1 | `{SHA_OK}` | 4.5 | 4.5 | 4.5 | 4.5 | 18.0 | LOCKED |\n"
+        f"| T2 | `{SHA_ALT}` | 4.5 | 4.5 | 4.5 | 4.5 | 18.0 | STALE |\n"
+    )
+    for chg_id in ("CHG-01", "CHG-09", "CHG-10"):
+        rev = (
+            "## Review log\n\n"
+            "### Pass 1 - 2026-06-07\n- self.\n\n"
+            "### Pass 2 - 2026-06-07 - independent\n"
+            f"- Splitting under {chg_id}.\n"
+            f"**Disposition:** SPLIT_TO_CHAIN ({chg_id})\n"
+        )
+        r = _run(_v2_plan(repo, rows, review=rev))
+        assert r.returncode == 0, f"{chg_id}: {r.stdout} {r.stderr}"
+
+    for bad_chg in ("CHG-0", "CHG-00"):
+        rev_bad = (
+            "## Review log\n\n"
+            "### Pass 1 - 2026-06-07\n- self.\n\n"
+            "### Pass 2 - 2026-06-07 - independent\n"
+            f"**Disposition:** SPLIT_TO_CHAIN ({bad_chg})\n"
+            "**Result:** ready\n"
+        )
+        r_bad = _run(_v2_plan(repo, f"| T1 | `{SHA_OK}` | 4.5 | 4.5 | 4.5 | 4.5 | 18.0 | LOCKED |\n", review=rev_bad))
+        assert r_bad.returncode == 1 and "invalid '**Disposition:**'" in r_bad.stdout
+
+
+def test_v2_duplicate_task_row_does_not_skew_non_locked_attribution(tmp_path):
+    repo = _repo(tmp_path)
+    rows = (
+        f"| T1 | `{SHA_OK}` | 4.5 | 4.5 | 4.5 | 4.5 | 18.0 | LOCKED |\n"
+        f"| T1 | `{SHA_OK}` | 4.5 | 4.5 | 4.5 | 4.5 | 18.0 | LOCKED |\n"
+        f"| T2 | `{SHA_ALT}` | 4.5 | 4.5 | 4.5 | 4.5 | 18.0 | DRAFT |\n"
+    )
+    r = _run(_v2_plan(repo, rows))
+    assert r.returncode == 1
+    assert "duplicate Task ID 'T1'" in r.stdout
+    assert "non-LOCKED task(s) ['T2']" in r.stdout
+    assert "['T1']" not in r.stdout
+
+
+def test_init_v2_preserves_fenced_v1_directive(tmp_path):
+    repo = _repo(tmp_path)
+    fenced_sample = (
+        "# Plan\n\n"
+        "```markdown\n"
+        "<!-- plan-gate: v1 -->\n"
+        "```\n"
+    )
+    p = repo / "PLAN-012_fenced_v1.md"
+    p.write_text(fenced_sample)
+    r = _run("--init", "--v2", p)
+    assert r.returncode == 0, r.stdout + r.stderr
+    out = p.read_text()
+    assert out.startswith("<!-- plan-gate: v2 -->")
+    assert "```markdown\n<!-- plan-gate: v1 -->\n```" in out
+
+
+# --- PLAN-052: Prompt-to-code promotion (D1..D4) & PROBE[link0]/PROBE[experiment] sub-typing ---
+
+
+def test_v2_scorecard_validation_passes_and_rejects_bad_total_floor_or_sum(tmp_path):
+    repo = _repo(tmp_path)
+    good_scorecard = (
+        "\n## Architecture Decision Scorecard (100-Point Model)\n\n"
+        "| Pillar | Max Pts | Option A *(Selected)* | Option B | Min Bar (50%) |\n"
+        "|---|:---:|:---:|:---:|:---:|\n"
+        "| **1. Security** | 25 | **24** *(Good)* | 10 | 12.5 |\n"
+        "| **2. Reliability** | 25 | **24** *(Good)* | 10 | 12.5 |\n"
+        "| **3. Operational Excellence** | 20 | **19** *(Good)* | 10 | 10.0 |\n"
+        "| **4. Developer DX** | 15 | **14** *(Good)* | 10 | 7.5 |\n"
+        "| **5. Performance** | 15 | **15** *(Good)* | 10 | 7.5 |\n"
+        "| **TOTAL SCORE** | **100** | **96 / 100 (`READY`)** | 50 / 100 | >= 80 |\n"
+    )
+    p_ok = _v2_plan(
+        repo,
+        f"| T1 | `{SHA_OK}` | 4.5 | 4.5 | 4.5 | 4.5 | 18.0 | LOCKED |\n",
+        extra=good_scorecard,
+    )
+    assert _run(p_ok).returncode == 0
+
+    # Pillar floor violation (< 50% of 25 = 12.5)
+    bad_floor = good_scorecard.replace("**24** *(Good)* | 10 | 12.5 |\n| **2.", "**11** *(Low)* | 10 | 12.5 |\n| **2.").replace(
+        "**96 / 100", "**83 / 100"
+    )
+    r_floor = _run(_v2_plan(repo, f"| T1 | `{SHA_OK}` | 4.5 | 4.5 | 4.5 | 4.5 | 18.0 | LOCKED |\n", extra=bad_floor))
+    assert r_floor.returncode == 1 and "50% minimum floor" in r_floor.stdout
+
+    # Sum mismatch
+    bad_sum = good_scorecard.replace("**96 / 100", "**91 / 100")
+    r_sum = _run(_v2_plan(repo, f"| T1 | `{SHA_OK}` | 4.5 | 4.5 | 4.5 | 4.5 | 18.0 | LOCKED |\n", extra=bad_sum))
+    assert r_sum.returncode == 1 and "does not equal 5-pillar sum" in r_sum.stdout
+
+    # Total below 80.0
+    bad_tot = (
+        "\n## Architecture Decision Scorecard\n\n"
+        "| Pillar | Max Pts | Option A *(Selected)* |\n"
+        "|---|---:|---:|\n"
+        "| 1. Security | 25 | 15 |\n"
+        "| 2. Reliability | 25 | 15 |\n"
+        "| 3. Ops | 20 | 15 |\n"
+        "| 4. DX | 15 | 15 |\n"
+        "| 5. Perf | 15 | 15 |\n"
+        "| TOTAL SCORE | 100 | 75 / 100 |\n"
+    )
+    r_tot = _run(_v2_plan(repo, f"| T1 | `{SHA_OK}` | 4.5 | 4.5 | 4.5 | 4.5 | 18.0 | LOCKED |\n", extra=bad_tot))
+    assert r_tot.returncode == 1 and "below passing threshold 80.0" in r_tot.stdout
+
+
+def test_v2_open_questions_matrix_validation_passes_and_rejects_bad_count_math_or_selection(tmp_path):
+    repo = _repo(tmp_path)
+    good_oq = (
+        "\n## Tier-1 Open Questions\n\n"
+        "| # | Option | 1. Arch & EaC | 2. Security & Blast | 3. User / Agent DX | 4. Platform Owner Ops | **Composite** |\n"
+        "|---|---|:---:|:---:|:---:|:---:|:---:|\n"
+        "| **1** | **(Selected) Option 1** | **5.0** | **5.0** | **4.8** | **4.8** | **4.90 / 5.00** |\n"
+        "| **2** | Option 2 | 3.0 | 3.0 | 3.0 | 3.0 | **3.00 / 5.00** |\n"
+        "| **3** | Option 3 | 2.0 | 2.0 | 2.0 | 2.0 | **2.00 / 5.00** |\n"
+    )
+    r_ok = _run(_v2_plan(repo, f"| T1 | `{SHA_OK}` | 4.5 | 4.5 | 4.5 | 4.5 | 18.0 | LOCKED |\n", extra=good_oq))
+    assert r_ok.returncode == 0, r_ok.stdout
+
+    # Fewer than 3 options
+    two_opts = "\n".join(good_oq.splitlines()[:-1]) + "\n"
+    r_two = _run(_v2_plan(repo, f"| T1 | `{SHA_OK}` | 4.5 | 4.5 | 4.5 | 4.5 | 18.0 | LOCKED |\n", extra=two_opts))
+    assert r_two.returncode == 1 and "requires at least 3 options" in r_two.stdout
+
+    # Selected option is not highest composite
+    wrong_sel = good_oq.replace("(Selected) Option 1", "Option 1").replace("Option 2", "(Selected) Option 2")
+    r_sel = _run(_v2_plan(repo, f"| T1 | `{SHA_OK}` | 4.5 | 4.5 | 4.5 | 4.5 | 18.0 | LOCKED |\n", extra=wrong_sel))
+    assert r_sel.returncode == 1 and "is less than highest composite" in r_sel.stdout
+
+
+def test_internal_references_alphanumeric_labels_inline_backticks_duplicate_id_dangling_claim_and_new_at_pass(tmp_path):
+    repo = _repo(tmp_path)
+    # Alphanumeric row labels (3b, 4) + inline-backticked `Claim 99` must pass cleanly
+    rows_alpha = (
+        "| 3 | base claim | `task_completed` | src/loop.py:11 |\n"
+        "| 3b | sub claim [NEW@pass2] | `task_completed` | src/loop.py:11 |\n"
+        "| 4 | next claim | `task_completed` | src/loop.py:11 |\n"
+    )
+    prose_safe = "\nSee Claim 3, Claim 3b, and Claim 4 (ignoring inline literal `Claim 99`).\n"
+    r_alpha = _run(
+        _v2_plan(
+            repo,
+            f"| T1 | `{SHA_OK}` | 4.5 | 4.5 | 4.5 | 4.5 | 18.0 | LOCKED |\n",
+            ledger_rows=rows_alpha,
+            extra=prose_safe,
+        )
+    )
+    assert r_alpha.returncode == 0, r_alpha.stdout
+
+    # Duplicate numbered row ID + dangling un-backticked Claim 77 + out-of-range NEW@pass5 fail in v2
+    rows_bad = (
+        "| 1 | first | `task_completed` | src/loop.py:11 |\n"
+        "| 1 | duplicate [NEW@pass5] | `task_completed` | src/loop.py:11 |\n"
+    )
+    r_bad = _run(
+        _v2_plan(
+            repo,
+            f"| T1 | `{SHA_OK}` | 4.5 | 4.5 | 4.5 | 4.5 | 18.0 | LOCKED |\n",
+            ledger_rows=rows_bad,
+            extra="\nBody cites Claim 77 in prose.\n",
+        )
+    )
+    assert r_bad.returncode == 1
+    assert "duplicate row ID '1'" in r_bad.stdout
+    assert "Claim 77" in r_bad.stdout
+    assert "NEW@pass5 exceeds Review log pass count" in r_bad.stdout
+
+
+def test_probe_subtypes_link0_vs_experiment_and_v2_task_probe_coherence(tmp_path):
+    repo = _repo(tmp_path)
+    # PROBE[link0] with valid read-only command passes; PROBE[experiment] with curl passes
+    rows_ok = (
+        GOOD_ROW
+        + "| 2 | local test check — blocks Phase A | `n/a` | PROBE[link0]: pytest -q |\n"
+        + "| 3 | live api check — blocks Phase B | `n/a` | PROBE[experiment]: curl https://example.com |\n"
+    )
+    r_ok = _run(_plan(repo, rows_ok, review=REVIEW_OK + PHASES))
+    assert r_ok.returncode == 0, r_ok.stdout
+
+    # PROBE[link0] with non-sandboxed command or shell meta fails at Stage 1
+    rows_bad_link0 = "| 1 | bad link0 — blocks Phase A | `n/a` | PROBE[link0]: curl https://example.com |\n"
+    r_bad_link0 = _run(_plan(repo, rows_bad_link0, review=REVIEW_OK + PHASES))
+    assert r_bad_link0.returncode == 1 and "violates Link-0 read-only sandbox" in r_bad_link0.stdout
+
+    # v2 Task convergence Status = PROBE backed by an experiment command fails cross-table check
+    rows_exp = "| 1 | TASK-1 live probe — blocks Phase A | `n/a` | PROBE[experiment]: curl https://example.com |\n"
+    rev_split = (
+        "## Review log\n\n### Pass 1 - 2026-11-21\n- self\n\n"
+        "### Pass 2 - 2026-11-21 - independent\n**Disposition:** SPLIT_TO_CHAIN (CHG-30)\n"
+        + PHASES
+    )
+    r_cross = _run(
+        _v2_plan(
+            repo,
+            f"| TASK-1 | `{SHA_OK}` | 4.5 | 4.5 | 4.5 | 4.5 | 18.0 | PROBE |\n",
+            ledger_rows=rows_exp,
+            review=rev_split,
+        )
+    )
+    assert r_cross.returncode == 1 and "cannot be backed by non-sandboxed Claim-ledger probe" in r_cross.stdout
+
+
+def test_hash_tasks_cli_and_section_excluded_body_hash_enforcement(tmp_path):
+    repo = _repo(tmp_path)
+    body_phase = "\n## Execution\n\n### Phase 1: Do Work (`TASK-1`)\n1. Implement feature.\n"
+    p = _v2_plan(
+        repo,
+        f"| TASK-1 | `{SHA_OK}` | 4.5 | 4.5 | 4.5 | 4.5 | 18.0 | LOCKED |\n",
+        extra=body_phase,
+    )
+    # Wrong SHA-256 fails when TASK-1 has a body definition
+    r_fail = _run(p)
+    assert r_fail.returncode == 1 and "does not match body task digest" in r_fail.stdout
+
+    # --hash-tasks --fix rewrites the table with the deterministic digest and passes
+    r_fix = _run("--hash-tasks", "--fix", p)
+    assert r_fix.returncode == 0, r_fix.stdout
+    assert "updated 1 task SHA-256 digest(s)" in r_fix.stdout
+    assert _run(p).returncode == 0
+

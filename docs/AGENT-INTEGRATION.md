@@ -115,3 +115,10 @@ The Operations Assistant (Virtual CTO / fleet orchestrator) runs with broader sc
 ### Trust Boundary
 
 The CLI trusts `.engramory/config.toml` identity **only** in the dev tier (`ENGRAMORY_PROFILE=dev`; anything else exits 2 per ADR-10). Every call is authorized default-deny, audited, and fails closed — a denial (exit 1) is the authorization boundary working, not an error to work around.
+
+### Security Gate Revocation Polling
+
+When `SECURITY_GATE_URL` is configured, MCP token verification polls `GET /v1/gate/revocations` and fails closed on unreachable or invalid responses.
+
+- **Service credential (`SECURITY_GATE_TOKEN` / `bearer_token`):** An explicit `bearer_token` argument takes precedence over the `SECURITY_GATE_TOKEN` environment variable (any leading `Bearer` prefix is stripped case-insensitively). Blank or unset values omit the `Authorization` header (client OIDC JWTs are never forwarded).
+- **Transport security:** Whenever an `Authorization: Bearer` header is attached, the target MUST use `https://` over TCP or a Unix-domain socket (`unix://` or `http+unix://`, such as `unix:///run/platform-security/gate.sock`). Credential-bearing requests over plaintext `http://` TCP are rejected before cache lookup or network I/O.

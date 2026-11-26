@@ -2,12 +2,12 @@ import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 
 // Astro Starlight + Scalar Interactive Contract Portal (MIT)
-// Bound to stage host loopback 127.0.0.1:8005 / container gateway 10.250.0.1:8000
+// Local dev/preview bound to loopback 127.0.0.1:4321 (stage MCP occupies 127.0.0.1:8005)
 export default defineConfig({
   site: "https://docs.int.aiops-flow.io",
   server: {
     host: "127.0.0.1",
-    port: 8005,
+    port: 4321,
   },
   integrations: [
     starlight({
@@ -17,15 +17,15 @@ export default defineConfig({
       sidebar: [
         {
           label: "Architecture & Specifications",
-          autogenerate: { directory: "reference" },
+          items: [{ autogenerate: { directory: "reference" } }],
         },
         {
           label: "Operational Runbooks",
-          autogenerate: { directory: "runbooks" },
+          items: [{ autogenerate: { directory: "runbooks" } }],
         },
         {
           label: "API & FastMCP Reference",
-          autogenerate: { directory: "contracts" },
+          items: [{ autogenerate: { directory: "contracts" } }],
         },
       ],
     }),

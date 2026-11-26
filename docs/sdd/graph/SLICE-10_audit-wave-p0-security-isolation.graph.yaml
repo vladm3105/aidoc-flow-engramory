@@ -1,0 +1,353 @@
+# SLICE-10_audit-wave-p0-security-isolation.graph.yaml — Layer 08 Graph Slice
+
+schema_version: 2.0-graph
+slice_id: IPLAN-10_audit-wave-p0-security-isolation
+initiative_ref: INIT-10_audit-wave-p0-security-isolation
+metadata:
+  author: Antigravity + Operator
+  created_date: '2026-11-21'
+  last_updated: '2026-11-21'
+  status: Completed
+  framework_version: 0.96.25
+  description: Machine-executable DAG and SAGA rollback for PLAN-026 Wave P0 (CHG-010, C1-C8 + H9)
+  layer: 08_IPLAN
+  flow: sdd_to_code
+  flow_code: SDD2C
+  tdd_consistency:
+    status: complete
+    coverage_percentage: 100
+nodes:
+- id: CHG-010
+  type: change_request
+  title: "Wave P0 Audit Remediation — Security, Tenant RLS, Scope Isolation & FastAPI MCP (PLAN-026 TASK-1)"
+  properties:
+    change_level: C2
+    flow_code: SDD2C
+    status: Completed
+    execution_status: DONE
+    files_to_touch:
+    - db/migrations/0004_ambient_gateway_view.sql
+    - db/migrations/0005_pin_embeddings_hnsw.sql
+    - db/migrations/0006_resize_embeddings_1536.sql
+    - db/migrations/0011_wave_p0_isolation_and_rls.sql
+    - db/migrations/down/0011_wave_p0_isolation_and_rls.sql
+    - docs/ARCHITECTURE.md
+    - docs/MULTIMODAL_AND_POSTGRES_BLOB_STORAGE.md
+    - docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md
+    - docs/archive/CHG-010/EARS-01_engramory_core_v1.0.yaml
+    - docs/archive/CHG-010/SPEC-01_access_surface_v1.1.yaml
+    - docs/archive/CHG-010/SPEC-02_memory_store_v1.0.yaml
+    - docs/archive/CHG-010/SPEC-04_distillation_engine_v1.0.yaml
+    - docs/archive/CHG-010/SPEC-06_ports_portability_v1.0.yaml
+    - docs/archive/CHG-010/TDD-04_distillation_engine_v1.0.yaml
+    - docs/doc-tools/00_INDEX.md
+    - docs/doc-tools/03_LINTING_GATES_AND_DRIFT_ENGINE.md
+    - docs/doc-tools/07_PORTAL_API_CONTRACTS_AND_DEPLOYMENT_RUNBOOK.md
+    - docs/doc-tools/10_DOCUMENTATION_TOOLS_TECHNICAL_REFERENCE.md
+    - docs/sdd/03_EARS/EARS-01_engramory_core.yaml
+    - docs/sdd/06_SPEC/SPEC-01_access_surface.yaml
+    - docs/sdd/06_SPEC/SPEC-02_memory_store.yaml
+    - docs/sdd/06_SPEC/SPEC-04_distillation_engine.yaml
+    - docs/sdd/06_SPEC/SPEC-06_ports_portability.yaml
+    - docs/sdd/07_TDD/TDD-04_distillation_engine.yaml
+    - docs/sdd/08_IPLAN/IPLAN-00_index.yaml
+    - docs/sdd/08_IPLAN/IPLAN-10_audit-wave-p0-security-isolation.swf.yaml
+    - docs/sdd/09_CHG/CHG-010_audit-wave-p0-security-isolation.yaml
+    - docs/sdd/graph/SLICE-10_audit-wave-p0-security-isolation.graph.yaml
+    - plans/PLAN-025_paperclip-centralized-backlog-and-audit-governance.md
+    - pyproject.toml
+    - src/engramory/access/jwt_auth.py
+    - src/engramory/access/poisoning_guard.py
+    - src/engramory/access/surface.py
+    - src/engramory/adapters/dev/graph_neo4j.py
+    - src/engramory/adapters/dev/storage_pg.py
+    - src/engramory/adapters/dev/vector_pg.py
+    - src/engramory/cli.py
+    - src/engramory/core/chunking.py
+    - src/engramory/core/docs_tools.py
+    - src/engramory/core/git_sync.py
+    - src/engramory/core/kb_graph.py
+    - src/engramory/core/knowledge.py
+    - src/engramory/core/models.py
+    - src/engramory/core/portal_builder.py
+    - src/engramory/core/repository.py
+    - src/engramory/mcp/server.py
+    - src/engramory/ports/graph.py
+    - src/engramory/ports/vector.py
+    - src/engramory/workers/distillation.py
+    - src/engramory/workers/graph_projection.py
+    - tests/conformance/test_adapters.py
+    - tests/conftest.py
+    - tests/integration/test_access_surface.py
+    - tests/integration/test_adr_knowledge_graph.py
+    - tests/integration/test_distillation_embedding.py
+    - tests/integration/test_doc_ingest.py
+    - tests/integration/test_multiproject_sdd.py
+    - tests/integration/test_repository.py
+    - tests/security/test_wave_p0_security_remediation.py
+    - tests/test_docs_tools.py
+    - tests/test_migrations.py
+    - tests/test_plan017_remediation.py
+    - tests/test_storage_pg_blob_cas.py
+    - tests/test_virtual_employee_lifecycle.py
+    - tests/unit/test_graph_neo4j.py
+    - tests/unit/test_jwt_auth.py
+    - tests/unit/test_mcp_server.py
+    - uv.lock
+- id: TDD.04.04.c200
+  type: test_fixture
+  title: Wave P0 Security & Tenant Isolation Regression Suite
+  properties:
+    test_file: tests/security/test_wave_p0_security_remediation.py
+- id: TASK.08.10.a001
+  type: task_action
+  title: "Phase 0: SDD2C Baseline (EARS/SPEC/TDD, CHG-010, IPLAN-10, SLICE-10)"
+  action: apply_patch
+  target_file: docs/sdd/08_IPLAN/IPLAN-10_audit-wave-p0-security-isolation.swf.yaml
+  target_files: &id001
+  - docs/sdd/03_EARS/EARS-01_engramory_core.yaml
+  - docs/archive/CHG-010/EARS-01_engramory_core_v1.0.yaml
+  - docs/sdd/06_SPEC/SPEC-01_access_surface.yaml
+  - docs/sdd/06_SPEC/SPEC-02_memory_store.yaml
+  - docs/sdd/06_SPEC/SPEC-04_distillation_engine.yaml
+  - docs/sdd/06_SPEC/SPEC-06_ports_portability.yaml
+  - docs/archive/CHG-010/SPEC-01_access_surface_v1.1.yaml
+  - docs/archive/CHG-010/SPEC-02_memory_store_v1.0.yaml
+  - docs/archive/CHG-010/SPEC-04_distillation_engine_v1.0.yaml
+  - docs/archive/CHG-010/SPEC-06_ports_portability_v1.0.yaml
+  - docs/sdd/07_TDD/TDD-04_distillation_engine.yaml
+  - docs/archive/CHG-010/TDD-04_distillation_engine_v1.0.yaml
+  - docs/sdd/08_IPLAN/IPLAN-00_index.yaml
+  - docs/sdd/08_IPLAN/IPLAN-10_audit-wave-p0-security-isolation.swf.yaml
+  - docs/sdd/09_CHG/CHG-010_audit-wave-p0-security-isolation.yaml
+  - docs/sdd/graph/SLICE-10_audit-wave-p0-security-isolation.graph.yaml
+  command: uv --project ${AIOPS_HARNESS_ROOT} run aiops-harness chg verify docs/sdd/09_CHG/CHG-010_audit-wave-p0-security-isolation.yaml
+  compensation: git checkout b760e3a -- docs/sdd/
+  properties:
+    session: 1
+    execution_status: DONE
+    target_files: *id001
+- id: TASK.08.10.a001_rollback
+  type: task_action
+  title: Rollback Phase 0 SDD Baseline
+  action: run_script
+  target_file: docs/sdd/08_IPLAN/IPLAN-10_audit-wave-p0-security-isolation.swf.yaml
+  target_files: *id001
+  command: git checkout b760e3a -- docs/sdd/
+  properties:
+    saga_step: compensate_task_a001
+- id: TASK.08.10.a002
+  type: task_action
+  title: "Phase 1: Dependencies & RLS Migration 0011 (+ 0004-0006 Idempotency)"
+  action: apply_patch
+  target_file: db/migrations/0011_wave_p0_isolation_and_rls.sql
+  target_files: &id002
+  - db/migrations/0004_ambient_gateway_view.sql
+  - db/migrations/0005_pin_embeddings_hnsw.sql
+  - db/migrations/0006_resize_embeddings_1536.sql
+  - db/migrations/0011_wave_p0_isolation_and_rls.sql
+  - db/migrations/down/0011_wave_p0_isolation_and_rls.sql
+  - pyproject.toml
+  - uv.lock
+  depends_on:
+  - TASK.08.10.a001
+  command: uv run --extra dev pytest -q tests/test_migrations.py
+  compensation: git checkout b760e3a -- db/migrations/ pyproject.toml uv.lock && rm -f db/migrations/0011_wave_p0_isolation_and_rls.sql db/migrations/down/0011_wave_p0_isolation_and_rls.sql
+  properties:
+    session: 1
+    execution_status: DONE
+    target_files: *id002
+- id: TASK.08.10.a002_rollback
+  type: task_action
+  title: Rollback Phase 1 Migrations & Deps
+  action: run_script
+  target_file: db/migrations/0011_wave_p0_isolation_and_rls.sql
+  target_files: *id002
+  command: git checkout b760e3a -- db/migrations/ pyproject.toml uv.lock && rm -f db/migrations/0011_wave_p0_isolation_and_rls.sql db/migrations/down/0011_wave_p0_isolation_and_rls.sql
+  properties:
+    saga_step: compensate_task_a002
+- id: TASK.08.10.a003
+  type: task_action
+  title: "Phase 2: Data, RLS, Scope & Graph/Vector Isolation (C1-C5, H9)"
+  action: apply_patch
+  target_file: src/engramory/core/repository.py
+  target_files: &id003
+  - src/engramory/access/surface.py
+  - src/engramory/adapters/dev/graph_neo4j.py
+  - src/engramory/adapters/dev/storage_pg.py
+  - src/engramory/adapters/dev/vector_pg.py
+  - src/engramory/core/chunking.py
+  - src/engramory/core/kb_graph.py
+  - src/engramory/core/models.py
+  - src/engramory/core/repository.py
+  - src/engramory/ports/graph.py
+  - src/engramory/ports/vector.py
+  - src/engramory/workers/distillation.py
+  - src/engramory/workers/graph_projection.py
+  depends_on:
+  - TASK.08.10.a002
+  command: uv run --extra dev ruff check src tests
+  compensation: git checkout b760e3a -- src/engramory/
+  properties:
+    session: 1
+    execution_status: DONE
+    target_files: *id003
+- id: TASK.08.10.a003_rollback
+  type: task_action
+  title: Rollback Phase 2 Data & Scope Isolation
+  action: run_script
+  target_file: src/engramory/core/repository.py
+  target_files: *id003
+  command: git checkout b760e3a -- src/engramory/
+  properties:
+    saga_step: compensate_task_a003
+- id: TASK.08.10.a004
+  type: task_action
+  title: "Phase 3: Sandboxing (C6), Symlink/Poisoning Guards (C8), FastAPI MCP & OIDC (C7)"
+  action: apply_patch
+  target_file: src/engramory/mcp/server.py
+  target_files: &id004
+  - src/engramory/access/jwt_auth.py
+  - src/engramory/access/poisoning_guard.py
+  - src/engramory/cli.py
+  - src/engramory/core/docs_tools.py
+  - src/engramory/core/git_sync.py
+  - src/engramory/core/knowledge.py
+  - src/engramory/core/portal_builder.py
+  - src/engramory/mcp/server.py
+  depends_on:
+  - TASK.08.10.a003
+  command: uv run --extra dev mypy src
+  compensation: git checkout b760e3a -- src/engramory/
+  properties:
+    session: 1
+    execution_status: DONE
+    target_files: *id004
+- id: TASK.08.10.a004_rollback
+  type: task_action
+  title: Rollback Phase 3 Sandboxing & FastAPI MCP
+  action: run_script
+  target_file: src/engramory/mcp/server.py
+  target_files: *id004
+  command: git checkout b760e3a -- src/engramory/
+  properties:
+    saga_step: compensate_task_a004
+- id: TASK.08.10.a005
+  type: task_action
+  title: "Phase 4: Docs Sync, Security Suite & Full Wave P0 Verification"
+  action: apply_patch
+  target_file: tests/security/test_wave_p0_security_remediation.py
+  target_files: &id005
+  - docs/ARCHITECTURE.md
+  - docs/MULTIMODAL_AND_POSTGRES_BLOB_STORAGE.md
+  - docs/VIRTUAL_EMPLOYEE_ARCHITECTURE.md
+  - docs/doc-tools/00_INDEX.md
+  - docs/doc-tools/03_LINTING_GATES_AND_DRIFT_ENGINE.md
+  - docs/doc-tools/07_PORTAL_API_CONTRACTS_AND_DEPLOYMENT_RUNBOOK.md
+  - docs/doc-tools/10_DOCUMENTATION_TOOLS_TECHNICAL_REFERENCE.md
+  - plans/PLAN-025_paperclip-centralized-backlog-and-audit-governance.md
+  - tests/conformance/test_adapters.py
+  - tests/conftest.py
+  - tests/integration/test_access_surface.py
+  - tests/integration/test_adr_knowledge_graph.py
+  - tests/integration/test_distillation_embedding.py
+  - tests/integration/test_doc_ingest.py
+  - tests/integration/test_multiproject_sdd.py
+  - tests/integration/test_repository.py
+  - tests/security/test_wave_p0_security_remediation.py
+  - tests/test_docs_tools.py
+  - tests/test_migrations.py
+  - tests/test_plan017_remediation.py
+  - tests/test_storage_pg_blob_cas.py
+  - tests/test_virtual_employee_lifecycle.py
+  - tests/unit/test_graph_neo4j.py
+  - tests/unit/test_jwt_auth.py
+  - tests/unit/test_mcp_server.py
+  depends_on:
+  - TASK.08.10.a004
+  command: uv run --extra dev pytest -q tests/security/test_wave_p0_security_remediation.py
+  compensation: git checkout b760e3a -- docs/ tests/
+  properties:
+    session: 1
+    execution_status: DONE
+    target_files: *id005
+- id: TASK.08.10.a005_rollback
+  type: task_action
+  title: Rollback Phase 4 Docs & Tests
+  action: run_script
+  target_file: tests/security/test_wave_p0_security_remediation.py
+  target_files: *id005
+  command: git checkout b760e3a -- docs/ tests/
+  properties:
+    saga_step: compensate_task_a005
+edges:
+- from: CHG-010
+  to: TASK.08.10.a001
+  relation: authorized_by
+  notes: CHG-010 authorizes Phase 0 SDD baseline
+- from: CHG-010
+  to: TASK.08.10.a002
+  relation: authorized_by
+  notes: CHG-010 authorizes Phase 1 dependencies and migrations
+- from: CHG-010
+  to: TASK.08.10.a003
+  relation: authorized_by
+  notes: CHG-010 authorizes Phase 2 data and scope isolation
+- from: CHG-010
+  to: TASK.08.10.a004
+  relation: authorized_by
+  notes: CHG-010 authorizes Phase 3 sandboxing, FastAPI MCP, and OIDC hardening
+- from: CHG-010
+  to: TASK.08.10.a005
+  relation: authorized_by
+  notes: CHG-010 authorizes Phase 4 docs sync and security verification
+- from: TASK.08.10.a002
+  to: TASK.08.10.a001
+  relation: verifies
+  properties:
+    verification_type: preflight_attestation
+- from: TASK.08.10.a003
+  to: TASK.08.10.a002
+  relation: verifies
+  properties:
+    verification_type: preflight_attestation
+- from: TASK.08.10.a004
+  to: TASK.08.10.a003
+  relation: verifies
+  properties:
+    verification_type: preflight_attestation
+- from: TASK.08.10.a005
+  to: TASK.08.10.a004
+  relation: verifies
+  properties:
+    verification_type: preflight_attestation
+- from: TASK.08.10.a001
+  to: TDD.04.04.c200
+  relation: implements
+- from: TASK.08.10.a002
+  to: TDD.04.04.c200
+  relation: implements
+- from: TASK.08.10.a003
+  to: TDD.04.04.c200
+  relation: implements
+- from: TASK.08.10.a004
+  to: TDD.04.04.c200
+  relation: implements
+- from: TASK.08.10.a005
+  to: TDD.04.04.c200
+  relation: implements
+- from: TASK.08.10.a001
+  to: TASK.08.10.a001_rollback
+  relation: compensated_by
+- from: TASK.08.10.a002
+  to: TASK.08.10.a002_rollback
+  relation: compensated_by
+- from: TASK.08.10.a003
+  to: TASK.08.10.a003_rollback
+  relation: compensated_by
+- from: TASK.08.10.a004
+  to: TASK.08.10.a004_rollback
+  relation: compensated_by
+- from: TASK.08.10.a005
+  to: TASK.08.10.a005_rollback
+  relation: compensated_by

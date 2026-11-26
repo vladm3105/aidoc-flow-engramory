@@ -33,12 +33,6 @@ from pathlib import Path
 from typing import Any
 
 from engramory.access.authz import ActorContext, AuthzDecision, TargetScope, authorize
-from engramory.access.poisoning_guard import (
-    MemoryPoisoningError,
-    inspect_memory_write,
-    sanitize_portable_text,
-    sanitize_portable_value,
-)
 from engramory.core.models import (
     AgentProfile,
     Episode,
@@ -46,6 +40,14 @@ from engramory.core.models import (
     KBRunbookStep,
     KBSection,
     ValidationError,
+    thaw_mapping,
+    thaw_value,
+)
+from engramory.core.poisoning_guard import (
+    MemoryPoisoningError,
+    inspect_memory_write,
+    sanitize_portable_text,
+    sanitize_portable_value,
 )
 from engramory.core.repository import Repository, StoreUnavailable
 from engramory.ports import GraphPort, LLMPort, StoragePort
@@ -58,6 +60,19 @@ DEFAULT_TOKEN_BUDGET = 2000
 # an unbounded amount of store work.
 MAX_K = 100
 MAX_CONTENT_BYTES = 65536
+MAX_METADATA_BYTES = 65536
+MAX_SURFACE_BLOB_BYTES = 16 * 1024 * 1024
+_RESERVED_EPISODE_METADATA_KEYS: frozenset[str] = frozenset(
+    {
+        "scope",
+        "effectiveness_score",
+        "producer",
+        "origin",
+        "agent_type",
+        "calibration_delta",
+        "_verified_space_scope",
+    }
+)
 
 # Ladder order (ADR-07): a request at level L may see L and every narrower
 # level the caller holds — never a level the caller was not granted.
@@ -67,6 +82,15 @@ _LADDER = ("agent", "project", "domain", "space")
 def _granted_levels(requested: str, granted: frozenset[str]) -> tuple[str, ...]:
     ceiling = _LADDER.index(requested) if requested in _LADDER else 0
     return tuple(level for level in _LADDER[: ceiling + 1] if level in granted)
+
+
+def _validate_metadata_size(payload: Any, label: str = "metadata") -> None:
+    """Bound serialized metadata size to MAX_METADATA_BYTES to prevent store bloat."""
+    if not payload:
+        return
+    encoded = json.dumps(thaw_value(payload), sort_keys=True, default=str).encode("utf-8")
+    if len(encoded) > MAX_METADATA_BYTES:
+        raise ValidationError(f"{label} exceeds {MAX_METADATA_BYTES} bytes")
 
 
 class AuthzError(PermissionError):
@@ -161,6 +185,17 @@ class AccessSurface:
         self._llm = llm
         self._storage = storage
 
+    async def audit_denial(self, ctx: ActorContext, action: str, reason: str) -> None:
+        """Emit an explicit security denial AuditRecord (SPEC-01 / EARS.01.03.b050)."""
+        await self._repo.record_audit(
+            tenant_id=ctx.tenant_id,
+            agent_id=ctx.agent_id,
+            project_id=ctx.project_id,
+            action=action,
+            allowed=False,
+            reason=reason,
+        )
+
     async def _expand_neighbors_with_fallback(
         self,
         *,
@@ -169,6 +204,8 @@ class AccessSurface:
         rel: str | None = None,
         depth: int = 1,
         project_id: str | None = None,
+        domain_id: str | None = None,
+        allowed_scopes: Sequence[str] | None = None,
     ) -> Sequence[Mapping[str, Any]]:
         """Query Neo4j primary graph adapter and fall back to PostgreSQL recursive CTE."""
         hits: Sequence[Mapping[str, Any]] = []
@@ -180,6 +217,8 @@ class AccessSurface:
                     depth=depth,
                     tenant_id=tenant_id,
                     project_id=project_id,
+                    domain_id=domain_id,
+                    allowed_scopes=allowed_scopes,
                 )
             except Exception as exc:
                 logger.debug("Graph adapter neighbors query failed for %s: %s", id, exc)
@@ -191,6 +230,8 @@ class AccessSurface:
                     rel=rel,
                     depth=depth,
                     project_id=project_id,
+                    domain_id=domain_id,
+                    allowed_scopes=allowed_scopes,
                 )
             except StoreUnavailable:
                 raise
@@ -309,17 +350,19 @@ class AccessSurface:
             tokens = _token_count(memory.summary)
             if budget is not None:
                 if tokens > budget:
-                    break
+                    continue
                 budget -= tokens
             if memory.id is None:
                 raise RuntimeError("hydrated memory missing id")
-            prov = dict(memory.provenance)
+            prov = thaw_mapping(memory.provenance)
             if expand_graph:
                 neighbors = await self._expand_neighbors_with_fallback(
                     id=memory.id,
                     tenant_id=target.tenant_id,
                     depth=1,
                     project_id=ctx.project_id,
+                    domain_id=eff_domain_id,
+                    allowed_scopes=levels,
                 )
                 if neighbors:
                     prov["related_entities"] = [n.get("id") for n in neighbors]
@@ -366,7 +409,7 @@ class AccessSurface:
                         "citation": sec.citation,
                         "modality": sec.modality,
                         "blob_uri": sec.blob_uri,
-                        "media_metadata": dict(sec.media_metadata),
+                        "media_metadata": thaw_mapping(sec.media_metadata),
                     }
                     hits.append(
                         MemoryHit(
@@ -390,10 +433,12 @@ class AccessSurface:
         rel: str | None = None,
         depth: int = 1,
         scope: str = "project",
+        domain_id: str | None = None,
     ) -> Sequence[Mapping[str, Any]]:
         """Retrieve connected graph neighbors for an entity (ADR-03 / GraphPort + PG fallback)."""
         target = TargetScope(tenant_id=ctx.tenant_id, scope=scope)
         await self._decide(ctx, "graph_neighbors", target)
+        eff_domain_id = await self._enforce_domain_boundary(ctx, "graph_neighbors", domain_id)
         eff_project_id = ctx.project_id if scope in ("agent", "project") else None
         return await self._expand_neighbors_with_fallback(
             id=id,
@@ -401,6 +446,8 @@ class AccessSurface:
             rel=rel,
             depth=depth,
             project_id=eff_project_id,
+            domain_id=eff_domain_id,
+            allowed_scopes=sorted(ctx.scopes),
         )
 
     async def context_slice(
@@ -410,13 +457,16 @@ class AccessSurface:
         task_id: str,
         depth: int = 6,
         scope: str = "project",
+        domain_id: str | None = None,
         layers: Sequence[str] | None = None,
         max_tokens: int = 2000,
     ) -> Sequence[Mapping[str, Any]]:
         """Retrieve upstream contract closure (ancestors) for an SDD task node."""
         target = TargetScope(tenant_id=ctx.tenant_id, scope=scope)
         await self._decide(ctx, "context_slice", target)
+        eff_domain_id = await self._enforce_domain_boundary(ctx, "context_slice", domain_id)
         eff_project_id = ctx.project_id if scope in ("agent", "project") else None
+        allowed = sorted(ctx.scopes)
         hits: Sequence[Mapping[str, Any]] = []
         if self._graph is not None:
             try:
@@ -425,6 +475,8 @@ class AccessSurface:
                     depth=depth,
                     tenant_id=ctx.tenant_id,
                     project_id=eff_project_id,
+                    domain_id=eff_domain_id,
+                    allowed_scopes=allowed,
                 )
             except Exception:
                 logger.debug("Graph adapter ancestors query failed, falling back to PostgreSQL CTE")
@@ -434,6 +486,8 @@ class AccessSurface:
                 tenant_id=ctx.tenant_id,
                 depth=depth,
                 project_id=eff_project_id,
+                domain_id=eff_domain_id,
+                allowed_scopes=allowed,
             )
 
         # 1. Filter by requested layers if specified
@@ -471,11 +525,14 @@ class AccessSurface:
         doc_id: str,
         depth: int = 6,
         scope: str = "project",
+        domain_id: str | None = None,
     ) -> Sequence[Mapping[str, Any]]:
         """Retrieve downstream dependent nodes (descendants) affected by a change."""
         target = TargetScope(tenant_id=ctx.tenant_id, scope=scope)
         await self._decide(ctx, "blast_radius", target)
+        eff_domain_id = await self._enforce_domain_boundary(ctx, "blast_radius", domain_id)
         eff_project_id = ctx.project_id if scope in ("agent", "project") else None
+        allowed = sorted(ctx.scopes)
         if self._graph is not None:
             try:
                 hits = await self._graph.descendants(
@@ -483,6 +540,8 @@ class AccessSurface:
                     depth=depth,
                     tenant_id=ctx.tenant_id,
                     project_id=eff_project_id,
+                    domain_id=eff_domain_id,
+                    allowed_scopes=allowed,
                 )
                 if hits:
                     return hits
@@ -495,6 +554,8 @@ class AccessSurface:
             tenant_id=ctx.tenant_id,
             depth=depth,
             project_id=eff_project_id,
+            domain_id=eff_domain_id,
+            allowed_scopes=allowed,
         )
 
     async def memory_add(
@@ -512,11 +573,18 @@ class AccessSurface:
         """Append an episode in the caller's scope (idempotent by content hash)."""
         if len(content.encode("utf-8")) > MAX_CONTENT_BYTES:
             raise ValueError(f"content exceeds {MAX_CONTENT_BYTES} bytes")
+        if metadata:
+            _validate_metadata_size(metadata, "episode metadata")
         await self._decide(ctx, "memory_add", TargetScope(tenant_id=ctx.tenant_id, scope=scope))
         eff_domain_id = await self._enforce_domain_boundary(ctx, "memory_add", domain_id)
-        merged_meta: dict[str, Any] = dict(metadata) if metadata else {}
-        if scope != "agent":
-            merged_meta["scope"] = scope
+        merged_meta: dict[str, Any] = {
+            k: v
+            for k, v in (dict(metadata) if metadata else {}).items()
+            if k not in _RESERVED_EPISODE_METADATA_KEYS
+        }
+        merged_meta["scope"] = scope
+        if scope == "space":
+            merged_meta["_verified_space_scope"] = True
         if specializations is not None:
             specs_clean = list(
                 dict.fromkeys(str(s).strip() for s in specializations if str(s).strip())
@@ -540,14 +608,7 @@ class AccessSurface:
                     target="episodes:metadata",
                 )
         except MemoryPoisoningError as exc:
-            await self._repo.record_audit(
-                tenant_id=ctx.tenant_id,
-                agent_id=ctx.agent_id,
-                project_id=ctx.project_id,
-                action="memory_add",
-                allowed=False,
-                reason=f"poisoning_rejected: {exc}",
-            )
+            await self.audit_denial(ctx, "memory_add", f"poisoning_rejected: {exc}")
             raise GovernedWriteRejected(str(exc)) from exc
         episode = Episode(
             agent_id=ctx.agent_id,
@@ -561,9 +622,8 @@ class AccessSurface:
         return await self._repo.add_episode(episode)
 
     async def memory_feedback(self, ctx: ActorContext, retrieval_id: str, outcome: str) -> None:
-        """Record a retrieval outcome (useful | not_useful | harmful) — the
-        signal for the SPEC-04 confidence-update rule. Bound to the caller's
-        tenant; a foreign retrieval_id raises KeyError like a missing one."""
+        """Record a retrieval outcome (useful | not_useful | harmful) — enforces ownership
+        and shared-scope quorum."""
         await self._decide(
             ctx, "memory_feedback", TargetScope(tenant_id=ctx.tenant_id, scope="agent")
         )
@@ -571,19 +631,38 @@ class AccessSurface:
             raise ValidationError(
                 "memory_feedback requires an L2 memory retrieval_id, not a kb_section hit"
             )
-        await self._repo.record_feedback(retrieval_id, outcome, tenant_id=ctx.tenant_id)
+        try:
+            await self._repo.record_feedback(
+                retrieval_id,
+                outcome,
+                tenant_id=ctx.tenant_id,
+                caller_agent_id=ctx.agent_id,
+                allow_space_override=("space" in ctx.scopes),
+            )
+        except PermissionError as exc:
+            await self.audit_denial(ctx, "memory_feedback", f"out_of_scope: {exc}")
+            raise AuthzError(f"memory_feedback: {exc}") from exc
 
     async def memory_forget(self, ctx: ActorContext, memory_id: str, *, reason: str) -> None:
-        """Retire a memory (soft: end-date + supersede status; audited with the
-        caller's reason). A foreign memory_id raises KeyError like a missing
-        one — existence never crosses the tenant wall."""
+        """Retire a memory in the caller's authorized scope/ownership boundary."""
         await self._decide(
             ctx,
             "memory_forget",
             TargetScope(tenant_id=ctx.tenant_id, scope="agent"),
             note=reason,
         )
-        await self._repo.retire_memory(memory_id, tenant_id=ctx.tenant_id)
+        try:
+            await self._repo.retire_memory(
+                memory_id,
+                tenant_id=ctx.tenant_id,
+                caller_agent_id=ctx.agent_id,
+                caller_project_id=ctx.project_id,
+                caller_domain_id=ctx.domain_id,
+                allowed_scopes=sorted(ctx.scopes),
+            )
+        except PermissionError as exc:
+            await self.audit_denial(ctx, "memory_forget", f"out_of_scope: {exc}")
+            raise AuthzError(f"memory_forget: {exc}") from exc
 
     async def agent_profile_get(self, ctx: ActorContext) -> AgentProfile:
         """Load the caller's own L3 identity profile — never another agent's.
@@ -592,11 +671,19 @@ class AccessSurface:
             ctx, "agent_profile_get", TargetScope(tenant_id=ctx.tenant_id, scope="agent")
         )
         profile = await self._repo.get_agent_profile(ctx.agent_id, tenant_id=ctx.tenant_id)
-        return (
-            profile
-            if profile is not None
-            else AgentProfile(agent_id=ctx.agent_id, tenant_id=ctx.tenant_id)
-        )
+        if profile is not None:
+            pref_dom = (
+                str(profile.standing_preferences.get("department_focus") or "").strip() or None
+            )
+            if (
+                pref_dom is not None
+                and ctx.domain_id is not None
+                and pref_dom != ctx.domain_id
+                and "space" not in ctx.scopes
+            ):
+                await self._enforce_domain_boundary(ctx, "agent_profile_get", pref_dom)
+            return profile
+        return AgentProfile(agent_id=ctx.agent_id, tenant_id=ctx.tenant_id)
 
     async def agent_profile_upsert(
         self,
@@ -615,13 +702,29 @@ class AccessSurface:
         await self._decide(
             ctx, "agent_profile_upsert", TargetScope(tenant_id=ctx.tenant_id, scope="agent")
         )
-        eff_domain = await self._enforce_domain_boundary(ctx, "agent_profile_upsert", domain_id)
-        existing = await self._repo.get_agent_profile(ctx.agent_id, tenant_id=ctx.tenant_id)
-        merged_prefs: dict[str, Any] = (
-            dict(existing.standing_preferences) if existing is not None else {}
+        pref_dept = (
+            str(standing_preferences.get("department_focus") or "").strip() or None
+            if isinstance(standing_preferences, Mapping)
+            and standing_preferences.get("department_focus")
+            else None
         )
         if standing_preferences:
-            merged_prefs.update(dict(standing_preferences))
+            _validate_metadata_size(standing_preferences, "standing_preferences")
+        if brain_config:
+            _validate_metadata_size(brain_config, "brain_config")
+        if domain_id is not None and pref_dept is not None and pref_dept != domain_id:
+            await self._enforce_domain_boundary(ctx, "agent_profile_upsert", pref_dept)
+        eff_domain = await self._enforce_domain_boundary(
+            ctx, "agent_profile_upsert", domain_id or pref_dept
+        )
+        existing = await self._repo.get_agent_profile(ctx.agent_id, tenant_id=ctx.tenant_id)
+        merged_prefs: dict[str, Any] = (
+            thaw_mapping(existing.standing_preferences) if existing is not None else {}
+        )
+        if standing_preferences:
+            merged_prefs.update(thaw_mapping(standing_preferences))
+        if eff_domain is None and pref_dept is not None:
+            merged_prefs.pop("department_focus", None)
         eff_agent_type = (
             agent_type or role or merged_prefs.get("agent_type") or merged_prefs.get("role")
         )
@@ -638,7 +741,7 @@ class AccessSurface:
             )
         if brain_config is not None:
             prev_cfg = (
-                dict(merged_prefs["brain_config"])
+                thaw_mapping(merged_prefs["brain_config"])
                 if isinstance(merged_prefs.get("brain_config"), Mapping)
                 else {}
             )
@@ -699,9 +802,11 @@ class AccessSurface:
         await self._decide(
             ctx, "agent_roster_list", TargetScope(tenant_id=ctx.tenant_id, scope=req_scope)
         )
+        eff_domain_id = await self._enforce_domain_boundary(ctx, "agent_roster_list", domain_id)
+        query_domain = domain_id if "space" in ctx.scopes and domain_id is None else eff_domain_id
         return await self._repo.list_agent_profiles(
             tenant_id=ctx.tenant_id,
-            domain_id=domain_id,
+            domain_id=query_domain,
             agent_type=agent_type,
             role=role,
             specialization=specialization,
@@ -863,7 +968,7 @@ class AccessSurface:
             )
             raise GovernedWriteRejected(str(exc)) from exc
 
-        new_prov = dict(source.provenance)
+        new_prov = thaw_mapping(source.provenance)
         new_prov.update(
             {
                 "promoted_from_memory_id": memory_id,
@@ -896,6 +1001,15 @@ class AccessSurface:
                 if vecs and len(vecs[0]) == 1536:
                     vec = vecs[0]
                     emb_dims = 1536
+                    emb_model = next(
+                        (
+                            str(val).strip()
+                            for attr in ("embed_model", "_embed_model", "_default_embed_model")
+                            if isinstance((val := getattr(self._llm, attr, None)), str)
+                            and val.strip()
+                        ),
+                        source.embedding_model,
+                    )
             except Exception:  # noqa: BLE001  # reason: fallback to copying source embedding when LLM embed fails
                 vec = None
 
@@ -963,15 +1077,26 @@ class AccessSurface:
             specialization=specialization,
             min_confidence=min_confidence,
         )
-        base_terms = [ctx.tenant_id, ctx.project_id, *redact_terms]
+        base_terms = [
+            ctx.tenant_id,
+            ctx.project_id,
+            ctx.agent_id,
+            *([eff_domain] if eff_domain and eff_domain not in {"default"} else []),
+            *redact_terms,
+        ]
         skills: list[dict[str, Any]] = []
         total_redactions = 0
         for mem in memories:
             if mem.scope != "agent" or mem.confidence < min_confidence:
                 continue
-            if eff_domain is not None and mem.domain_id is not None and mem.domain_id != eff_domain:
+            if eff_domain is not None and mem.domain_id != eff_domain:
                 continue
-            mem_terms = [*base_terms, *([mem.project_id] if mem.project_id else [])]
+            mem_terms = [
+                *base_terms,
+                *([mem.project_id] if mem.project_id else []),
+                *([mem.agent_id] if mem.agent_id else []),
+                *([mem.domain_id] if mem.domain_id else []),
+            ]
             clean_summary, r_sum = sanitize_portable_text(mem.summary, redact_terms=mem_terms)
             clean_raw, r_raw = sanitize_portable_text(mem.content_raw, redact_terms=mem_terms)
             raw_bm = mem.provenance.get("brain_metadata")
@@ -987,7 +1112,20 @@ class AccessSurface:
                     "rag_params": {},
                 }
             )
-            clean_bm, r_bm = sanitize_portable_value(skill_bm, redact_terms=mem_terms)
+            clean_bm: dict[str, Any] = {}
+            r_bm = 0
+            for bm_k, bm_v in skill_bm.items():
+                if bm_k in (
+                    "brain_variant",
+                    "distiller_model",
+                    "embedding_model",
+                    "extraction_model",
+                ):
+                    clean_bm[bm_k] = bm_v
+                else:
+                    c_val, c_cnt = sanitize_portable_value(bm_v, redact_terms=mem_terms)
+                    clean_bm[bm_k] = c_val
+                    r_bm += c_cnt
             raw_specs = mem.provenance.get("specializations")
             skill_specs = (
                 [str(s).strip() for s in raw_specs if str(s).strip()]
@@ -1019,7 +1157,8 @@ class AccessSurface:
         )
         total_redactions += r_disp
         clean_prefs, r_prefs = sanitize_portable_value(
-            dict(profile.standing_preferences or {}), redact_terms=base_terms
+            thaw_mapping(profile.standing_preferences) if profile.standing_preferences else {},
+            redact_terms=base_terms,
         )
         total_redactions += r_prefs
         raw_bcfg = clean_prefs.get("brain_config") if isinstance(clean_prefs, Mapping) else {}
@@ -1092,7 +1231,7 @@ class AccessSurface:
             raise GovernedWriteRejected("agent_brain_import requires evidence_ref")
 
         schema_ver = passport.get("schema_version")
-        if schema_ver is not None and schema_ver != "engramory.brain_passport.v1":
+        if schema_ver != "engramory.brain_passport.v1":
             await self._repo.record_audit(
                 tenant_id=ctx.tenant_id,
                 agent_id=ctx.agent_id,
@@ -1105,19 +1244,42 @@ class AccessSurface:
                 f"Unsupported Brain Passport schema_version: {schema_ver!r}"
             )
 
-        if verify_integrity:
-            supplied_sha = str(passport.get("passport_sha256") or "").strip()
-            expected_sha = _compute_passport_sha256(passport)
-            if not supplied_sha or supplied_sha != expected_sha:
-                await self._repo.record_audit(
-                    tenant_id=ctx.tenant_id,
-                    agent_id=ctx.agent_id,
-                    project_id=ctx.project_id,
-                    action="agent_brain_import",
-                    allowed=False,
-                    reason="passport_integrity_mismatch",
-                )
-                raise GovernedWriteRejected("Brain passport SHA-256 integrity check failed")
+        if not verify_integrity:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="agent_brain_import",
+                allowed=False,
+                reason="integrity_verification_required",
+            )
+            raise GovernedWriteRejected("agent_brain_import requires verify_integrity=True")
+
+        supplied_sha = str(passport.get("passport_sha256") or "").strip()
+        expected_sha = _compute_passport_sha256(passport)
+        if not supplied_sha or supplied_sha != expected_sha:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="agent_brain_import",
+                allowed=False,
+                reason="passport_integrity_mismatch",
+            )
+            raise GovernedWriteRejected("Brain passport SHA-256 integrity check failed")
+
+        if allow_type_override and "space" not in ctx.scopes:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="agent_brain_import",
+                allowed=False,
+                reason="type_override_requires_space_scope",
+            )
+            raise GovernedWriteRejected(
+                "agent_brain_import allow_type_override requires space scope"
+            )
 
         existing_profile = (
             await self._repo.get_agent_profile(ctx.agent_id, tenant_id=ctx.tenant_id)
@@ -1127,14 +1289,18 @@ class AccessSurface:
         if not isinstance(existing_profile, AgentProfile):
             existing_profile = None
         existing_prefs = (
-            dict(existing_profile.standing_preferences) if existing_profile is not None else {}
+            thaw_mapping(existing_profile.standing_preferences)
+            if existing_profile is not None
+            else {}
         )
         target_agent_type = (
             str(existing_prefs.get("agent_type") or existing_prefs.get("role") or "").strip()
             or None
         )
         raw_pass_prefs = passport.get("standing_preferences")
-        pass_prefs_dict = dict(raw_pass_prefs) if isinstance(raw_pass_prefs, Mapping) else {}
+        pass_prefs_dict = (
+            thaw_mapping(raw_pass_prefs) if isinstance(raw_pass_prefs, Mapping) else {}
+        )
         passport_agent_type = (
             str(
                 passport.get("agent_type")
@@ -1181,10 +1347,20 @@ class AccessSurface:
         prefs.update(clean_prefs if isinstance(clean_prefs, Mapping) else {})
         if eff_domain:
             prefs["department_focus"] = eff_domain
+        target_role = (
+            str(existing_prefs.get("role") or existing_prefs.get("agent_type") or "").strip()
+            or None
+        )
         if target_agent_type:
             prefs["agent_type"] = target_agent_type
         elif passport_agent_type and "agent_type" not in prefs:
             prefs["agent_type"] = passport_agent_type
+        if target_role:
+            prefs["role"] = target_role
+        elif target_agent_type:
+            prefs["role"] = target_agent_type
+        elif passport_agent_type and "role" not in prefs:
+            prefs["role"] = passport_agent_type
 
         existing_specs_raw = existing_prefs.get("specializations")
         existing_specs = (
@@ -1296,6 +1472,13 @@ class AccessSurface:
                     else list(merged_profile_specs)
                 )
                 clean_item_specs, _ = sanitize_portable_value(item_specs, redact_terms=redact_terms)
+                if clean_item_specs:
+                    inspect_memory_write(
+                        json.dumps(clean_item_specs, sort_keys=True),
+                        tenant_id=ctx.tenant_id,
+                        writer_agent_id=ctx.agent_id,
+                        target=f"brain_import:{idx}:specializations",
+                    )
                 m_type = str(item.get("type") or "procedural")
                 if m_type not in {"semantic", "episodic", "procedural"}:
                     m_type = "procedural"
@@ -1349,22 +1532,19 @@ class AccessSurface:
             )
             raise GovernedWriteRejected(str(exc)) from exc
 
-        if hasattr(self._repo, "upsert_agent_profile"):
-            await self._repo.upsert_agent_profile(
-                AgentProfile(
-                    agent_id=ctx.agent_id,
-                    display_name=vetted_display,
-                    standing_preferences=prefs,
-                    tenant_id=ctx.tenant_id,
-                )
-            )
+        imported_profile = AgentProfile(
+            agent_id=ctx.agent_id,
+            display_name=vetted_display,
+            standing_preferences=prefs,
+            tenant_id=ctx.tenant_id,
+        )
 
         existing_memories = await self._repo.get_memories(
             tenant_id=ctx.tenant_id,
             agent_id=ctx.agent_id,
             project_id=ctx.project_id,
             domain_id=eff_domain,
-            k=MAX_K,
+            k=10000,
             scopes=("agent",),
         )
         existing_by_key: dict[tuple[str, str, str | None, str, str], str] = {}
@@ -1375,7 +1555,8 @@ class AccessSurface:
             existing_by_key[(em_var, em.type, em.domain_id, em.summary, em.content_raw)] = em.id
 
         to_insert: list[dict[str, Any]] = []
-        memory_ids: list[str] = []
+        seen_new_keys: set[tuple[str, str, str | None, str, str]] = set()
+        existing_ids: list[str] = []
         for sk in vetted_skills:
             dedup_key = (
                 sk["brain_variant"],
@@ -1385,8 +1566,9 @@ class AccessSurface:
                 sk["content_raw"],
             )
             if dedup_key in existing_by_key:
-                memory_ids.append(existing_by_key[dedup_key])
-            else:
+                existing_ids.append(existing_by_key[dedup_key])
+            elif dedup_key not in seen_new_keys:
+                seen_new_keys.add(dedup_key)
                 to_insert.append(sk)
 
         embeddings: Sequence[Sequence[float]] | None = None
@@ -1405,6 +1587,7 @@ class AccessSurface:
             except Exception:  # noqa: BLE001  # reason: degraded LLM endpoint must not block canonical passport import
                 embeddings = None
 
+        mem_pairs: list[tuple[Memory, Sequence[float] | None]] = []
         for idx, sk in enumerate(to_insert):
             vec_cand = (
                 embeddings[idx]
@@ -1445,16 +1628,22 @@ class AccessSurface:
                 scope="agent",
                 confidence=sk["confidence"],
             )
-            mid = await self._repo.upsert_memory(mem, embedding=vec_cand)
-            memory_ids.append(mid)
-            dedup_key = (
-                sk["brain_variant"],
-                sk["type"],
-                sk["domain_id"],
-                sk["summary"],
-                sk["content_raw"],
+            mem_pairs.append((mem, vec_cand))
+
+        if isinstance(self._repo, Repository):
+            inserted_ids = await self._repo.import_agent_brain(
+                tenant_id=ctx.tenant_id,
+                profile=imported_profile,
+                memories=mem_pairs,
             )
-            existing_by_key[dedup_key] = mid
+        else:
+            if hasattr(self._repo, "upsert_agent_profile"):
+                await self._repo.upsert_agent_profile(imported_profile)
+            inserted_ids = []
+            for mem, vec_cand in mem_pairs:
+                mid = await self._repo.upsert_memory(mem, embedding=vec_cand)
+                inserted_ids.append(mid)
+        memory_ids = [*existing_ids, *inserted_ids]
 
         return {
             "agent_id": ctx.agent_id,
@@ -1522,26 +1711,42 @@ class AccessSurface:
             "winner": winner,
         }
         if query and query.strip():
-            hits_a = await self.memory_search(
-                ctx,
-                query,
-                scope=scope,
+            levels = _granted_levels(scope, ctx.scopes)
+            max_hits = max(1, min(k, MAX_K))
+            query_vec: Sequence[float] | None = None
+            if self._llm is not None:
+                try:
+                    vecs = await self._llm.embed(texts=[query])
+                    if vecs and len(vecs[0]) == 1536:
+                        query_vec = vecs[0]
+                except Exception:  # noqa: BLE001  # reason: compare falls back to lexical/recency retrieval
+                    query_vec = None
+            mems_a = await self._repo.get_memories(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
                 domain_id=eff_domain,
+                k=max_hits,
+                query=query,
+                query_vec=query_vec,
+                scopes=levels,
                 brain_variant=variant_a,
                 specialization=specialization,
-                k=k,
             )
-            hits_b = await self.memory_search(
-                ctx,
-                query,
-                scope=scope,
+            mems_b = await self._repo.get_memories(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
                 domain_id=eff_domain,
+                k=max_hits,
+                query=query,
+                query_vec=query_vec,
+                scopes=levels,
                 brain_variant=variant_b,
                 specialization=specialization,
-                k=k,
             )
-            summaries_a = {h.summary for h in hits_a}
-            summaries_b = {h.summary for h in hits_b}
+            summaries_a = {m.summary for m in mems_a}
+            summaries_b = {m.summary for m in mems_b}
             union_cnt = len(summaries_a | summaries_b)
             overlap_ratio = (
                 round(len(summaries_a & summaries_b) / union_cnt, 4) if union_cnt > 0 else 0.0
@@ -1549,12 +1754,10 @@ class AccessSurface:
             result["query_comparison"] = {
                 "query": query,
                 "variant_a_hits": [
-                    {"memory_id": h.memory_id, "summary": h.summary, "score": h.score}
-                    for h in hits_a
+                    {"memory_id": m.id, "summary": m.summary, "score": m.confidence} for m in mems_a
                 ],
                 "variant_b_hits": [
-                    {"memory_id": h.memory_id, "summary": h.summary, "score": h.score}
-                    for h in hits_b
+                    {"memory_id": m.id, "summary": m.summary, "score": m.confidence} for m in mems_b
                 ],
                 "overlap_ratio": overlap_ratio,
             }
@@ -1565,38 +1768,34 @@ class AccessSurface:
         ctx: ActorContext,
         *,
         evidence_ref: str | None,
+        target_agent_id: str | None = None,
         reason: str = "cross_tenant_reassignment",
         purge_episodes: bool = True,
         retire_memories: bool = True,
     ) -> dict[str, Any]:
         """Governed transactional offboarding of a Virtual Employee's private
         scope='agent' space on the caller's tenant."""
+        offboard_agent = target_agent_id or ctx.agent_id
+        req_scope = "space" if offboard_agent != ctx.agent_id else "agent"
         await self._decide(
             ctx,
             "agent_space_offboard",
-            TargetScope(tenant_id=ctx.tenant_id, scope="agent"),
+            TargetScope(tenant_id=ctx.tenant_id, scope=req_scope),
             note=reason,
         )
         if not evidence_ref:
-            await self._repo.record_audit(
-                tenant_id=ctx.tenant_id,
-                agent_id=ctx.agent_id,
-                project_id=ctx.project_id,
-                action="agent_space_offboard",
-                allowed=False,
-                reason="missing_evidence_ref",
-            )
+            await self.audit_denial(ctx, "agent_space_offboard", "missing_evidence_ref")
             raise GovernedWriteRejected("agent_space_offboard requires evidence_ref")
 
         counts = await self._repo.offboard_agent_space(
             tenant_id=ctx.tenant_id,
-            agent_id=ctx.agent_id,
+            agent_id=offboard_agent,
             reason=reason,
             purge_episodes=purge_episodes,
             retire_memories=retire_memories,
         )
         return {
-            "agent_id": ctx.agent_id,
+            "agent_id": offboard_agent,
             "tenant_id": ctx.tenant_id,
             "reason": reason,
             "evidence_ref": evidence_ref,
@@ -1651,7 +1850,7 @@ class AccessSurface:
                 reason=f"cross_project_event_rejected: {ev.project}",
             )
             raise AuthzError("out_of_scope")
-        if scope == "agent" and ev.producer != ctx.agent_id and "space" not in ctx.scopes:
+        if ev.producer != ctx.agent_id and "space" not in ctx.scopes:
             await self._repo.record_audit(
                 tenant_id=ctx.tenant_id,
                 agent_id=ctx.agent_id,
@@ -1663,7 +1862,10 @@ class AccessSurface:
             raise AuthzError("out_of_scope")
         await self._enforce_domain_boundary(ctx, "memory_ingest_event", ev.domain_id)
         try:
-            ep = ev.to_episode()
+            ep = ev.to_episode(
+                scope=scope,
+                verified_space_scope=(scope == "space" and "space" in ctx.scopes),
+            )
         except MemoryPoisoningError as exc:
             await self._repo.record_audit(
                 tenant_id=ctx.tenant_id,
@@ -1712,11 +1914,14 @@ class AccessSurface:
             )
             raise AuthzError("out_of_scope")
         eff_proj = project_id if project_id is not None else ctx.project_id
-        summary = await self._repo.get_learning_health_summary(
-            tenant_id=ctx.tenant_id,
-            project_id=eff_proj,
-            limit=limit,
-        )
+        health_kwargs: dict[str, Any] = {
+            "tenant_id": ctx.tenant_id,
+            "project_id": eff_proj,
+            "limit": limit,
+        }
+        if scope == "agent":
+            health_kwargs["agent_id"] = ctx.agent_id
+        summary = await self._repo.get_learning_health_summary(**health_kwargs)
         return {
             "tenant_id": ctx.tenant_id,
             "project_id": eff_proj,
@@ -1761,8 +1966,9 @@ class AccessSurface:
                 target=doc_id,
             )
             if media_metadata:
+                _validate_metadata_size(media_metadata, "media_metadata")
                 inspect_memory_write(
-                    json.dumps(dict(media_metadata), sort_keys=True),
+                    json.dumps(thaw_mapping(media_metadata), sort_keys=True),
                     tenant_id=ctx.tenant_id,
                     writer_agent_id=ctx.agent_id,
                     target=doc_id,
@@ -1777,13 +1983,16 @@ class AccessSurface:
                 reason=f"poisoning_rejected: {exc}",
             )
             raise GovernedWriteRejected(str(exc)) from exc
+        eff_domain = await self._enforce_domain_boundary(ctx, "knowledge_ingest", None)
         section = KBSection(
             doc_id=doc_id,
             citation=citation,
             text=vetted_text,
-            project_id=ctx.project_id,
+            project_id=None if scope in ("domain", "space") else ctx.project_id,
+            domain_id=eff_domain if scope == "domain" else None,
             tenant_id=ctx.tenant_id,
             scope=scope,
+            agent_id=ctx.agent_id,
             version=version,
             modality=modality,
             blob_sha256=blob_sha256,
@@ -1840,8 +2049,9 @@ class AccessSurface:
                     target=s.doc_id,
                 )
                 if s.media_metadata:
+                    _validate_metadata_size(s.media_metadata, "media_metadata")
                     inspect_memory_write(
-                        json.dumps(dict(s.media_metadata), sort_keys=True),
+                        json.dumps(thaw_mapping(s.media_metadata), sort_keys=True),
                         tenant_id=ctx.tenant_id,
                         writer_agent_id=ctx.agent_id,
                         target=s.doc_id,
@@ -1862,10 +2072,11 @@ class AccessSurface:
                     doc_id=s.doc_id,
                     citation=s.citation,
                     text=vetted_text,
-                    project_id=ctx.project_id,
+                    project_id=None if target_scope in ("domain", "space") else ctx.project_id,
                     tenant_id=ctx.tenant_id,
                     domain_id=eff_sec_dom,
                     scope=target_scope,
+                    agent_id=ctx.agent_id,
                     version=s.version,
                     modality=s.modality,
                     blob_sha256=s.blob_sha256,
@@ -1909,7 +2120,9 @@ class AccessSurface:
                 ]
                 if updates and hasattr(self._repo, "set_kb_sections_embedding_batch"):
                     await self._repo.set_kb_sections_embedding_batch(
-                        updates, embedding_model=model_name
+                        updates,
+                        tenant_id=ctx.tenant_id,
+                        embedding_model=model_name,
                     )
             except Exception as exc:  # noqa: BLE001  # reason: offline/degraded LLM must not fail canonical section ingestion
                 logger.debug("Skipping section embedding in knowledge_ingest_batch: %s", exc)
@@ -1948,9 +2161,11 @@ class AccessSurface:
             "tenant_id": ctx.tenant_id,
             "project_id": ctx.project_id,
             "domain_id": eff_domain_id,
+            "agent_id": ctx.agent_id,
             "query_vec": eff_vec,
             "scope": scope,
-            "limit": limit,
+            "allowed_scopes": sorted(ctx.scopes),
+            "limit": max(1, min(limit, MAX_K)),
         }
         if modality is not None:
             search_kwargs["modality"] = modality
@@ -1976,6 +2191,8 @@ class AccessSurface:
                     tenant_id=ctx.tenant_id,
                     depth=safe_depth,
                     project_id=eff_project_id,
+                    domain_id=eff_domain_id,
+                    allowed_scopes=sorted(ctx.scopes),
                 )
                 for hit in hits:
                     nid = str(hit.get("id", ""))
@@ -1984,7 +2201,7 @@ class AccessSurface:
 
             if neighbors_by_id:
                 new_meta = {
-                    **dict(sec.media_metadata),
+                    **thaw_mapping(sec.media_metadata),
                     "graph_context": list(neighbors_by_id.values()),
                 }
                 enriched.append(dataclasses.replace(sec, media_metadata=new_meta))
@@ -2013,9 +2230,10 @@ class AccessSurface:
             raise RuntimeError("StoragePort adapter is not configured on AccessSurface")
 
         if metadata:
+            _validate_metadata_size(metadata, "blob metadata")
             try:
                 inspect_memory_write(
-                    json.dumps(dict(metadata), sort_keys=True),
+                    json.dumps(thaw_mapping(metadata), sort_keys=True),
                     tenant_id=ctx.tenant_id,
                     writer_agent_id=ctx.agent_id,
                     target=key or str(file_path or "blob"),
@@ -2087,11 +2305,12 @@ class AccessSurface:
         sha256: str,
         scope: str = "project",
     ) -> dict[str, Any] | None:
-        """Governed metadata lookup of a CAS blob by SHA-256 within caller's tenant."""
+        """Governed metadata lookup of a CAS blob by SHA-256 within caller's tenant/project."""
         await self._decide(ctx, "blob_head", TargetScope(tenant_id=ctx.tenant_id, scope=scope))
         if self._storage is None:
             return None
-        blob = await self._storage.head(key=sha256, tenant_id=ctx.tenant_id)
+        eff_proj = None if (scope == "space" and "space" in ctx.scopes) else ctx.project_id
+        blob = await self._storage.head(key=sha256, tenant_id=ctx.tenant_id, project_id=eff_proj)
         if blob is None:
             return None
         return {
@@ -2105,7 +2324,7 @@ class AccessSurface:
             "storage_tier": blob.storage_tier,
             "status": blob.status,
             "blob_uri": f"pgblob://{blob.tenant_id}/{blob.sha256}",
-            "metadata": dict(blob.metadata),
+            "metadata": thaw_mapping(blob.metadata),
         }
 
     async def blob_get(
@@ -2114,12 +2333,259 @@ class AccessSurface:
         *,
         sha256: str,
         scope: str = "project",
+        max_bytes: int = MAX_SURFACE_BLOB_BYTES,
     ) -> bytes:
-        """Governed read of a bounded CAS blob by SHA-256 within caller's tenant."""
+        """Governed read of a bounded CAS blob by SHA-256 within caller's tenant/project."""
         await self._decide(ctx, "blob_get", TargetScope(tenant_id=ctx.tenant_id, scope=scope))
         if self._storage is None:
             raise RuntimeError("StoragePort adapter is not configured on AccessSurface")
-        return await self._storage.get(key=sha256, tenant_id=ctx.tenant_id)
+        eff_proj = None if (scope == "space" and "space" in ctx.scopes) else ctx.project_id
+        bounded_max = max(1, min(int(max_bytes), 64 * 1024 * 1024))
+        return await self._storage.get(
+            key=sha256,
+            tenant_id=ctx.tenant_id,
+            project_id=eff_proj,
+            max_bytes=bounded_max,
+        )
+
+    async def knowledge_ingest_files(
+        self,
+        ctx: ActorContext,
+        *,
+        paths: Sequence[Path | str],
+        evidence_ref: str | None,
+        scope: str = "project",
+        domain_id: str | None = None,
+        embed: bool = True,
+        project_graph: bool = True,
+        docling: bool = False,
+        repo_root: Path | None = None,
+        enforce_project_boundary: bool = False,
+    ) -> dict[str, list[str]]:
+        """Governed batch file ingestion into kb_sections + CAS + optional graph."""
+        from engramory.core.docs_tools import has_symlink_component, resolve_confined_repo_path
+        from engramory.core.extraction.router import SmartExtractionRouter
+        from engramory.core.knowledge import KnowledgeCore
+
+        await self._decide(
+            ctx,
+            "knowledge_ingest",
+            TargetScope(tenant_id=ctx.tenant_id, scope=scope),
+        )
+        if not evidence_ref:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="knowledge_ingest",
+                allowed=False,
+                reason="missing_evidence_ref",
+            )
+            raise GovernedWriteRejected("knowledge_ingest requires evidence_ref")
+        eff_domain = await self._enforce_domain_boundary(ctx, "knowledge_ingest", domain_id)
+        confined_root = (
+            resolve_confined_repo_path(
+                repo_root,
+                project_id=ctx.project_id,
+                enforce_project_boundary=enforce_project_boundary,
+            )
+            if repo_root is not None
+            else None
+        )
+        confined_paths: list[Path] = []
+        for p in paths:
+            raw_p = Path(p)
+            if has_symlink_component(raw_p, confined_root):
+                raise ValidationError(f"Symlink paths are rejected for knowledge_ingest: {raw_p}")
+            confined_paths.append(
+                resolve_confined_repo_path(
+                    raw_p,
+                    allowed_root=confined_root,
+                    project_id=ctx.project_id,
+                    enforce_project_boundary=enforce_project_boundary,
+                )
+            )
+        router = SmartExtractionRouter(enable_docling=docling)
+        core = KnowledgeCore(
+            self._repo,
+            llm=self._llm,
+            storage=self._storage,
+            graph=self._graph,
+            router=router,
+        )
+        try:
+            return await core.ingest_documents_batch(
+                confined_paths,
+                tenant_id=ctx.tenant_id,
+                project_id=ctx.project_id,
+                domain_id=eff_domain,
+                scope=scope,
+                agent_id=ctx.agent_id,
+                evidence_ref=evidence_ref,
+                embed=embed,
+                project_graph=project_graph,
+                ingest_runbooks=False,
+                repo_root=confined_root,
+            )
+        except MemoryPoisoningError as exc:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="knowledge_ingest",
+                allowed=False,
+                reason=f"poisoning_rejected: {exc}",
+            )
+            raise GovernedWriteRejected(str(exc)) from exc
+        except ValidationError as exc:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="knowledge_ingest",
+                allowed=False,
+                reason=f"validation_rejected: {exc}",
+            )
+            raise GovernedWriteRejected(str(exc)) from exc
+
+    async def knowledge_sync_git(
+        self,
+        ctx: ActorContext,
+        *,
+        repo_path: Path | str,
+        base_sha: str | None = None,
+        head_sha: str | None = None,
+        scope: str = "project",
+        enforce_project_boundary: bool = False,
+    ) -> dict[str, Any]:
+        """Governed commit-differential git repository sync into L0 knowledge base."""
+        from engramory.core.docs_tools import has_symlink_component, resolve_confined_repo_path
+        from engramory.core.git_sync import GitSyncEngine
+
+        await self._decide(
+            ctx,
+            "knowledge_sync_git",
+            TargetScope(tenant_id=ctx.tenant_id, scope=scope),
+        )
+        await self._enforce_domain_boundary(ctx, "knowledge_sync_git", None)
+        raw_root = Path(repo_path)
+        if has_symlink_component(raw_root):
+            raise ValidationError(f"Symlink repo path rejected: {repo_path}")
+        confined_root = resolve_confined_repo_path(
+            raw_root,
+            project_id=ctx.project_id,
+            enforce_project_boundary=enforce_project_boundary,
+        )
+        engine = GitSyncEngine()
+        eff_proj = None if scope in ("domain", "space") else ctx.project_id
+        sync_res = await engine.sync(
+            self._repo,
+            repo_path=confined_root,
+            base_sha=base_sha,
+            head_sha=head_sha,
+            tenant_id=ctx.tenant_id,
+            project_id=eff_proj,
+            scope=scope,
+            llm=self._llm,
+            storage=self._storage,
+            graph=self._graph,
+        )
+        return {
+            "success": sync_res.success,
+            "base_sha": sync_res.base_sha,
+            "head_sha": sync_res.head_sha,
+            "files_added": sync_res.files_added,
+            "files_modified": sync_res.files_modified,
+            "files_deleted": sync_res.files_deleted,
+            "files_skipped": sync_res.files_skipped,
+            "sections_created": sync_res.sections_created,
+            "duration_ms": sync_res.duration_ms,
+        }
+
+    async def sdd_ingest(
+        self,
+        ctx: ActorContext,
+        *,
+        sdd_root: Path | str,
+        evidence_ref: str | None,
+        project_id: str | None = None,
+        scope: str = "project",
+        reconcile: bool = True,
+        ingest_fn: Any = None,
+        enforce_project_boundary: bool = False,
+    ) -> dict[str, Any]:
+        """Governed ingestion of SDD multi-layer DAG into canonical Postgres + Neo4j."""
+        from engramory.core.docs_tools import has_symlink_component, resolve_confined_repo_path
+        from engramory.core.kb_graph import ingest_sdd_knowledge_graph, resolve_sdd_project_id
+
+        await self._decide(
+            ctx,
+            "sdd_ingest",
+            TargetScope(tenant_id=ctx.tenant_id, scope=scope),
+        )
+        clean_ref = str(evidence_ref or "").strip()
+        if not clean_ref:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="sdd_ingest",
+                allowed=False,
+                reason="missing_evidence_ref",
+            )
+            raise GovernedWriteRejected("sdd_ingest requires evidence_ref")
+        if project_id is not None and project_id != ctx.project_id and "space" not in ctx.scopes:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="sdd_ingest",
+                allowed=False,
+                reason=f"cross_project_sdd_ingest_rejected: {project_id}",
+            )
+            raise AuthzError("out_of_scope: cross-project sdd_ingest denied")
+
+        raw_root = Path(sdd_root)
+        if has_symlink_component(raw_root):
+            raise ValidationError(f"Symlink sdd_root rejected: {sdd_root}")
+        confined_sdd = resolve_confined_repo_path(
+            raw_root,
+            project_id=ctx.project_id,
+            enforce_project_boundary=enforce_project_boundary,
+        )
+        eff_proj = resolve_sdd_project_id(
+            confined_sdd,
+            explicit_id=project_id,
+            config_id=ctx.project_id,
+        )
+        if eff_proj != ctx.project_id and "space" not in ctx.scopes:
+            eff_proj = ctx.project_id
+        if ingest_fn is not None:
+            num_ent, num_rel = await ingest_fn(
+                sdd_root=str(confined_sdd),
+                tenant_id=ctx.tenant_id,
+                project_id=eff_proj,
+                reconcile=reconcile,
+            )
+        else:
+            num_ent, num_rel = await ingest_sdd_knowledge_graph(
+                self._repo,
+                self._graph,
+                sdd_root=confined_sdd,
+                tenant_id=ctx.tenant_id,
+                project_id=eff_proj,
+                reconcile=reconcile,
+            )
+        return {
+            "status": "ok",
+            "sdd_root": str(confined_sdd),
+            "tenant_id": ctx.tenant_id,
+            "project_id": eff_proj,
+            "evidence_ref": clean_ref,
+            "reconcile": reconcile,
+            "entities_ingested": num_ent,
+            "relations_ingested": num_rel,
+        }
 
     async def knowledge_ingest_media(
         self,
@@ -2128,13 +2594,14 @@ class AccessSurface:
         file_path: Path | str,
         evidence_ref: str | None,
         scope: str = "project",
+        domain_id: str | None = None,
         embed: bool = True,
         project_graph: bool = True,
         allowed_root: Path | None = None,
         enforce_project_boundary: bool = False,
     ) -> dict[str, Any]:
         """Governed multimodal ingestion (CAS blob + derived sections + dual-engine graph)."""
-        from engramory.core.docs_tools import resolve_confined_repo_path
+        from engramory.core.docs_tools import has_symlink_component, resolve_confined_repo_path
         from engramory.core.knowledge import KnowledgeCore
 
         await self._decide(
@@ -2142,6 +2609,7 @@ class AccessSurface:
             "knowledge_ingest_media",
             TargetScope(tenant_id=ctx.tenant_id, scope=scope),
         )
+        eff_domain = await self._enforce_domain_boundary(ctx, "knowledge_ingest_media", domain_id)
         if not evidence_ref:
             await self._repo.record_audit(
                 tenant_id=ctx.tenant_id,
@@ -2154,7 +2622,7 @@ class AccessSurface:
             raise GovernedWriteRejected("knowledge_ingest_media requires evidence_ref")
 
         raw_p = Path(file_path)
-        if raw_p.is_symlink():
+        if has_symlink_component(raw_p, allowed_root):
             raise ValidationError(
                 f"Symlink paths are rejected for knowledge_ingest_media: {file_path}"
             )
@@ -2175,7 +2643,9 @@ class AccessSurface:
                 confined_p,
                 tenant_id=ctx.tenant_id,
                 project_id=ctx.project_id,
+                domain_id=eff_domain,
                 scope=scope,
+                agent_id=ctx.agent_id,
                 evidence_ref=evidence_ref,
                 embed=embed,
                 project_graph=project_graph,
@@ -2210,11 +2680,22 @@ class AccessSurface:
         steps: Sequence[KBRunbookStep],
         evidence_ref: str | None,
         scope: str = "project",
+        _preauthorized: bool = False,
     ) -> dict[str, Any]:
         """Governed write of L0 kb_documents and kb_runbook_steps (ADR-06)."""
-        await self._decide(
-            ctx, "docs_ingest_runbook", TargetScope(tenant_id=ctx.tenant_id, scope=scope)
-        )
+        if not _preauthorized:
+            await self._decide(
+                ctx, "docs_ingest_runbook", TargetScope(tenant_id=ctx.tenant_id, scope=scope)
+            )
+        else:
+            await self._repo.record_audit(
+                tenant_id=ctx.tenant_id,
+                agent_id=ctx.agent_id,
+                project_id=ctx.project_id,
+                action="docs_ingest_runbook",
+                allowed=True,
+                reason=f"allowed: preauthorized scope {scope!r}",
+            )
         if not evidence_ref:
             await self._repo.record_audit(
                 tenant_id=ctx.tenant_id,
@@ -2233,6 +2714,13 @@ class AccessSurface:
                 writer_agent_id=ctx.agent_id,
                 target=doc.doc_id,
             )
+            if doc.frontmatter:
+                inspect_memory_write(
+                    json.dumps(thaw_mapping(doc.frontmatter), sort_keys=True, default=str),
+                    tenant_id=ctx.tenant_id,
+                    writer_agent_id=ctx.agent_id,
+                    target=doc.doc_id,
+                )
         except MemoryPoisoningError as exc:
             await self._repo.record_audit(
                 tenant_id=ctx.tenant_id,
@@ -2298,7 +2786,7 @@ class AccessSurface:
             )
 
         eff_scope = scope if scope in ctx.scopes else "project"
-        if eff_scope == "domain" or ctx.domain_id is not None:
+        if "space" not in ctx.scopes:
             eff_doc_dom = await self._enforce_domain_boundary(
                 ctx, "docs_ingest_runbook", doc.domain_id
             )
@@ -2318,10 +2806,11 @@ class AccessSurface:
             last_verified=doc.last_verified,
             review_ttl_days=doc.review_ttl_days,
             git_commit_sha=evidence_ref,
-            project_id=ctx.project_id,
+            project_id=None if eff_scope in ("domain", "space") else ctx.project_id,
             domain_id=eff_doc_dom,
             tenant_id=ctx.tenant_id,
             scope=eff_scope,
+            agent_id=ctx.agent_id,
         )
         try:
             await self._repo.upsert_kb_document(locked_doc)
@@ -2368,7 +2857,9 @@ class AccessSurface:
             tenant_id=ctx.tenant_id,
             project_id=ctx.project_id,
             domain_id=eff_slice_dom,
+            agent_id=ctx.agent_id,
             scope=scope,
+            allowed_scopes=sorted(ctx.scopes),
             doc_id=doc_id,
             alert_id=alert_id,
             max_tier=max_tier,

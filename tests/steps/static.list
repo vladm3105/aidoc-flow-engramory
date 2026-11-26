@@ -3,6 +3,5 @@
 uts-check  :: node .unified-test-suite/bin/uts.mjs check
 bdd-ids    :: node .unified-test-suite/bin/uts.mjs bdd-check
 freeze     :: node .unified-test-suite/bin/uts.mjs freeze-check
-# Add project checks, for example:
-# lint       :: npm run -s lint
-# secrets    :: python3 scripts/secret_scan.py
+secrets    :: python3 scripts/secret_scan.py .
+docs-lint  :: uv run engramory --json docs lint --strict --verify-registry docs/doc-tools

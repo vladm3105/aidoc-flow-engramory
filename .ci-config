@@ -13,21 +13,21 @@ BASE_BRANCH=dev
 # dev-staging-main model: branches reachable by `task promote -- <branch>` (space-separated,
 # in promotion order — one hop at a time, so `staging main` means dev->staging->main).
 # Promotion branches never use local CI: the gate is the server check(s) below on the exact commit.
-PROMOTION_BRANCHES=
+PROMOTION_BRANCHES="staging main"
 # ff = fast-forward push of the verified commit (same SHA) · pr = open a promotion PR
-PROMOTION_MODE=ff
+PROMOTION_MODE=pr
 # Split forge (#47/#48): empty = one forge for the whole chain. `github` = BASE_BRANCH lives on
 # Gitea (local CI, ship, review, sync) and PROMOTION_BRANCHES live on GitHub, where promotion
 # PRs and `verify` run on self-hosted runners. Needs a `gitea` remote and PROMOTION_REMOTE;
 # `task mirror` pushes BASE_BRANCH from Gitea to GitHub (exact SHAs, never forced).
-PROMOTION_FORGE=
+PROMOTION_FORGE=github
 # Remote carrying the promotion branches in split mode.
 PROMOTION_REMOTE=github
 # Promotion targets agents may promote into on their own (task autopromote), e.g. staging.
 # The promotion PR still needs every required check; main and releases stay human (PLAN-007).
-PROMOTION_AUTONOMOUS=staging
+PROMOTION_AUTONOMOUS="staging main"
 # Issue tracker forge: github|gitea. Default: GitHub in split mode, otherwise the active forge (G1).
-ISSUE_FORGE=
+ISSUE_FORGE=paperclip
 # Split forge mirror identity (PLAN-007 G4/G9): the GitHub App id that alone may push the GitHub copy of
 # dev (the key file comes from the environment, MIRROR_APP_KEY_FILE), and the Gitea account that alone
 # may push the Gitea copies of the promotion branches (task mirror --pull).
@@ -58,7 +58,7 @@ MIRROR_REMOTE=github
 # Branches to replicate (space-separated). Empty = BASE_BRANCH + PROMOTION_BRANCHES.
 # v* tags always replicate alongside. The mirror never force-pushes: a diverged
 # replica refuses loudly until fixed by hand.
-MIRROR_REFS=
+MIRROR_REFS=dev
 # Inbox `mirror-lag` threshold: minutes since the last successful sync.
 MIRROR_LAG_MIN=60
 
@@ -137,7 +137,7 @@ REVIEW_MAX_DIFF_BYTES=150000
 REVIEW_EXCLUDE=.agents/** .unified-test-suite/**
 REVIEW_TIMEOUT=900
 # Environment variables passed to the reviewer (everything else is dropped).
-REVIEW_ENV=LLM_URL LLM_API_KEY ANTHROPIC_API_KEY OPENAI_API_KEY
+REVIEW_ENV=LLM_URL LLM_API_KEY
 # isolated (empty temp dir, diff-only review) | repo (reviewer CLI may read the repository)
 REVIEW_CWD=isolated
 # Inbox `stale-review` threshold: hours a REVISE/BLOCK verdict may sit before flagging.
@@ -145,7 +145,7 @@ REVIEW_STALE_H=24
 
 # Base branches `task autoship` may merge into without a human (e.g. "dev"). Empty = never.
 SHIP_AUTONOMOUS_BRANCHES=dev
-AUTO_MERGE_METHOD=squash
+AUTO_MERGE_METHOD=merge
 
 # --- Merge-conflict resolution (canon: https://github.com/vladm3105/aidoc-hybrid-ci/blob/main/docs/CONFLICT_RESOLUTION.md) ---
 # Class C (semantic) files per `task sync` an agent may resolve; more escalates to a human.

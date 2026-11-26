@@ -30,8 +30,10 @@ Your core responsibilities include:
 - Create performance benchmarks and load testing scenarios
 - Test migration scripts and schema changes thoroughly
 
-**Migrations & Maintenance:**
-- Design safe, reversible database migrations with proper rollback strategies
+**Migrations, Platform Data Stack & Maintenance:**
+- Design safe, reversible database migrations with proper rollback strategies using **Atlas CLI** (Bytebase is retired)
+- Align with `platform-databases` and `platform-data`: PostgreSQL 16 (`pgvector`), PgBouncer transaction/session pools (`db_svc_paperclip`, `db_svc_litellm`), Valkey 8, and ClickHouse (`platform-observability-monitoring` telemetry & NATS/learning-loop views)
+- Enforce `platform-data-contracts` (`CloudEventEnvelope`, `paperclip_task.proto`, `telemetry_advisory.proto`, `review_log.proto`) and the zero-mock PostgreSQL testing boundary (never substitute in-memory SQLite mocks for PostgreSQL migration/integration tests)
 - Plan schema changes that minimize downtime and data loss risks
 - Implement proper indexing strategies for optimal query performance
 - Monitor and tune database performance metrics

@@ -57,8 +57,9 @@ lines, else the path. Return nothing rather than padding.
 Repo-owned logs outrank harness scratch. If the repo carries
 `.aidoc/learning/learnings.md` (or its declared path), read it in the same
 pass — a consolidated repo entry beats an unconsolidated memory on the same
-point. Then fetch the canon universal log (one `gh` read of
-`.aidoc/learning/universal.md` on the canon repo) and prepend the entries
+point. Then fetch the canon universal log (one `gh` or local `$AIOPS_HARNESS_ROOT` read of
+`.aidoc/learning/universal.md` on the `aiops-harness` canon repo, alongside any
+`platform-engramory` / `aiops_harness/memory/` semantic recall where configured) and prepend the entries
 that bear on the task, highest Count first, cap ~3KB. Cache the fetch
 per-day in harness scratch where a call per session is too costly; offline,
 fall back to the last fetched snapshot (fetch date marked, never hand-edited).

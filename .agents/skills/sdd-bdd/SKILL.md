@@ -6,9 +6,9 @@ description: >-
 
 # SDD BDD Author
 
-> Framework skill — routes to `framework/layers/04_BDD/BDD-TEMPLATE.yaml`
+> Framework skill — routes to `.aidoc/framework/framework/layers/04_BDD/BDD-TEMPLATE.yaml`
 > and `BDD_WORKFLOW_STANDARD.md` (entry gate GATE-03).
-> Paths below use `<skills-root>` = this `framework/skills/` directory.
+> Paths below use `<skills-root>` = `.agents/skills/` (framework root: `.aidoc/framework/framework/`).
 > Upstream: `sdd-ears` statements are the input.
 
 ## 1. Scenarios, not scripts

@@ -22,7 +22,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-SKIP_DIRS = frozenset({".venv", ".git", "__pycache__", "node_modules", ".mypy_cache", "dist", "build"})
+SKIP_DIRS = frozenset(
+    {".venv", ".git", "__pycache__", "node_modules", ".mypy_cache", "dist", "build"}
+)
 
 SKIP_PATH_PREFIXES = (
     "archive/",
@@ -52,13 +54,37 @@ class SecretFormat:
 
 PRIVATE_KEY = SecretFormat(
     "private_key",
-    re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
+    re.compile(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----"),
 )
-AWS_ACCESS_KEY_ID = SecretFormat("aws_access_key_id", re.compile(r"AKIA[0-9A-Z]{16}"))
+AWS_ACCESS_KEY_ID = SecretFormat(
+    "aws_access_key_id",
+    re.compile(r"(?!AKIA[0-9A-Z]{9}EXAMPLE\b)\bAKIA[0-9A-Z]{16}\b"),
+)
 ANTHROPIC_API_KEY = SecretFormat("anthropic_api_key", re.compile(r"sk-ant-[A-Za-z0-9_-]{16,}"))
-OPENAI_API_KEY = SecretFormat("openai_api_key", re.compile(r"\bsk-[A-Za-z0-9]{20,}\b"))
-GITHUB_PAT = SecretFormat("github_pat", re.compile(r"\bghp_[A-Za-z0-9]{36}\b"))
+OPENAI_API_KEY = SecretFormat(
+    "openai_api_key",
+    re.compile(r"\bsk-(?:proj-|ant-|litellm-|platform-)?[A-Za-z0-9_-]{24,255}\b"),
+)
+GITHUB_PAT = SecretFormat(
+    "github_pat",
+    re.compile(r"\b(?:github_pat_[A-Za-z0-9_]{40,}|gh[pousr]_[A-Za-z0-9]{36,})\b"),
+)
+OPENBAO_TOKEN = SecretFormat("openbao_token", re.compile(r"\bhvs\.[A-Za-z0-9_-]{24,}\b"))
 SLACK_TOKEN = SecretFormat("slack_token", re.compile(r"\bxox[baprs]-[0-9A-Za-z]{10,}\b"))
+_BENIGN_PLACEHOLDER_LOOKAHEAD = (
+    r"(?![\"']?\s*(?:\$|#|<|$|(?:change_me|changeme|placeholder|example|dummy-[^\s\"']*)"
+    r"[\"']?(?:\s*#.*)?$))"
+)
+DSN_CREDENTIALS = SecretFormat(
+    "dsn_credentials",
+    re.compile(
+        r"\b(?:postgres(?:ql)?|bolt(?:\+s)?|neo4j(?:\+s)?|rediss?|nats)://"
+        r"(?!\$\{)[^\s:@/\"'<>]+:"
+        r"(?!\$\{|(?:change_me|changeme|placeholder|nope|it|x|pw)@)"
+        r"[^\s@/\"'<>]+@"
+        r"(?!127\.0\.0\.1[:/]|localhost[:/])[^\s/\"']+"
+    ),
+)
 
 DEFAULT_SECRET_ENV_KEYS = (
     "API_KEY",
@@ -67,21 +93,31 @@ DEFAULT_SECRET_ENV_KEYS = (
     "AUTH_TOKEN",
     "ACCESS_TOKEN",
     "ENCRYPTION_KEY",
+    "MASTER_KEY",
+    "GRAPH_PASSWORD",
+    "GATE_TOKEN",
+    "PASSWORD",
 )
 
 SECRET_ENV_ASSIGNMENT = SecretFormat(
     "secret_env_assignment",
     re.compile(
-        r"^\s*(?:export\s+)?(?:"
+        r"^\s*(?:export\s+|-\s+)?[A-Z0-9_]*(?:"
         + "|".join(DEFAULT_SECRET_ENV_KEYS)
-        + r")\s*=\s*(?![\"']?\s*(?:\$|#|$))[\"']?[^\s\"'#${\[]"
+        + r")\s*=\s*"
+        + _BENIGN_PLACEHOLDER_LOOKAHEAD
+        + r"[\"']?[^\s\"'#${\[<]"
     ),
 )
 
 SECRET_ENV_YAML_ASSIGNMENT = SecretFormat(
     "secret_env_yaml_assignment",
     re.compile(
-        r"\b(?:" + "|".join(DEFAULT_SECRET_ENV_KEYS) + r")\s*:(?!-)\s+(?![\"']?\s*(?:\$|#|$))[\"']?[^\s\"'#${\[]"
+        r"\b[A-Z0-9_]*(?:"
+        + "|".join(DEFAULT_SECRET_ENV_KEYS)
+        + r")\s*:(?!-)\s+"
+        + _BENIGN_PLACEHOLDER_LOOKAHEAD
+        + r"[\"']?[^\s\"'#${\[<]"
     ),
 )
 
@@ -91,7 +127,9 @@ DEFAULT_FORMATS = (
     ANTHROPIC_API_KEY,
     OPENAI_API_KEY,
     GITHUB_PAT,
+    OPENBAO_TOKEN,
     SLACK_TOKEN,
+    DSN_CREDENTIALS,
     SECRET_ENV_ASSIGNMENT,
     SECRET_ENV_YAML_ASSIGNMENT,
 )
@@ -132,7 +170,16 @@ def _git_files(tree: Path) -> list[Path] | None:
     """
     try:
         proc = subprocess.run(
-            ["git", "-C", str(tree), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+            [
+                "git",
+                "-C",
+                str(tree),
+                "ls-files",
+                "-z",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+            ],
             capture_output=True,
             timeout=120,
             check=False,
@@ -186,7 +233,9 @@ def _scannable(tree: Path) -> list[Path]:
 
 class SecretScan:
     @staticmethod
-    def run(trees: tuple[Path, ...], formats: tuple[SecretFormat, ...] = DEFAULT_FORMATS) -> ScanReport:
+    def run(
+        trees: tuple[Path, ...], formats: tuple[SecretFormat, ...] = DEFAULT_FORMATS
+    ) -> ScanReport:
         findings: list[Finding] = []
         for tree in trees:
             allowed = _allowlist(tree)
@@ -204,7 +253,11 @@ class SecretScan:
                         continue
                     if (rel, None) in allowed or (rel, number) in allowed:
                         continue
-                    findings.extend(Finding(fmt.name, str(path), number) for fmt in formats if fmt.pattern.search(line))
+                    findings.extend(
+                        Finding(fmt.name, str(path), number)
+                        for fmt in formats
+                        if fmt.pattern.search(line)
+                    )
         return ScanReport(
             trees_scanned=tuple(str(tree) for tree in trees),
             formats_matched=tuple(fmt.name for fmt in formats),
@@ -212,12 +265,15 @@ class SecretScan:
         )
 
     @staticmethod
-    def enforce(trees: tuple[Path, ...], formats: tuple[SecretFormat, ...] = DEFAULT_FORMATS) -> ScanReport:
+    def enforce(
+        trees: tuple[Path, ...], formats: tuple[SecretFormat, ...] = DEFAULT_FORMATS
+    ) -> ScanReport:
         """Run the scan and fail on any match."""
         report = SecretScan.run(trees=trees, formats=formats)
         if report.findings:
             locations = ", ".join(
-                f"{finding.path}:{finding.line} ({finding.format})" for finding in report.findings_detail
+                f"{finding.path}:{finding.line} ({finding.format})"
+                for finding in report.findings_detail
             )
             raise SecretMaterialFound(f"Secret material found: {locations}")
         return report

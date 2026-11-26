@@ -453,8 +453,18 @@ forge_label_remove() {
 # green instead (pr-status --watch, forge_merge_now) — a direct Gitea call
 # succeeds only when the PR is already green.
 forge_merge_auto() {
+  local keep=${3:-} promo cur_br
+  promo=" $(ci_list PROMOTION_BRANCHES "") "
+  cur_br=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+  if [[ $keep != keep && -n $cur_br && $promo == *" $cur_br "* ]]; then
+    keep=keep
+  fi
   if [[ $(ci_forge) == github ]]; then
-    gh pr merge --auto "--$2" --delete-branch >/dev/null
+    if [[ $keep == keep ]]; then
+      gh pr merge --auto "--$2" >/dev/null
+    else
+      gh pr merge --auto "--$2" --delete-branch >/dev/null
+    fi
     return
   fi
   local repo
@@ -527,11 +537,11 @@ forge_check_status() {
 forge_pr_list() {
   local label=${1:-}
   if [[ $(ci_forge) == github ]]; then
-    local args=(--state open --limit 1000 --json "number,headRefName,baseRefName,title,labels") out
+    local args=(--state open --limit 1000 --json "number,headRefName,baseRefName,title,labels,isDraft,updatedAt,mergeable") out
     [[ -n $label ]] && args+=(--label "$label")
     out=$(gh pr list "${args[@]}" 2>/dev/null) || return 1
     [[ -n $out ]] || { echo "[]"; return 0; }
-    jq '[.[] | {number, head:.headRefName, base:.baseRefName, title, labels:[.labels[]?.name]}]' <<<"$out"
+    jq '[.[] | {number, head:.headRefName, base:.baseRefName, title, labels:[.labels[]?.name], isDraft:(.isDraft // false), updatedAt:(.updatedAt // null), mergeable:(.mergeable // null)}]' <<<"$out"
     return
   fi
   local repo out
@@ -539,9 +549,9 @@ forge_pr_list() {
   out=$(forge_gitea_pages "repos/$repo/pulls?state=open" 2>/dev/null) || return 1
   if [[ -n $label ]]; then
     jq --arg l "$label" '[.[] | select(any(.labels[]?; .name == $l))
-      | {number, head:.head.ref, base:.base.ref, title, labels:[.labels[]?.name]}]' <<<"$out"
+      | {number, head:.head.ref, base:.base.ref, title, labels:[.labels[]?.name], isDraft:(.draft // false), updatedAt:(.updated_at // null), mergeable:(.mergeable // null)}]' <<<"$out"
   else
-    jq '[.[] | {number, head:.head.ref, base:.base.ref, title, labels:[.labels[]?.name]}]' <<<"$out"
+    jq '[.[] | {number, head:.head.ref, base:.base.ref, title, labels:[.labels[]?.name], isDraft:(.draft // false), updatedAt:(.updated_at // null), mergeable:(.mergeable // null)}]' <<<"$out"
   fi
 }
 
@@ -609,9 +619,9 @@ forge_instance() {
 forge_pr_view() {
   if [[ $(ci_forge) == github ]]; then
     local out
-    out=$(gh pr view "$1" --json number,state,mergeable,mergeStateStatus,autoMergeRequest,url,mergedAt,headRefOid,labels 2>/dev/null) || return 1
+    out=$(gh pr view "$1" --json number,state,mergeable,mergeStateStatus,autoMergeRequest,url,mergedAt,headRefOid,labels,isDraft,updatedAt,baseRefName 2>/dev/null) || return 1
     [[ -n $out ]] || return 1
-    jq '.labels = [.labels[]?.name]' <<<"$out"
+    jq '.labels = [.labels[]?.name] | .isDraft //= false' <<<"$out"
     return
   fi
   local repo pr base_ref tip mb behind=false
@@ -632,6 +642,9 @@ forge_pr_view() {
     url: $pr.html_url,
     mergedAt: $pr.merged_at,
     headRefOid: $pr.head.sha,
+    baseRefName: ($pr.base.ref // null),
+    isDraft: ($pr.draft // false),
+    updatedAt: ($pr.updated_at // null),
     labels: ($pr.labels // [] | map(.name))
   }'
 }

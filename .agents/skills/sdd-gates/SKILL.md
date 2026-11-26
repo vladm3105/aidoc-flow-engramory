@@ -6,10 +6,10 @@ description: >-
 
 # SDD Gate Runner
 
-> Framework skill — routes to `framework/layers/09_CHG/gates/` (GATE-01,
+> Framework skill — routes to `.aidoc/framework/framework/layers/09_CHG/gates/` (GATE-01,
 > GATE-03, GATE-06, GATE-08, GATE-CODE, GATE-SPEC), `GATE_ERROR_CATALOG.md`,
 > and `GATE_INTERACTION_DIAGRAM.md`.
-> Paths below use `<skills-root>` = this `framework/skills/` directory.
+> Paths below use `<skills-root>` = `.agents/skills/` (framework root: `.aidoc/framework/framework/`).
 
 ## 1. Select gates by touch
 

@@ -32,7 +32,10 @@ editing it.
   before assuming one is missing.** A repo's `AGENTS.md` governance table is
   authoritative about its own surfaces: "not adopted" there is a decision, not a
   gap (`aidoc-flow-business` declines both `CHANGELOG.md` and `ROADMAP.md` —
-  git commits plus `DECISIONS.md` are its changelog). Write to the substitute
+  git commits plus `DECISIONS.md` are its changelog; SDD-governed spokes under
+  `aiops-harness` enforce `forbidden_legacy_paths` on `CHANGELOG.md` and
+  `ROADMAP.md`, recording release history in `docs/sdd/09_CHG/archive/` and
+  GitHub Releases instead). Write to the substitute
   the repo names, and **never create the file it chose not to have.** Same for
   handoffs, TODO files and decision logs.
 

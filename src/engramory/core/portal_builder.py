@@ -2,13 +2,15 @@
 
 Stages governed repository `docs/*.md` files into the Astro Starlight content collection
 (`portal/src/content/docs/reference`), enforcing workspace/repo path confinement, symlink escape
-prevention, synthesized YAML frontmatter escaping, and fail-closed Rule D14 secret & P14 Unicode
-scrubbing prior to writing.
+prevention, synthesized YAML frontmatter escaping with guaranteed `title`, orphan pruning,
+and fail-closed Rule D14 secret & P14 Unicode scrubbing prior to writing.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +18,7 @@ from engramory.core.docs_tools import (
     _is_sdd_doc_path,
     _is_within_root,
     _scrub_manifest_text,
+    has_symlink_component,
     parse_markdown_document,
     resolve_confined_repo_path,
 )
@@ -24,15 +27,37 @@ from engramory.core.models import ValidationError
 
 def _synthesize_starlight_frontmatter(raw_text: str, *, fallback_stem: str) -> str:
     """Ensure Markdown has YAML frontmatter with JSON-escaped `title` and `description`."""
-    stripped = raw_text.lstrip()
-    if stripped.startswith("---\n") or stripped.startswith("---\r\n"):
-        return raw_text
-
     resolved_title = fallback_stem
     for line in raw_text.splitlines():
         if line.startswith("# "):
             resolved_title = line[2:].strip() or fallback_stem
             break
+
+    stripped = raw_text.lstrip()
+    if stripped.startswith("---\n") or stripped.startswith("---\r\n"):
+        lines = raw_text.splitlines(keepends=True)
+        start_idx = next(i for i, ln in enumerate(lines) if ln.strip() == "---")
+        end_idx: int | None = None
+        for idx in range(start_idx + 1, len(lines)):
+            if lines[idx].strip() == "---":
+                end_idx = idx
+                break
+        if end_idx is None:
+            return raw_text
+        fm_lines = lines[start_idx + 1 : end_idx]
+        has_title = any(
+            re.match(r"^\s*title\s*:", ln) is not None and bool(ln.split(":", 1)[1].strip())
+            for ln in fm_lines
+        )
+        if has_title:
+            return raw_text
+        nl = "\r\n" if lines[start_idx].endswith("\r\n") else "\n"
+        safe_title = json.dumps(resolved_title)
+        filtered_fm = [ln for ln in fm_lines if re.match(r"^\s*title\s*:", ln) is None]
+        updated = (
+            lines[: start_idx + 1] + [f"title: {safe_title}{nl}"] + filtered_fm + lines[end_idx:]
+        )
+        return "".join(updated)
 
     safe_title = json.dumps(resolved_title)
     safe_desc = json.dumps(f"Governed documentation reference for {resolved_title}.")
@@ -65,18 +90,22 @@ def stage_portal_bundle(
             ) from exc
 
     docs_dir = confined_repo / "docs"
-    scan_root = docs_dir if docs_dir.is_dir() else confined_repo
-    raw_md_files = sorted(scan_root.rglob("*.md")) if scan_root.is_dir() else []
+    if docs_dir.is_symlink():
+        raise ValidationError("Documentation directory escapes repository boundary")
+    raw_md_files = sorted(docs_dir.rglob("*.md")) if docs_dir.is_dir() else []
     md_files = [f for f in raw_md_files if not _is_sdd_doc_path(f, confined_repo)]
 
     staged_files: list[str] = []
+    expected_dests: set[Path] = set()
     scrubbed_count = 0
 
     for md_file in md_files:
-        # Prevent recursive self-staging if target_dir sits inside scan_root
+        # Prevent recursive self-staging if target_dir sits inside docs_dir
         if _is_within_root(md_file, target_dir):
             continue
-        if not _is_within_root(md_file, confined_repo):
+        if has_symlink_component(md_file, confined_repo) or not _is_within_root(
+            md_file, confined_repo
+        ):
             raise ValidationError(f"Markdown file escapes repository boundary: {md_file}")
 
         parsed = parse_markdown_document(md_file, repo_root=confined_repo)
@@ -95,15 +124,41 @@ def stage_portal_bundle(
         if clean_text != with_fm:
             scrubbed_count += 1
 
-        rel_under_docs = md_file.relative_to(scan_root)
+        rel_under_docs = md_file.relative_to(docs_dir)
         dest = target_dir / rel_under_docs
-        if dest.is_symlink() or not _is_within_root(dest, target_dir):
+        if (
+            dest.is_symlink()
+            or has_symlink_component(dest, target_dir)
+            or not _is_within_root(dest, target_dir)
+        ):
             raise ValidationError(f"Destination path escapes output boundary: {dest}")
 
+        expected_dests.add(dest.resolve())
         if not dry_run:
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(clean_text, encoding="utf-8")
-        staged_files.append(str(rel_under_docs))
+        staged_files.append(rel_under_docs.as_posix())
+
+    pruned_files: list[str] = []
+    if not dry_run and target_dir.is_dir():
+        for existing in sorted(list(target_dir.rglob("*.md")) + list(target_dir.rglob("*.mdx"))):
+            if (
+                existing.is_symlink()
+                or has_symlink_component(existing, target_dir)
+                or not _is_within_root(existing, target_dir)
+            ):
+                continue
+            if existing.resolve() not in expected_dests:
+                pruned_files.append(existing.relative_to(target_dir).as_posix())
+                existing.unlink()
+        for cand_dir in sorted(
+            (p for p in target_dir.rglob("*") if p.is_dir() and not p.is_symlink()),
+            key=lambda p: len(p.parts),
+            reverse=True,
+        ):
+            with contextlib.suppress(OSError):
+                if not any(cand_dir.iterdir()):
+                    cand_dir.rmdir()
 
     return {
         "status": "ok",
@@ -112,6 +167,8 @@ def stage_portal_bundle(
         "dry_run": dry_run,
         "files_staged": len(staged_files),
         "staged_count": len(staged_files),
+        "pruned_count": len(pruned_files),
+        "pruned_files": pruned_files,
         "scrubbed_files": scrubbed_count,
         "staged_paths": staged_files,
         "staged_files": staged_files,

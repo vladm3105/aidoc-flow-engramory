@@ -49,6 +49,14 @@ symbols — callers, definitions, the enclosing module). Do not sweep the repo;
 if job 2 or 3 requires wider reading, follow the plan's own references rather
 than exploring freely.
 
+### Task-Level Convergence Scoring (`plan-gate: v2`)
+
+When reviewing a plan declaring a standalone `<!-- plan-gate: v2 -->` directive (or invoked with `--v2`), score every task independently in `## Task convergence` (`| Task ID | SHA-256 | P1 | P2 | P3 | P4 | Total | Status |`):
+- Score the 4 pillars (`arch_eac` `P1`, `security_blast` `P2`, `dx` `P3`, `ops` `P4`) from `0.0` to `5.0` (Total `/ 20.0`). Ignore and strip any author self-scores.
+- Pin the canonical 64-hex lowercase `task_sha256` (`!= 0*64`, computed at Stage 1 via `check_plan.py --hash-tasks [--fix]` over the section-excluded `### Phase ... (<Task ID>)` block, or at Stage 3 via `compute_task_canonical_hash` over `SLICE-NN.graph.yaml` `TASK.08.NN.a001..a00N` nodes). Mark `LOCKED` **only** when `Total >= 16.0`, every pillar `>= 2.5`, the 64-hex hash is valid and non-zero, and zero blocking findings affect that task.
+- Otherwise classify each non-converged task accurately as `FIX`, `STALE` (0% health credit on dependency/contract/hash drift), `PROBE` (hermetic Link-0 read-only local diagnostic command `PROBE[link0]: <readonly_cmd>` restricted to `pytest`, `ruff`, `mypy`, `true`, `echo`, `test`, `git` — distinct from external Claim-ledger `PROBE[experiment]: <cmd>` phase gates), or `REDESIGN` (require `>= 3` concrete alternatives before locking `REDESIGN` or repeat-`FIX`).
+- Keep `## Review log` within `2..3` `### Pass N` headings total (`_TASK_PASS_CAP_V2 = 3`, recording reviewer/subagent ID and selected lenses for provenance), and end the final independent pass with either 100% `LOCKED` + `**Result:** ready — no further findings.`, `**Disposition:** SPLIT_TO_CHAIN (CHG-<N>)` when Pass 2/3 triggers a governed chain split, or `**Disposition:** ESCALATE` for human intervention.
+
 ## Output
 
 Return a numbered findings list. Tag every finding **load-bearing** (the plan

@@ -5,35 +5,34 @@ document_control:
   iplan_id: "IPLAN-03"
   subtype: code_build
   source_spec: "@spec: SPEC-03"
-  status: Draft
-  version: "1.0"
+  status: Completed
+  version: "1.1"
   date_created: "2026-06-22T00:00:00"
-  last_updated: "2026-06-22T00:00:00"
+  last_updated: "2026-11-22T00:00:00"
   author: "Engramory team"
   complexity: 3
   estimated_files: 4
-  session_count: 0
+  session_count: 1
 
 file_manifest:
   files:
-    - { path: "tests/unit/test_ranking.py", order: 1, status: NOT_STARTED, session: null, verified: false }
-    - { path: "src/engramory/core/retrieval.py", order: 2, status: NOT_STARTED, session: null, verified: false }
-    - { path: "tests/integration/test_retrieval_failclosed.py", order: 3, status: NOT_STARTED, session: null, verified: false }
-    - { path: "tests/e2e/test_retrieval_latency.py", order: 4, status: NOT_STARTED, session: null, verified: false }
+    - { path: "src/engramory/core/repository.py", order: 1, status: DONE, session: "consolidated", verified: true }
+    - { path: "src/engramory/access/surface.py", order: 2, status: DONE, session: "consolidated", verified: true }
+    - { path: "tests/e2e/test_retrieval.py", order: 3, status: DONE, session: "consolidated", verified: true }
+    - { path: "tests/integration/test_graph_integration.py", order: 4, status: DONE, session: "consolidated", verified: true }
 
 execution_commands:
-  setup: ["source .venv/bin/activate"]
+  setup: ["uv sync"]
   implementation:
-    - "# TDD: tests/unit/test_ranking.py (fusion + advisory exclusion) FIRST"
-    - "# Implement src/engramory/core/retrieval.py (vector + GraphPort fusion, fail-closed)"
+    - "# Consolidated into Repository.get_memories, Repository.search_kb_sections, AccessSurface.memory_search/graph_neighbors, and Neo4jGraphAdapter"
   validation:
-    - "python -m pytest tests/unit/test_ranking.py tests/integration/test_retrieval_failclosed.py tests/e2e/test_retrieval_latency.py -v"
-    - "python -m ruff check src/engramory/core/retrieval.py"
+    - "uv run pytest tests/e2e/test_retrieval.py tests/integration/test_graph_integration.py -v"
+    - "uv run ruff check src/engramory/core/repository.py src/engramory/access/surface.py"
 
 implementation_contracts:
   provided:
     contracts:
-      - { name: "RetrievalService", type: "Protocol Interface", note: "retrieve(scope, query, k); traverse(scope, entity, hops)" }
+      - { name: "Retrieval & Graph Query Paths", type: "Repository + AccessSurface", note: "Repository.get_memories, Repository.search_kb_sections (3-leg RRF), AccessSurface.graph_neighbors" }
   consumed:
     dependencies:
       - { name: "VectorPort / GraphPort", from: "@spec: SPEC-06", note: "similarity + traversal" }
@@ -46,18 +45,29 @@ session_handoff:
       files_touched: []
       partial_work: "None."
       blockers: "Depends on IPLAN-02 (store) and IPLAN-06 (ports)."
-      next_session_directive: "File order 1: tests/unit/test_ranking.py (TDD-03.04.a100)."
+      next_session_directive: "Consolidate retrieval into Repository + AccessSurface."
       validation_results: { tests_passing: null, coverage: null, lint_clean: false }
+    - date: "2026-11-22"
+      agent: "Wave P3 M8 Reconciliation"
+      files_touched: ["src/engramory/core/repository.py", "src/engramory/access/surface.py", "tests/e2e/test_retrieval.py", "tests/integration/test_graph_integration.py"]
+      partial_work: "Completed via Repository.get_memories (indexable HNSW + ts_lex + escaped ILIKE), search_kb_sections (3-leg RRF), and GraphPort/CTE traversal."
+      blockers: "None."
+      next_session_directive: "Done."
+      validation_results: { tests_passing: true, coverage: null, lint_clean: true }
 
 traceability:
   upstream:
     spec_references: ["@spec: SPEC-03"]
     tdd_references: ["@tdd: TDD-03"]
   downstream:
-    code_paths: ["@code: src/engramory/core/retrieval.py"]
-    test_paths: ["@tests: tests/e2e/test_retrieval_latency.py"]
+    code_paths: ["@code: src/engramory/core/repository.py", "@code: src/engramory/access/surface.py"]
+    test_paths: ["@tests: tests/e2e/test_retrieval.py", "@tests: tests/integration/test_graph_integration.py"]
   code_inventory:
-    files: []
+    files:
+      - { path: "src/engramory/core/repository.py", status: completed, session: "consolidated", verified: true }
+      - { path: "src/engramory/access/surface.py", status: completed, session: "consolidated", verified: true }
+      - { path: "tests/e2e/test_retrieval.py", status: completed, session: "consolidated", verified: true }
+      - { path: "tests/integration/test_graph_integration.py", status: completed, session: "consolidated", verified: true }
 
 tdd_consistency:
   summary: "Governed in consolidated SDD corpus."

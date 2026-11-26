@@ -33,15 +33,15 @@ class _SimpleHTMLTextExtractor(StdlibHTMLParser):
         self.current_header_level: int | None = None
         self.current_header_text: list[str] = []
         self.current_header_start = 0
-        self.ignore_depth = 0
+        self.ignore_stack: list[str] = []
         self.current_pos = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         t = tag.lower()
         if t in self.IGNORE_TAGS:
-            self.ignore_depth += 1
+            self.ignore_stack.append(t)
             return
-        if self.ignore_depth > 0:
+        if self.ignore_stack:
             return
         if t in self.HEADER_TAGS:
             self.current_header_level = self.HEADER_TAGS[t]
@@ -51,9 +51,11 @@ class _SimpleHTMLTextExtractor(StdlibHTMLParser):
     def handle_endtag(self, tag: str) -> None:
         t = tag.lower()
         if t in self.IGNORE_TAGS:
-            self.ignore_depth = max(0, self.ignore_depth - 1)
+            if t in self.ignore_stack:
+                idx = len(self.ignore_stack) - 1 - self.ignore_stack[::-1].index(t)
+                del self.ignore_stack[idx:]
             return
-        if self.ignore_depth > 0:
+        if self.ignore_stack:
             return
         if t in self.HEADER_TAGS and self.current_header_level is not None:
             header_name = "".join(self.current_header_text).strip()
@@ -65,7 +67,7 @@ class _SimpleHTMLTextExtractor(StdlibHTMLParser):
             self.current_header_text = []
 
     def handle_data(self, data: str) -> None:
-        if self.ignore_depth > 0:
+        if self.ignore_stack:
             return
         if self.current_header_level is not None:
             self.current_header_text.append(data)
@@ -109,6 +111,13 @@ class HTMLParser(BaseParser):
 
         if not header_nodes:
             body_text = soup.get_text(separator="\n", strip=True)
+            if not body_text:
+                return ParseResult(
+                    sections=[],
+                    doc_type=self.doc_type,
+                    title=title,
+                    warnings=["Empty document"],
+                )
             sec = Section(
                 section_id="sec_1",
                 name="Content",
@@ -124,7 +133,7 @@ class HTMLParser(BaseParser):
                 sections=[sec],
                 doc_type=self.doc_type,
                 title=title,
-                warnings=["No header elements found in HTML"] if body_text else ["Empty document"],
+                warnings=["No header elements found in HTML"],
             )
 
         for h_node in header_nodes:
@@ -183,6 +192,13 @@ class HTMLParser(BaseParser):
 
         if not headers:
             body_clean = full_text.strip()
+            if not body_clean:
+                return ParseResult(
+                    sections=[],
+                    doc_type=self.doc_type,
+                    title=title,
+                    warnings=["Empty document"],
+                )
             sec = Section(
                 section_id="sec_1",
                 name="Content",
@@ -198,7 +214,7 @@ class HTMLParser(BaseParser):
                 sections=[sec],
                 doc_type=self.doc_type,
                 title=title,
-                warnings=["No header elements found in HTML"] if body_clean else ["Empty document"],
+                warnings=["No header elements found in HTML"],
             )
 
         sections: list[Section] = []
@@ -216,6 +232,8 @@ class HTMLParser(BaseParser):
                     order=order,
                     level=level,
                     content=sec_content,
+                    char_start=start_pos,
+                    char_end=end_pos,
                     source_tag=f"h{level}",
                 )
             )

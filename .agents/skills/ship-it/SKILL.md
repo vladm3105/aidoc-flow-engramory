@@ -1,12 +1,12 @@
 ---
 name: ship-it
 description: >-
-  Use after a PR you opened is running CI, but only when the repository explicitly authorizes agent auto-merge. Watch required checks, enforce carve-outs, merge when eligible, and clean up the branch; otherwise stop for explicit user direction. GitHub-only: every mechanism step is `gh`/GitHub.
+  Watch required CI checks and drive autonomous PR merge-on-green across Split-Forge (`dev` on Gitea via `task autoship` + server `.gitea/workflows/auto-merge.yml`, and `staging`/`main` on GitHub via `task autopromote` + `.github/workflows/auto-merge.yml`). Never invoke raw `gh pr merge` directly where harness guardrails apply; clean up worktrees strictly before deleting branches (`[I-02]`).
 # Edit/Write and the git merge/commit/add/push verbs are scoped by §§1.1/2.1,
 # not by this list: conflict resolution and fixes stay on the PR's branch,
 # and anything the PR does not own ends the loop (bail-out).
 allowed-tools: >-
-  Bash(gh pr view:*) Bash(gh pr checks:*) Bash(gh pr merge:*) Bash(git rev-parse:*) Bash(git worktree:*) Bash(git branch:*) Bash(git fetch:*) Bash(git checkout:*) Bash(git pull:*) Bash(git merge:*) Bash(git commit:*) Bash(git add:*) Bash(git push:*) Read Edit Write
+  Bash(task autoship:*) Bash(task autopromote:*) Bash(task ship:*) Bash(task -x pr-status:*) Bash(task mirror:*) Bash(task sync:*) Bash(task cleanup:*) Bash(gh pr view:*) Bash(gh pr checks:*) Bash(git rev-parse:*) Bash(git worktree:*) Bash(git branch:*) Bash(git fetch:*) Bash(git checkout:*) Bash(git pull:*) Bash(git merge:*) Bash(git commit:*) Bash(git add:*) Bash(git push:*) Read Edit Write
 metadata:
   mined-from: netresearch/git-workflow-skill v1.23.0 (MIT AND CC-BY-SA-4.0), 2026-08-12
 ---
@@ -28,11 +28,12 @@ opening it. This is that stretch, and nothing else.
 If this file and the global `AGENTS.md` disagree, the policy wins and the
 disagreement is a defect **here**.
 
-**Forge check first.** If the PR's remote is not GitHub (`gh repo view`
-fails, or the remote host mismatches), stop with a message — the
-carve-outs below (stale-SHA, bucket-vs-state, re-arm rules) do not
-transfer to other forges, and improvising around them voids the safety
-case. Requires `gh` and an authenticated GitHub session throughout.
+**Split-Forge and Harness Guardrail Routing First.**
+In `aiops-harness` repositories, **NEVER run raw `gh pr merge` directly** — `PreExecutionShellGuard` (`aiops_harness/execution/guard.py`) blocks raw `gh pr merge` commands. Route all autonomous deliveries through canonical Taskfile/harness controls:
+
+- **Gitea integration (`dev`, default remote `gitea`):** Push and open/attest via `task autoship` (or `task ship` with operator authorization when touching protected CI/governance files), wait/merge on green via `task -x pr-status -- --watch` or server-side `.gitea/workflows/auto-merge.yml` (posts `signoff` + `review` onto `merge_commit_sha` and deletes the merged feature branch). Then run `task mirror` to fast-forward `gitea/dev -> github/dev`.
+- **GitHub promotion (`staging` and `main`, `PROMOTION_AUTONOMOUS="staging main"`):** Open one-hop promotion PRs (`dev -> staging -> main`) via `task autopromote -- <branch>`. Server-side `.github/workflows/auto-merge.yml` (`workflow_run` on `verify` and `Branch promotion policy`) verifies exact-SHA status checks and merges via `--merge` (NEVER `--squash` and NEVER `--delete-branch`, preserving `dev` and `staging`). On GitHub Free private repos where `.protected == false`, `--auto` is skipped and the workflow executes the gated merge without human confirmation.
+- **Standalone non-harness GitHub repos only:** Only where `aiops-harness` guardrails do not apply and the remote is pure GitHub (`gh repo view`), use `gh` commands below directly. For internal Gitea execution PRs managed by `platform-temporal` `ExecutePaperclipTaskWorkflow`, Temporal handles SHA-bound CI and SoD gate reconciliation directly via `gitea_activities.py`.
 
 **The seam with `superpowers:finishing-a-development-branch`.** Where that
 plugin is installed, its rationalization table states the same rule
@@ -144,18 +145,13 @@ git add <resolved-files> && git commit -m "chore(ci): merge origin/<branch> and 
 git push origin <pr-branch>
 ```
 
-Where the repo uses auto-merge, **verify branch protection first, then
-re-arm immediately** — GitHub will not do it for you. Arming `--auto` on a
-branch whose protection is absent or weaker than you assume (no required
-reviews, no strict status checks) merges the resolution push the moment CI
-passes — an arm-then-push TOCTOU. Confirm the expected protection
-(`gh api repos/{owner}/{repo}/branches/<base> --jq .protected` plus the
-required-checks list) matches what the repo declares; if protection is
-absent or you cannot verify it, do NOT arm `--auto` — merge explicitly or
-stop for direction:
+Where a standalone GitHub repository uses native auto-merge, **verify branch protection first, then
+re-arm immediately** — GitHub will not do it for you. In `aiops-harness` Split-Forge repos, **never run `gh pr merge` directly** (`PreExecutionShellGuard` blocks it); use `task -x pr-status -- --watch` or `task autopromote -- <branch>` so `.github/workflows/auto-merge.yml` handles check-gated `--merge` (without `--squash` or `--delete-branch`, and skipping `--auto` on GitHub Free `.protected == false` repos):
 
 ```sh
-gh pr merge <N> --auto --squash     # or --merge / --rebase, per the repo (§3); confirm MERGEABLE + auto-merge active after
+task -x pr-status -- --watch       # Split-Forge / aiops-harness (preferred)
+# Standalone non-harness GitHub repo only:
+gh pr merge <N> --auto --merge     # or --squash / --rebase, per the repo (§3)
 ```
 
 **One-attempt cap.** Conflicts re-emerging after one autonomous resolution
@@ -204,10 +200,15 @@ this skill owns, and it has steps:
 
 ## 3. Merge and clean up
 
-Use the repo's declared convention — do not assume squash.
+Use the repo's declared convention — never run raw `gh pr merge` in `aiops-harness` Split-Forge repos, and do not squash promotion branches (`staging`/`main`):
 
 ```sh
-gh pr merge <N> --squash --delete-branch     # or --merge / --rebase, per the repo
+# Split-Forge / aiops-harness repos:
+task autoship                      # Gitea dev feature PR (auto-merges via .gitea/workflows/auto-merge.yml)
+task mirror                        # Sync gitea/dev -> github/dev
+task autopromote -- <branch>       # GitHub staging/main PR (auto-merges via .github/workflows/auto-merge.yml --merge)
+# Standalone non-harness GitHub repos only:
+gh pr merge <N> --squash --delete-branch     # or --merge (promotions never delete base/source branch)
 gh pr view <N> --json state,mergedAt --jq '"\(.state) \(.mergedAt)"'   # read it back
 ```
 

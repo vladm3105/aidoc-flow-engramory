@@ -12,7 +12,7 @@ watched_paths:
   - "src/engramory/workers/distillation.py"
   - "src/engramory/mcp/server.py"
   - "src/engramory/cli.py"
-last_verified: "2026-11-13"
+last_verified: "2026-11-22"
 ---
 
 # Engramory Virtual Employee Hierarchy, Multi-Model Brain Variants & Portable Brain Passports
@@ -39,8 +39,14 @@ Engramory separates **Agent Archetype**, **Virtual Employee Instance**, and **In
 
 Layer-1 Stewards and routers discover and rank specialist instances within a tenant via `AccessSurface.agent_roster_list` (`engramory profile list`):
 
-- Filters by `domain_id`, `agent_type`, `role`, and `specialization`.
+- Filters by `domain_id`, `agent_type`, `role`, and `specialization`, gated by `_enforce_domain_boundary` so non-`space` callers cannot query foreign departments.
 - Left-joins live `scope='agent'` L2 memory aggregates (`active_skill_count`, `mean_confidence`, `brain_variants`) ordered by `mean_confidence DESC, active_skill_count DESC, agent_id ASC`.
+
+### 1.3 Wave P0 Ownership, Feedback & MCP Hardening (`CHG-010`)
+
+- **Metadata & Scope Pinning (`C1`):** `memory_add` strips reserved keys (`_verified_space_scope`, `scope`, `effectiveness_score`, `producer`, `origin`, `agent_type`, `calibration_delta`) before persistence; `reflect()` binds `target_scope` (`project` requires `project_id`, `domain` requires `domain_id`, `space` requires `_verified_space_scope`).
+- **Ownership & Quorum (`C2`):** `memory_forget` and `memory_feedback` enforce caller ownership across `agent`/`project`/`domain` scopes and write denial audits; `record_feedback` reverses prior `applied_delta` cleanly on signal change and requires `>= 2` distinct harmful-voting agents to quarantine shared memories.
+- **FastAPI MCP & Fail-Closed OIDC (`C7`):** `McpServer` serves persistent `/sse` + session-bound `/messages` + `/mcp` over FastAPI/Uvicorn, rejects `?token=` query params with `401`, blocks `stdio --auth` and unauthenticated non-loopback binds, requires `evidence_ref` on `sdd_ingest`, and enforces strict boolean `is_superuser` / non-defaulted `tenant_id`+`project_id` in `claims_to_actor_context`.
 
 ---
 
@@ -88,6 +94,7 @@ Engramory tracks structured `brain_metadata` (`brain_variant`, `distiller_model`
 - `skill_count`, `mean_confidence`, and `mean_token_count`.
 - Closed-loop retrieval feedback (`total_retrievals`, `useful_count`, `not_useful_count`, `harmful_count`, `useful_rate`) aggregated across both active and quarantined memories of the variant.
 - Live side-by-side query hit lists, overlap ratio, and recommended winning variant (`winner`).
+- Non-mutating read-only benchmarking (`CHG-013`): `agent_brain_compare` queries `get_memories()` without recording `memory_retrievals` or mutating `retrieval_count`, backed by lazy per-loop `AsyncConnectionPool` and migration `0013` partial indexes (`idx_memories_tenant_domain_live`, `idx_memories_tenant_variant_live`).
 
 ---
 
@@ -97,6 +104,6 @@ Engramory tracks structured `brain_metadata` (`brain_variant`, `distiller_model`
 
 To reassign or clone a specialized Virtual Employee across tenants without leaking customer PII or raw L1 logs:
 
-1. **Sanitized Export (`agent_brain_export`):** Enforces `_enforce_domain_boundary` and `min_confidence` filtering in SQL (`Repository.get_memories`), exporting only L3 `standing_preferences` and high-confidence L2 `scope='agent'` skills. `sanitize_portable_value` recursively scrubs secrets, emails, URLs, IPs, UUIDs, and length-sorted `redact_terms` across both dictionary keys and values, sealing the bundle (`engramory.brain_passport.v1`) with a canonical `passport_sha256` digest.
-2. **Transactional Offboarding (`agent_space_offboard`):** Retires live `scope='agent'` memories, deletes private `scope='agent'` episodes, and removes the L3 profile on the source tenant while preserving shared `project`/`domain`/`space` artifacts.
-3. **Governed Import (`agent_brain_import`):** Enforces `_enforce_domain_boundary` on both the target `domain_id` and per-skill `domain_id`, verifies `evidence_ref`, mandatory `passport_sha256`, and `agent_type` compatibility (`allow_type_override=False` by default), screens all fields via NFKC-normalized `inspect_memory_write()`, preserves existing `display_name` and union-merges `specializations` on sibling clones, and re-embeds imported skills into `1536`-dim `pgvector`.
+1. **Sanitized Export (`agent_brain_export`):** Enforces `_enforce_domain_boundary` and `min_confidence` filtering in SQL (`Repository.get_memories`), exporting only L3 `standing_preferences` and high-confidence L2 `scope='agent'` skills. `sanitize_portable_value` recursively scrubs secrets, `bolt`/`neo4j` + SQL DSNs, emails, URLs, IPv4/IPv6 (preserving ISO-8601 timestamps), UUIDs, `Mapping` subclasses, and length-sorted word-bounded `redact_terms`, sealing the bundle (`engramory.brain_passport.v1`) with `passport_sha256` while keeping `brain_metadata` model identifiers intact.
+2. **Transactional Offboarding (`agent_space_offboard`):** Retires live `scope='agent'` memories, deletes private `scope='agent'` episodes (handling NULL/empty scope safely via `NULLIF`), and removes the L3 profile on the source tenant while preserving shared `project`/`domain`/`space` artifacts.
+3. **Governed Import & Wave P1 Hardening (`agent_brain_import`, `CHG-011`):** MCP `agent_brain_import` removes integrity override parameters from its tool schema and forces `verify_integrity=True` and `allow_type_override=False`. Imports enforce `_enforce_domain_boundary`, validate `evidence_ref` and `passport_sha256`, screen all fields via NFKC-normalized `inspect_memory_write()`, enforce tz-aware ISO-8601 and finite floats on `ExperienceEvent`, and execute LLM synthesis + `consolidate()` while scoping `memory_learning_health(..., scope='agent')` strictly to `ctx.agent_id`.

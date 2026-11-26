@@ -8,15 +8,16 @@ Engramory's stdlib-only core domain without GitTransport coupling.
 from __future__ import annotations
 
 import json
+import math
 import re
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from types import MappingProxyType
+from datetime import datetime
 from typing import Any
 
-from engramory.access.poisoning_guard import inspect_memory_write
-from engramory.core.models import Episode, ValidationError
+from engramory.core.models import Episode, ValidationError, _frozen_mapping, thaw_mapping
+from engramory.core.poisoning_guard import inspect_memory_write
 
 # Matches legacy aidoc-flow-interlog DATA-INTERCHANGE.md §4:
 # uuid5(NAMESPACE_URL, "https://github.com/vladm3105/aidoc-flow-interlog#experience-event")
@@ -37,16 +38,12 @@ EXPERIENCE_EVENT_KINDS: frozenset[str] = frozenset(
 )
 
 MAX_EXPERIENCE_CONTENT_BYTES = 65536
-_W3C_TRACE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+_W3C_TRACE_ID_RE = re.compile(r"\A[0-9a-f]{32}\Z")
 
 
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValidationError(message)
-
-
-def _frozen_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
-    return MappingProxyType(dict(value))
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,7 +89,7 @@ class OriginProvenance:
             )
         if self.trace_id is not None:
             _require(
-                isinstance(self.trace_id, str) and bool(_W3C_TRACE_ID_RE.match(self.trace_id)),
+                isinstance(self.trace_id, str) and bool(_W3C_TRACE_ID_RE.fullmatch(self.trace_id)),
                 "OriginProvenance.trace_id must be a 32-character lowercase hex W3C trace_id",
             )
 
@@ -214,6 +211,16 @@ class ExperienceEvent:
             bool(self.occurred_at and self.occurred_at.strip()),
             "ExperienceEvent.occurred_at is required",
         )
+        try:
+            parsed_occurred = datetime.fromisoformat(
+                self.occurred_at.strip().replace("Z", "+00:00")
+            )
+        except ValueError as exc:
+            raise ValidationError(
+                f"ExperienceEvent.occurred_at must be valid ISO-8601, got {self.occurred_at!r}"
+            ) from exc
+        if parsed_occurred.tzinfo is None:
+            raise ValidationError("ExperienceEvent.occurred_at must include timezone offset or 'Z'")
         _require(
             bool(self.payload_type and self.payload_type.strip()),
             "ExperienceEvent.payload_type is required",
@@ -233,6 +240,7 @@ class ExperienceEvent:
             _require(
                 isinstance(self.effectiveness_score, (int, float))
                 and not isinstance(self.effectiveness_score, bool)
+                and math.isfinite(float(self.effectiveness_score))
                 and 0.0 <= float(self.effectiveness_score) <= 1.0,
                 "ExperienceEvent.effectiveness_score must be in [0.0, 1.0]",
             )
@@ -240,8 +248,9 @@ class ExperienceEvent:
         if self.calibration_delta is not None:
             _require(
                 isinstance(self.calibration_delta, (int, float))
-                and not isinstance(self.calibration_delta, bool),
-                "ExperienceEvent.calibration_delta must be numeric when set",
+                and not isinstance(self.calibration_delta, bool)
+                and math.isfinite(float(self.calibration_delta)),
+                "ExperienceEvent.calibration_delta must be finite numeric when set",
             )
             object.__setattr__(self, "calibration_delta", float(self.calibration_delta))
 
@@ -274,18 +283,19 @@ class ExperienceEvent:
                 f"UUIDv5 derivation ({derived_strict!r})",
             )
 
-    def to_episode(self) -> Episode:
+    def to_episode(self, *, scope: str = "agent", verified_space_scope: bool = False) -> Episode:
         """Convert this ExperienceEvent into a vetted L1 Episode.
 
         Screens both the human-readable content_raw and the serialized metadata
         envelope (payload, origin, project, producer) through inspect_memory_write()
         and enforces MAX_EXPERIENCE_CONTENT_BYTES = 65536.
         """
+        eff_scope = scope if scope in ("agent", "project", "domain", "space") else "agent"
         repo_part = f" repo={self.origin.repo}" if self.origin is not None else ""
         body_part = (
             self.summary.strip()
             if (self.summary and self.summary.strip())
-            else json.dumps(dict(self.payload), sort_keys=True)
+            else json.dumps(thaw_mapping(self.payload), sort_keys=True)
         )
         raw_text = f"[{self.kind}] event_id={self.event_id}{repo_part} {body_part}"
         metadata_envelope = json.dumps(
@@ -293,7 +303,7 @@ class ExperienceEvent:
                 "project": self.project,
                 "producer": self.producer,
                 "payload_type": self.payload_type,
-                "payload": dict(self.payload),
+                "payload": thaw_mapping(self.payload),
                 "origin": self.origin.to_dict() if self.origin is not None else None,
             },
             sort_keys=True,
@@ -328,7 +338,10 @@ class ExperienceEvent:
             "occurred_at": self.occurred_at,
             "payload_type": self.payload_type,
             "payload": dict(self.payload),
+            "scope": eff_scope,
         }
+        if eff_scope == "space" and verified_space_scope:
+            meta["_verified_space_scope"] = True
         if self.origin is not None:
             meta["origin"] = self.origin.to_dict()
             if self.origin.trace_id is not None:
@@ -490,7 +503,11 @@ def compute_learning_health_metrics(episodes: Sequence[Episode]) -> dict[str, An
         if ep.kind == "plan.authored" and repo and plan_id:
             raw_score = payload_map.get("exec_ready_score")
             if isinstance(raw_score, (int, float)) and not isinstance(raw_score, bool):
-                ratio = float(raw_score) / 100.0 if float(raw_score) > 1.0 else float(raw_score)
+                ratio = (
+                    float(raw_score) / 100.0
+                    if (isinstance(raw_score, int) or float(raw_score) > 1.0)
+                    else float(raw_score)
+                )
                 authored_by_plan[(repo, plan_id)] = max(0.0, min(1.0, ratio))
         elif ep.kind == "execution.completed" and repo and plan_id:
             fps = payload_map.get("first_pass_success")

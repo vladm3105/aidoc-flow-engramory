@@ -37,7 +37,7 @@ KB_SECTION_MODALITIES = frozenset(
 __all__ = [
     "AUTONOMY_TIERS",
     "DOC_STATUSES",
-    " KB_SECTION_MODALITIES".strip(),
+    "KB_SECTION_MODALITIES",
     "MEMORY_STATUSES",
     "MEMORY_TYPES",
     "RUNBOOK_MODES",
@@ -54,6 +54,8 @@ __all__ = [
     "Memory",
     "ValidationError",
     "content_hash",
+    "thaw_mapping",
+    "thaw_value",
 ]
 # The schema deliberately has no CHECK on scope (extended additively, see 0002);
 # the model enforces the current ADR-07 ladder — extend this set with the schema.
@@ -73,8 +75,37 @@ def _require(condition: bool, message: str) -> None:
         raise ValidationError(message)
 
 
+def _freeze_value(value: Any) -> Any:
+    """Recursively convert mutable containers into read-only immutable views."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({k: _freeze_value(v) for k, v in value.items()})
+    if isinstance(value, list | tuple):
+        return tuple(_freeze_value(item) for item in value)
+    if isinstance(value, set | frozenset):
+        return frozenset(_freeze_value(item) for item in value)
+    return value
+
+
 def _frozen_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
-    return MappingProxyType(dict(value))
+    return MappingProxyType({k: _freeze_value(v) for k, v in value.items()})
+
+
+def thaw_value(value: Any) -> Any:
+    """Recursively convert MappingProxyType and frozen sequences into plain JSON-safe types."""
+    if isinstance(value, Mapping):
+        return {k: thaw_value(v) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return [thaw_value(item) for item in value]
+    if isinstance(value, set | frozenset):
+        return [thaw_value(item) for item in value]
+    return value
+
+
+def thaw_mapping(value: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Convert any nested immutable Mapping into a plain mutable dict."""
+    if not value:
+        return {}
+    return {k: thaw_value(v) for k, v in value.items()}
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,6 +205,7 @@ class KBSection:
     domain_id: str | None = None
     tenant_id: str = "default"
     scope: str = "project"
+    agent_id: str = "system"
     version: int = 1
     id: str | None = None  # None until persisted
     modality: str = "text"
@@ -186,6 +218,7 @@ class KBSection:
         _require(bool(self.citation), "KBSection.citation is required (citation anchor)")
         _require(bool(self.text), "KBSection.text is required")
         _require(bool(self.tenant_id), "KBSection.tenant_id is required")
+        _require(bool(self.agent_id), "KBSection.agent_id is required")
         _require(self.scope in SCOPES, f"KBSection.scope must be one of {sorted(SCOPES)}")
         _require(self.version >= 1, "KBSection.version starts at 1")
         _require(
@@ -274,20 +307,23 @@ class KBDocument:
     frontmatter: Mapping[str, Any] = field(default_factory=dict)
     watched_paths: tuple[str, ...] = ()
     trigger_alerts: tuple[str, ...] = ()
-    last_verified: str = "2026-11-06"
+    last_verified: str = field(default_factory=lambda: date.today().isoformat())
     review_ttl_days: int = 90
     git_commit_sha: str = "local-head"
     project_id: str | None = None
     domain_id: str | None = None
     tenant_id: str = "default"
     scope: str = "project"
+    agent_id: str = "system"
 
     def __post_init__(self) -> None:
         _require(bool(self.doc_id), "KBDocument.doc_id is required")
+        _require("#" not in self.doc_id, "KBDocument.doc_id must not contain '#'")
         _require(bool(self.repo_path), "KBDocument.repo_path is required")
         _require(bool(self.title), "KBDocument.title is required")
         _require(bool(self.kind), "KBDocument.kind is required")
         _require(bool(self.tenant_id), "KBDocument.tenant_id is required")
+        _require(bool(self.agent_id), "KBDocument.agent_id is required")
         _require(self.scope in SCOPES, f"KBDocument.scope must be one of {sorted(SCOPES)}")
         _require(
             self.status in DOC_STATUSES,
@@ -331,7 +367,13 @@ class KBRunbookStep:
     def __post_init__(self) -> None:
         _require(bool(self.step_uid), "KBRunbookStep.step_uid is required")
         _require(bool(self.doc_id), "KBRunbookStep.doc_id is required")
+        _require("#" not in self.doc_id, "KBRunbookStep.doc_id must not contain '#'")
         _require(bool(self.step_id), "KBRunbookStep.step_id is required")
+        _require("#" not in self.step_id, "KBRunbookStep.step_id must not contain '#'")
+        _require(
+            self.step_uid == f"{self.doc_id}#{self.step_id}",
+            f"KBRunbookStep.step_uid must equal '{self.doc_id}#{self.step_id}'",
+        )
         _require(bool(self.heading_path), "KBRunbookStep.heading_path is required")
         _require(bool(self.command_body.strip()), "KBRunbookStep.command_body is required")
         _require(bool(self.tenant_id), "KBRunbookStep.tenant_id is required")

@@ -17,7 +17,7 @@ Engramory is the workspace's memory plane. Your job with this skill is the
 **judgment** — what is worth remembering, when to recall, and always closing
 the feedback loop; the **`engramory` CLI is the mechanics**. Do not restate
 flags from memory — run `engramory <cmd> --help`, and read
-`docs/AGENT-QUICKSTART.md` (worked walk) or `sdd/06_SPEC/SPEC-07_cli_face.yaml`
+`docs/AGENT-QUICKSTART.md` (worked walk) or `docs/sdd/06_SPEC/SPEC-07_cli_face.yaml`
 (contract) if present in the repo.
 
 ## When to recall

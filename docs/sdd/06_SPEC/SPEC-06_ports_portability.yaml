@@ -14,28 +14,30 @@ doc_id: SPEC-06
 title: "Ports & Portability"
 
 document_control:
-  status: Draft
-  version: "1.0"
+  status: Approved
+  version: "1.4"
   date_created: "2026-06-22T00:00:00"
-  last_updated: "2026-06-22T00:00:00"
+  last_updated: "2026-11-22T00:00:00"
   author: "Engramory team"
   component: "PortsAndAdapters"
-  tdd_ready_score: "[Pending]/100"
+  tdd_ready_score: "95/100"
 
 component_overview:
   description: |
-    The vendor-neutral interfaces the core depends on, their per-environment adapters
-    (dev/gcp/azure) selected by ENGRAMORY_PROFILE, and the migration/re-projection path
-    (re-embed from canonical text, rebuild graph). Guarantees cloud portability.
+    The vendor-neutral stdlib-only port interfaces the core depends on, their per-environment adapters
+    (`ACTIVE_PROFILES`: `dev`, `stage` | `PLANNED_PROFILES`: `gcp`, `azure`) selected by `ENGRAMORY_PROFILE`
+    (where `"stage"` binds self-hosted Postgres/Neo4j/NATS/LiteLLM adapters while ADR-10 `require_dev_profile`
+    still refuses non-`"dev"` CLI execution, and `gcp`/`azure` raise `NotImplementedError` until `BRD-02`),
+    alongside explicit status distinguishing the 5 active ports (`StoragePort`, `VectorPort`, `GraphPort`,
+    `LLMPort`, `EventsPort`) from 3 planned/deferred ports (`CachePort`, `SecretsPort`, `MemoryPort`).
   architecture_decision: "@adr: ADR-02"
   diagram:
     tags: ["@diagram: c4-l3", "@diagram: dfd-l3"]
     mermaid: |
       flowchart LR
         Core --> Ports
-        Ports --> DevAdapters
-        Ports --> GcpAdapters
-        Ports --> AzureAdapters
+        Ports --> ActiveDevStageAdapters
+        Ports --> PlannedCloudProfiles
   language: "Python"
   dependencies: []
 
@@ -44,47 +46,47 @@ interfaces:
     - name: "StoragePort"
       type: "class"
       signature: "class StoragePort(Protocol): ..."
-      description: "Content-addressable blob storage (PgBlobStorageAdapter in PostgreSQL 18 Chunked Blob CAS up to 20 GB+ per Rule D14a/D14b | LocalFsStorageAdapter | GCS | Azure Blob): put/get/delete/exists/put_file/put_stream/get_stream/head/reconcile_truncated_blobs/gc_orphan_chunks."
+      description: "[ACTIVE] Project- and tenant-scoped content-addressable blob storage (PgBlobStorageAdapter with advisory CAS locks, kb_blob_projects ownership, contiguous chunk verification & bounded get(max_bytes) | LocalFsStorageAdapter with on-disk chunk persistence & mtime GC | planned: GCS, Azure Blob): put/get/delete/exists/put_file/put_stream/get_stream/head/reconcile_truncated_blobs/gc_orphan_chunks."
       errors: ["StorageError", "BlobNotFoundError", "BlobTruncatedError", "BlobIntegrityError", "BlobTooLargeError"]
     - name: "VectorPort"
       type: "class"
       signature: "class VectorPort(Protocol): ..."
-      description: "Vector index (rebuildable projection)."
+      description: "[ACTIVE] Vector index (rebuildable projection). Enforces explicit tenant_id on upsert/search/delete, validates 1536-dim vectors in PgVectorAdapter, and filters active non-expired rows (valid_to IS NULL AND status = 'active')."
       errors: []
     - name: "GraphPort"
       type: "class"
       signature: "class GraphPort(Protocol): ..."
-      description: "Dual-engine graph traversal (Neo4j Adopt via Neo4jGraphAdapter per Decision D17 with PostgreSQL 18 recursive CTE fallback)."
+      description: "[ACTIVE] Dual-engine graph traversal (Neo4j Adopt via Neo4jGraphAdapter per Decision D17 with PostgreSQL 18 recursive CTE fallback). Enforces tenant_id + allowed_scopes + project_id/domain_id + exclude_kb_labels filtering on all traversals/deletes, strips reserved identity keys before $props writes, and rejects ':' in tenant_id."
       errors: []
     - name: "CachePort"
       type: "class"
       signature: "class CachePort(Protocol): ..."
-      description: "Session/L1 cache (Redis|Memorystore|Azure Cache)."
+      description: "[PLANNED/DEFERRED -> BRD-02] Optional session/L1 cache protocol (Valkey | Memorystore | Azure Cache); zero runtime consumers in v0.3.0."
       errors: []
     - name: "LLMPort"
       type: "class"
       signature: "class LLMPort(Protocol): ..."
-      description: "Embeddings, text generation, vision captioning (describe_image), and audio ASR transcription (transcribe_audio) via LiteLLM gateway."
+      description: "[ACTIVE] Embeddings (including explicit 1536 dimensions), text generation, vision captioning (describe_image), and audio ASR transcription (transcribe_audio) via LiteLLMAdapter gateway."
       errors: []
     - name: "SecretsPort"
       type: "class"
       signature: "class SecretsPort(Protocol): ..."
-      description: "Secrets (SOPS|Secret Manager|Key Vault)."
+      description: "[PLANNED/DEFERRED -> BRD-02] Stage secret delivery uses OpenBao Path C (/dev/shm ephemeral env injection via platform-stage-ops); runtime adapter deferred to Cloud Secret Manager / Key Vault."
       errors: []
     - name: "EventsPort"
       type: "class"
       signature: "class EventsPort(Protocol): ..."
-      description: "Events (NATS JetStream engramory.events.> via NatsEventsAdapter in dev | Pub/Sub | Service Bus)."
+      description: "[ACTIVE] Events (NATS JetStream durable pull consumers & PubAck via NatsEventsAdapter with automatic reconnect, CRLF header validation, strict token wildcards, and broker subject-to-tenant binding | planned: Pub/Sub, Service Bus)."
       errors: []
     - name: "MemoryPort"
       type: "class"
       signature: "class MemoryPort(Protocol): ..."
-      description: "Pluggable memory engine (LangMem|Cipher|Mem0) over Postgres canonical."
+      description: "[PLANNED/DEFERRED -> BRD-07] Pluggable memory accelerator protocol (LangMem | Cipher | Mem0) over PostgreSQL canonical; v0.3.0 distillation runs natively in workers/distillation.py over Repository."
       errors: []
     - name: "reembed_and_reproject"
       type: "async function"
-      signature: "async def reembed_and_reproject(profile: str) -> MigrationReport"
-      description: "Re-embed from content_raw and rebuild graph after model/platform migration."
+      signature: "async def reembed_and_reproject(profile: str) -> MigrationReport  # PLANNED -> BRD-02 / BRD-07"
+      description: "[PLANNED/DEFERRED -> BRD-02/BRD-07] Offline re-embed & rebuild graph helper (current graph rebuild runs via `engramory graph reproject`)."
       errors: []
 
 data_models:
@@ -100,20 +102,21 @@ behavior:
     - { rule: "Managed accelerator used as cache only; canonical store remains source of truth", source: "@ears: EARS.01.03.d010" }
     - { rule: "Embeddings/graph are rebuildable projections of canonical text", source: "@ears: EARS.01.03.a040" }
   state_transitions:
-    - { from: "Profile=dev", to: "Profile=gcp|azure", trigger: "adapter selection at migration", source: "@bdd: BDD.01.03.d010" }
+    - { from: "Profile=dev|stage", to: "Profile=gcp|azure", trigger: "adapter selection at cloud migration (BRD-02)", source: "@bdd: BDD.01.03.d010" }
   error_handling:
     - { condition: "Adapter unavailable", response: "Fail closed; surface retryable error", source: "@bdd: BDD.01.03.b800" }
 
 implementation_notes:
-  constraints: ["Core imports only ports — no cloud-vendor SDKs; the Postgres driver is spine infrastructure (ADR-01), not a vendor SDK, and repositories use it directly", "Adapter set chosen by ENGRAMORY_PROFILE"]
+  constraints: ["ports/ imports stdlib modules only; core/, workers/, mcp/, access/ never import cloud vendor SDKs or engramory.adapters; PostgreSQL driver (psycopg/psycopg_pool) is spine infrastructure restricted to core/repository + dev vector/storage adapters", "Adapter set chosen via adapters_for_profile(ENGRAMORY_PROFILE) and deterministically closed on the owning event loop"]
   patterns: ["Hexagonal ports & adapters", "Adapter conformance test suite shared across environments"]
-  performance_considerations: ["Adapters must meet retrieval p95 budget"]
+  performance_considerations: ["Pooled PostgreSQL connections (psycopg_pool.AsyncConnectionPool) bounded by connection/statement timeouts"]
 
 tdd_contracts:
   tdd_document: "@tdd: TDD-06"
   test_files:
-    - { path: "tests/conformance/test_adapters.py", covers: "all ports x dev adapter parity" }
-    - { path: "tests/unit/test_adapters_dev_Wave2.py", covers: "NatsEventsAdapter, MinioObjectStoreAdapter, SopsSecretsAdapter" }
+    - { path: "tests/conformance/test_adapters.py", covers: "active dev adapter conformance & fail-closed parity" }
+    - { path: "tests/test_ports.py", covers: "8 declared Port Protocols and method signatures" }
+    - { path: "tests/unit/test_no_vendor_imports.py", covers: "ports/ stdlib-only & access/core layer purity" }
 
 traceability:
   tags: ["@spec: SPEC-06"]

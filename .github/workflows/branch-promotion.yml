@@ -12,7 +12,7 @@ env:
   # Space-separated promotion branches, baked by install.sh ("none" when
   # empty). Jurisdiction guards key off this; the chain arms below assume
   # the standard dev/staging/main names (installer warns otherwise).
-  PROMOTION_TARGETS: none
+  PROMOTION_TARGETS: "staging main"
   # Canon the ancestry guard is fetched from when the base predates .ci/ entirely (the
   # adoption PR itself has no base .ci/SOURCE to read). Baked by install.sh from the canon
   # origin; the release tag still comes from the head's .ci/VERSION.
@@ -75,6 +75,10 @@ jobs:
           BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
           HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          SERVER_URL: ${{ github.server_url }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          CANON_TOKEN: ${{ secrets.AUTO_MERGE_TOKEN }}
+          ORIGIN_TOKEN: ${{ github.token }}
         run: |
           case " $PROMOTION_TARGETS " in
             *" $BASE_BRANCH "*) exit 0 ;;  # promotion target; verify-source judges
@@ -90,16 +94,41 @@ jobs:
             src="$(git show "origin/$BASE_BRANCH:.ci/SOURCE" 2>/dev/null | sed -n 's/^source=//p' | head -1)"
             src="${src:-${CANON_SOURCE:-}}"
             ver="$(tr -d '[:space:]' < .ci/VERSION 2>/dev/null || true)"
+            if [ -z "$ver" ] && [ -f .aidoc/harness.lock.json ]; then
+              ver="$(sed -n 's/.*"harness_version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' .aidoc/harness.lock.json | head -1)"
+            fi
             if [ -z "$src" ] || ! printf '%s' "$ver" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
               echo "::error::no trusted ancestry guard: origin/$BASE_BRANCH has no guard, no usable .ci/SOURCE and no CANON_SOURCE, or the head's .ci/VERSION is not a release version"
               exit 2
             fi
             canon="$(mktemp -d)"
-            if ! { git -C "$canon" init -q && git -C "$canon" fetch -q --depth 1 "$src" "refs/tags/v$ver" \
-                   && git -C "$canon" show "FETCH_HEAD:ci/bin/ancestry-guard" >"$guard"; } 2>/dev/null; then
+            if { git -C "$canon" init -q && git -C "$canon" fetch -q --depth 1 "$src" "refs/tags/v$ver" \
+                 && git -C "$canon" show "FETCH_HEAD:ci/bin/ancestry-guard" >"$guard"; } 2>/dev/null; then
+              echo "ancestry-guard: first rollout — using the canon release v$ver from $src"
+            elif [ -n "${CANON_TOKEN:-}" ] && [ -n "${SERVER_URL:-}" ] && [ -n "${REPO_OWNER:-}" ]; then
+              cfg=$(mktemp "${RUNNER_TEMP:-/tmp}/curl-canon.XXXXXX")
+              trap 'rm -f "$cfg"' EXIT
+              chmod 0600 "$cfg"
+              printf 'header = "Authorization: token %s"\n' "$CANON_TOKEN" > "$cfg"
+              if curl -fsSL -m 30 --config "$cfg" \
+                   "${SERVER_URL%/}/api/v1/repos/${REPO_OWNER}/aiops-harness/raw/.ci/bin/ancestry-guard?ref=dev" >"$guard" 2>/dev/null \
+                 && [ -s "$guard" ]; then
+                echo "ancestry-guard: first rollout — loaded trusted guard from ${SERVER_URL%/}/${REPO_OWNER}/aiops-harness"
+              else
+                echo "::error::no trusted ancestry guard: cannot load ci/bin/ancestry-guard from $src at v$ver or embedded aiops-harness"
+                exit 2
+              fi
+            else
               echo "::error::no trusted ancestry guard: cannot load ci/bin/ancestry-guard from $src at v$ver"
               exit 2
             fi
-            echo "ancestry-guard: first rollout — using the canon release v$ver from $src"
           fi
-          bash "$guard" "$BASE_BRANCH" "$HEAD_SHA" "$HEAD_BRANCH"
+          if [ -n "${ORIGIN_TOKEN:-}" ] && [ -n "${SERVER_URL:-}" ]; then
+            git_auth="$(printf 'x-access-token:%s' "$ORIGIN_TOKEN" | base64 | tr -d '\n')"
+            GIT_CONFIG_COUNT=1 \
+            GIT_CONFIG_KEY_0="http.${SERVER_URL%/}/.extraheader" \
+            GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${git_auth}" \
+            bash "$guard" "$BASE_BRANCH" "$HEAD_SHA" "$HEAD_BRANCH"
+          else
+            bash "$guard" "$BASE_BRANCH" "$HEAD_SHA" "$HEAD_BRANCH"
+          fi

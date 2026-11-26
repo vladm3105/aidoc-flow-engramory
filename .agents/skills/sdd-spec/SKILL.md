@@ -6,10 +6,10 @@ description: >-
 
 # SDD SPEC Author
 
-> Framework skill — routes to `framework/layers/06_SPEC/SPEC-TEMPLATE.yaml`
+> Framework skill — routes to `.aidoc/framework/framework/layers/06_SPEC/SPEC-TEMPLATE.yaml`
 > (or `SPEC-SWF-TEMPLATE.yaml` + `SPEC-GRAPH-TEMPLATE.yaml` for state-machine / multi-agent workflows)
 > and `SPEC_WORKFLOW_STANDARD.md` (entry gate GATE-06).
-> Paths below use `<skills-root>` = this `framework/skills/` directory.
+> Paths below use `<skills-root>` = `.agents/skills/` (framework root: `.aidoc/framework/framework/`).
 > Upstream: `sdd-adr` decisions constrain the components; the SPEC does not
 > re-litigate them.
 

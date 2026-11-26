@@ -429,13 +429,13 @@ def test_cli_init_profile_preservation_and_config_domain(monkeypatch: pytest.Mon
     )
     assert preserved is not None
     assert preserved.display_name == "Senior Billing Specialist"
-    assert preserved.standing_preferences["specializations"] == ["stripe"]
+    assert preserved.standing_preferences["specializations"] == ("stripe",)
     assert preserved.standing_preferences["department_focus"] == "billing"
 
 
 @pytest.mark.asyncio
 async def test_domain_id_propagation_across_jwt_and_mcp() -> None:
-    # 1. JWT claims -> ActorContext preserves domain_id and grants 'domain' scope
+    # 1. JWT claims -> ActorContext preserves domain_id and does NOT auto-grant 'domain' scope
     claims = TokenClaims(
         sub="agent-support-01",
         iss="https://auth.example.com",
@@ -450,7 +450,23 @@ async def test_domain_id_propagation_across_jwt_and_mcp() -> None:
     )
     ctx = claims_to_actor_context(claims)
     assert ctx.domain_id == "billing"
-    assert "domain" in ctx.scopes
+    assert "domain" not in ctx.scopes
+
+    # Domain scope requires explicit 'domain-admin' (or platform-admin/superuser) role
+    claims_dom = TokenClaims(
+        sub="agent-support-01",
+        iss="https://auth.example.com",
+        aud="engramory",
+        exp=9999999999,
+        raw_claims={
+            "tenant_id": "tenant-acme",
+            "department_focus": "billing",
+            "groups": ["domain:billing", "domain-admin"],
+            "projects": ["proj-checkout"],
+        },
+    )
+    ctx_dom = claims_to_actor_context(claims_dom)
+    assert "domain" in ctx_dom.scopes
 
     # 2. McpServer._resolve_call_ctx preserves base.domain_id on project override
     fake_repo = InMemoryVirtualEmployeeRepo()
@@ -773,7 +789,7 @@ async def test_virtual_employee_brain_passport_promotion_archetype_guard_and_off
     sup2_prof = await repo.get_agent_profile("agent-support-02", tenant_id="tenant-acme")
     assert sup2_prof is not None
     assert sup2_prof.display_name == "Billing Specialist #2"
-    assert sup2_prof.standing_preferences["specializations"] == ["oidc", "stripe", "chargebacks"]
+    assert sup2_prof.standing_preferences["specializations"] == ("oidc", "stripe", "chargebacks")
 
     # 7. Offboard agent-support-01 from Tenant A: retires private memories & private episodes
     # while preserving shared project episodes ([M1])

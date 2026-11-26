@@ -108,13 +108,16 @@ class TextParser(BaseParser):
         return sections
 
     def _parse_by_chunks(self, text: str) -> list[Section]:
-        words = text.split()
+        matches = list(re.finditer(r"\S+", text))
+        if not matches:
+            return []
+        step = max(1, self.chunk_words)
         sections: list[Section] = []
-        cur_word_idx = 0
-
-        while cur_word_idx < len(words):
-            chunk_slice = words[cur_word_idx : cur_word_idx + self.chunk_words]
-            chunk_text = " ".join(chunk_slice)
+        for idx in range(0, len(matches), step):
+            chunk_matches = matches[idx : idx + step]
+            chunk_text = " ".join(m.group(0) for m in chunk_matches)
+            char_start = chunk_matches[0].start()
+            char_end = chunk_matches[-1].end()
             part_num = len(sections) + 1
 
             sections.append(
@@ -124,11 +127,10 @@ class TextParser(BaseParser):
                     order=part_num,
                     level=1,
                     content=chunk_text,
-                    char_start=0,
-                    char_end=len(chunk_text),
+                    char_start=char_start,
+                    char_end=char_end,
                     source_tag="chunk",
                 )
             )
-            cur_word_idx += self.chunk_words
 
         return sections

@@ -260,9 +260,16 @@ else
   if [[ $auto == 1 ]]; then
     [[ $(ci_forge) == github ]] || die "autopromote arms GitHub auto-merge; promotion forge is $(ci_forge)"
     [[ -n $existing ]] || die "promotion PR number unknown; cannot arm auto-merge"
-    # Merge commit, never squash; no --delete-branch: the head is the promotion source branch.
-    gh pr merge "$existing" --auto --merge >/dev/null || die "cannot arm auto-merge on PR #$existing (repo setting allow_auto_merge?)"
-    echo "promote: auto-merge armed on PR #$existing ($source -> $target); it merges when every required check is green"
+    repo_allow=$(gh api "repos/{owner}/{repo}" --jq 'if has("allow_auto_merge") then (.allow_auto_merge | tostring) else "" end' 2>/dev/null || true)
+    [[ $repo_allow == false ]] && die "cannot arm auto-merge on PR #$existing (repo setting allow_auto_merge=false — run task rulesets -- --apply)"
+    br_prot=$(gh api "repos/{owner}/{repo}/branches/$target" --jq 'if has("protected") then (.protected | tostring) else "" end' 2>/dev/null || true)
+    if [[ $br_prot == false ]]; then
+      echo "promote: PR #$existing open ($source -> $target); base branch has protected=false (GitHub Free private repo) — .github/workflows/auto-merge.yml will merge on green"
+    else
+      # Merge commit, never squash; no --delete-branch: the head is the promotion source branch.
+      gh pr merge "$existing" --auto --merge >/dev/null || die "cannot arm auto-merge on PR #$existing (repo setting allow_auto_merge?)"
+      echo "promote: auto-merge armed on PR #$existing ($source -> $target); it merges when every required check is green"
+    fi
   else
     echo "promote: a human approves and merges the promotion PR (required: server checks on the PR)"
   fi

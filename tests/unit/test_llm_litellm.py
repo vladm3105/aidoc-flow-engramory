@@ -40,7 +40,7 @@ async def test_embed_success() -> None:
         req = mock_urlopen.call_args[0][0]
         sent_body = json.loads(req.data.decode("utf-8"))
         assert sent_body["model"] == "embed"
-        assert "dimensions" not in sent_body
+        assert sent_body["dimensions"] == 1536
 
 
 @pytest.mark.asyncio

@@ -46,7 +46,7 @@ watched_paths:
   - "src/engramory/core/portal_builder.py"
   - ".vale.ini"
   - "portal/package.json"
-last_verified: 2026-11-12
+last_verified: 2026-11-22
 ---
 
 # Documentation Tools Technical Reference: Vale, Starlight, Scalar, Docling, Engramory & Copybara Evaluation
@@ -59,9 +59,9 @@ Every documentation tool in the ecosystem is governed by `25-approved-tooling-in
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **`engramory-docs-engine`** | `engramory.core.docs_tools` (`engramory docs` CLI) | Apache-2.0 / Internal | **Adopt** | Frontmatter AST (`DocumentFrontmatter`), `{id, tier, mode}` executable runbooks, `INV-STEP-01`/`02` safety gates, drift detection, `/llms.txt` export, and MCP `docs_*` server. | `platform-engramory` |
 | **`vale`** | `errata-ai/vale` (Go binary + `.vale/styles/AIOpsAgent/`) | MIT | **Adopt** | Prose linter for AI-agent chunk independence (`NoCrossChunkDeictics`, `NoAmbiguousSubjectStart`, `BannedRetiredTools`, `DeterministicPortFormat`). | `platform-engramory` |
-| **`astro-starlight`** | `@astrojs/starlight` (`v0.32+`) | MIT | **Trial** | Zero-JS static multi-repo developer portal rendering `docs/*.md`, Mermaid v11 diagrams, runbook tier badges, and `/llms.txt` routes. | `platform-engramory` (`portal/`) |
-| **`scalar`** | `@scalar/api-reference` & `@scalar/astro` | MIT | **Trial** | Interactive OpenAPI 3.1, JSONSchema, FastMCP (`DOCS_TOOLS_SCHEMA`), and Protobuf HTTP playground embedded at `/contracts/<service>`. | `platform-engramory` (`portal/`) |
-| **`docling`** | `docling>=2.0` (`PyMuPDF` + `BeautifulSoup4`) | MIT | **Adopt** | Layout-aware document extraction (`SmartExtractionRouter`) converting complex PDFs, DOCX tables, and HTML into structured Markdown for L0 RAG. | `platform-engramory` |
+| **`astro-starlight`** | `@astrojs/starlight` (`v0.32+`) | MIT | **Trial** | Zero-JS static multi-repo developer portal rendering `docs/*.md`, `runbooks/`, `contracts/`, Mermaid v11 diagrams, and `/llms.txt` routes on `127.0.0.1:4321`. | `platform-engramory` (`portal/`) |
+| **`scalar`** | `@scalar/api-reference` & `@scalar/astro` | MIT | **Trial** | Interactive OpenAPI 3.1, JSONSchema, FastMCP (`DOCS_TOOLS_SCHEMA`), and Protobuf HTTP playground embedded at `/contracts/playground`. | `platform-engramory` (`portal/`) |
+| **`docling`** | `docling>=2.0` (`pypdf` + `BeautifulSoup4`) | MIT / BSD-3-Clause | **Adopt** | Layout-aware document extraction (`SmartExtractionRouter`) converting complex PDFs, DOCX tables, and HTML into structured Markdown for L0 RAG. | `platform-engramory` |
 | **`mermaid`** | `mermaid` (`v11+` / `@mermaid-js/mermaid-cli`) | MIT | **Adopt** | Declarative Diagrams-as-Code (`flowchart`, `sequenceDiagram`, `stateDiagram-v2`, `erDiagram`) inside Markdown and SDD artifacts. | All 35+ repositories |
 | **`markdownlint-cli2`** | `markdownlint-cli2` | MIT | **Adopt** | Fast Markdown AST structure, heading hierarchy, and code-fence syntax validation in Tier-1 `lefthook` gates. | `aiops-harness` & `platform-engramory` |
 | **`yamllint`** | `yamllint` | GPL-3.0 (CLI tool) | **Adopt** | Fast YAML schema, SDD layer, ADR/CHG manifest, and frontmatter syntax validation in Tier-1 `lefthook` gates. | `aiops-harness` & `platform-engramory` |
@@ -79,15 +79,15 @@ Every documentation tool in the ecosystem is governed by `25-approved-tooling-in
 `engramory.core.docs_tools` (`src/engramory/core/docs_tools.py` and `src/engramory/core/portal_builder.py`, exposed via `engramory docs` in `src/engramory/cli.py`) is the deterministic Python engine governing all Markdown specifications and executable runbooks across the platform:
 
 1. **Strict Frontmatter AST Validation (`DocumentFrontmatter`):**
-   Parses YAML frontmatter and enforces `DOC-FM-000` through `DOC-FM-007` plus `DOC-REG-001` (`id`, `title`, `kind`, `domain`, `namespace`, `status`, `autonomy_tier`, non-empty `watched_paths` matching live repository files, `endpoints`, `triggers`, and `last_verified` ISO date within `review_ttl_days`).
+   Parses YAML frontmatter (supporting LF and CRLF line endings per `CHG-013`) and enforces `DOC-FM-000` through `DOC-FM-007` plus `DOC-REG-001` (`id`, `title`, `kind`, `domain`, `namespace`, `status`, `autonomy_tier`, non-empty `watched_paths` matching live repository files via `.as_posix()` paths, `endpoints`, `triggers`, and `last_verified` ISO date within `review_ttl_days`).
 2. **Executable Runbook Step Extraction (`KBRunbookStep`):**
    Parses annotated code fences (` ```bash {id="..." tier="green|yellow|red" mode="read-only|mutating" expect_exit=0 timeout_sec=30} `) into structured AST records stored in `kb_runbook_steps`.
-3. **Read-Only Safety Gate (`check_green_step_safety`, `INV-STEP-01`/`02`):**
-   Verifies at lint time and pre-execution time that every `tier="green"` step has `mode="read-only"` and contains zero mutating commands (`rm`, `mv`, `dd`, `docker restart`, `kubectl delete`, `bao write`), zero shell redirections (`>`, `>>`, `| tee`), zero subshell expansions (`$(...)`, backticks, `bash -c`, `python -c`), and zero mutating HTTP flags (`POST`, `PUT`, `DELETE`, `-d`).
+3. **Read-Only Safety Gate (`check_green_step_safety` & `parse_and_validate_green_command`, `INV-STEP-01`/`02`):**
+   Verifies at lint time and pre-execution time that every `tier="green"` step has `mode="read-only"` and passes strict `shlex` allowlist validation (`shell=False` execution, loopback HTTP GET/HEAD only, zero shell wrappers/redirections/expansions, plus cross-platform built-ins for non-POSIX smoke execution), surfacing AST violations as failed probes in `smoke_run_green_steps`.
 4. **Code-to-Doc Drift & Staleness Engine (`check_repo_drift`):**
-   Matches `git diff` file paths against every document's `watched_paths` globs (`WATCHED_PATH_MODIFIED`) and flags documents whose `last_verified` date exceeds `review_ttl_days` (`TTL_STALE`).
+   Matches `git -c core.quotepath=false diff` file paths (`timeout=15s`, fail-closed on non-git workspaces) against every document's confined `watched_paths` globs (`validate_watched_path_glob`, rejecting `..` traversal) and flags `WATCHED_PATH_MODIFIED` or `TTL_STALE`, while `parse_markdown_document` respects `trust_frontmatter_domain` and `slice_local_runbooks` excludes non-`active` documents and filters by `domain_id`.
 5. **Deterministic `/llms.txt` & `/llms-full.txt` Compiler (`export_repo_llms`):**
-   Generates structured agent indexes sorted by priority (`runbook`, `playbook`, `architecture`, `specification`) with Rule D14 secret redaction.
+   Generates structured agent indexes sorted by priority (`runbook`, `playbook`, `architecture`, `specification`) with NFKC/invisible-Unicode stripping, multiline PEM key redaction, heading sanitization (`_scrub_manifest_inline`), symlink rejection (`has_symlink_component`), and accurate `readOnlyHint: False` annotations on MCP `docs_export_llms`, `docs_smoke_run`, and `docs_build_portal`.
 
 ---
 
@@ -112,14 +112,14 @@ Standard Markdown linters only validate syntax (such as list indentation or head
 
 ### 4.1 Technical Architecture & Build Pipeline
 
-`Astro Starlight` (`@astrojs/starlight`, MIT License) is the static documentation portal framework configured in `portal/package.json` and `portal/astro.config.mjs`.
+`Astro Starlight` (`@astrojs/starlight`, MIT License) is the static documentation portal framework configured in `portal/package.json` and `portal/astro.config.mjs` (Astro Content Layer `src/content.config.ts` with `docsLoader()`, `runbooks/`, `contracts/`, and local loopback `127.0.0.1:4321` so `127.0.0.1:8005` stays reserved for stage MCP).
 
 1. **Multi-Repo Content Staging (`engramory docs build-portal`):**
-   `src/engramory/core/portal_builder.py` (`stage_portal_bundle`) scans approved ecosystem repositories (`platform-*`, `aidoc-*`, `aiops-*`), validates path confinement (`resolve_confined_repo_path` + `_is_within_root`), scrubs every Markdown file through Rule D14 (`_scrub_manifest_text`), and stages clean `.md` files into `portal/src/content/docs/reference/`.
+   `src/engramory/core/portal_builder.py` (`stage_portal_bundle`) confines scans strictly to `docs/` inside approved ecosystem repositories (`platform-*`, `aidoc-*`, `aiops-*`), validates symlink-free path confinement (`resolve_confined_repo_path` + `has_symlink_component` + `_is_within_root`), injects synthesized `title:` fields even when YAML frontmatter omits `title`, scrubs every Markdown file through Rule D14 (`_scrub_manifest_text`), writes `.md` files into `portal/src/content/docs/reference/`, and prunes orphaned/deprecated staged files.
 2. **Zero-JavaScript Static Output & Raw Markdown Routes:**
    Starlight compiles `portal/src/content/docs/` into static HTML assets with built-in Pagefind full-text search, native Mermaid v11 diagram rendering, and alongside raw `.md` and `/llms.txt` endpoints for LLM agents.
 3. **Why Starlight Over Alternatives:**
-   Unlike `MkDocs Material Insiders` (sponsorware/commercial features) or `Mintlify` (proprietary SaaS), `@astrojs/starlight` is 100% MIT-licensed, builds on the already-approved Node.js 24 LTS + `pnpm` toolchain (`25-approved-tooling-inventory.md`), and natively embeds Astro components such as `@scalar/astro`.
+   Unlike `MkDocs Material Insiders` (sponsorware/commercial features) or `Mintlify` (proprietary SaaS), `@astrojs/starlight` is 100% MIT-licensed, builds on the already-approved Node.js 24 LTS + `pnpm` toolchain (`25-approved-tooling-inventory.md`), and natively embeds Astro components such as `@scalar/astro` (`/contracts/playground`).
 
 ---
 
@@ -127,7 +127,7 @@ Standard Markdown linters only validate syntax (such as list indentation or head
 
 ### 5.1 Technical Architecture & Supported Specifications
 
-`Scalar` (`@scalar/api-reference` and `@scalar/astro`, MIT License) provides the interactive API and contract reference console embedded inside the Starlight portal at `/contracts/<service>`:
+`Scalar` (`@scalar/api-reference` and `@scalar/astro`, MIT License) provides the interactive API and contract reference console embedded inside the Starlight portal at `/contracts/playground`:
 
 1. **OpenAPI 3.1 & FastAPI Service Specs:**
    Renders interactive REST API documentation for `platform-engramory` (`127.0.0.1:8000`), `platform-paperclip` (`127.0.0.1:3100`), `aidoc-flow-support-desk` (`127.0.0.1:8090`), and `platform-security` (`127.0.0.1:8095`).
@@ -138,16 +138,16 @@ Standard Markdown linters only validate syntax (such as list indentation or head
 
 ---
 
-## 6. `Docling` (`docling>=2.0`, MIT) + `PyMuPDF` + `BeautifulSoup4` — Smart Document Extraction
+## 6. `Docling` (`docling>=2.0`, MIT) + `pypdf` + `BeautifulSoup4` — Smart Document Extraction
 
 ### 6.1 `SmartExtractionRouter` in `platform-engramory`
 
-While `docs/*.md` files are authored directly in Markdown, the ecosystem also ingests external PDFs, architectural RFCs, vendor datasheets, `.docx` files, and HTML snapshots into the `platform-engramory` L0 Knowledge Core (`src/engramory/core/extraction.py`):
+While `docs/*.md` files are authored directly in Markdown, the ecosystem also ingests external PDFs, architectural RFCs, vendor datasheets, `.docx` files, and HTML snapshots into the `platform-engramory` L0 Knowledge Core (`src/engramory/core/extraction/`):
 
-1. **Fast Path (`PyMuPDF` / `fitz` + `BeautifulSoup4`):**
-   Digital-native text PDFs and clean HTML documents are extracted in milliseconds using `PyMuPDF` (`pymupdf>=1.24.0`) and `BeautifulSoup4` (`beautifulsoup4>=4.12.0`).
+1. **Fast Path (`pypdf` BSD-3-Clause + `BeautifulSoup4` + `DocumentDetector`):**
+   Digital-native text PDFs (`<= 50 MiB` native buffer with `max_pages=500` and `max_total_chars=5_000_000` resource caps) and HTML documents extract via `pypdf` (replacing AGPL-3.0 `pymupdf`) and `BeautifulSoup4`, while `DocumentDetector` checks known filename extensions prior to heuristic `@section:` markers and empty docs emit zero sections.
 2. **Deep Layout & Table Path (`Docling`, `docling>=2.0.0`, MIT License):**
-   When `SmartExtractionRouter` detects complex multi-column layouts, embedded tables, or scanned PDF/DOCX artifacts (`[extraction,ocr]` extras in `pyproject.toml`), it routes the document through **IBM Docling** (`DocumentConverter`). Docling reconstructs tables into GitHub-Flavored Markdown tables and preserves heading hierarchies before passing the output to `chunk_markdown()`.
+   When `SmartExtractionRouter` detects complex multi-column layouts, embedded tables, or ZIP-container office files (`.docx`, `.xlsx`, `.pptx`, `.odt`), `DoclingExtractor` enforces ZIP-bomb limits (`MAX_ZIP_ENTRIES=10_000`, `MAX_ZIP_UNCOMPRESSED_BYTES=250 MiB`, `MAX_ZIP_RATIO=100.0`) and writes tenant-scoped caches atomically via temporary files and `os.replace`.
 
 ---
 
@@ -198,11 +198,11 @@ Google's **`Copybara`** (`google/copybara`, Apache-2.0) is a Java/Bazel tool (`c
 Inspect the live documentation tool inventory and validate all governed documentation specifications in `platform-engramory` using the read-only `green` steps below:
 
 ```bash {id="inspect-doc-tools-catalog" tier="green" mode="read-only" expect_exit=0 timeout_sec=10 service="platform-engramory"}
-uv run engramory docs tools
+engramory docs tools
 ```
 
 Execute the Tier-1 offline frontmatter, runbook safety (`INV-STEP-01`/`02`), and prose linter across `docs/doc-tools/`:
 
 ```bash {id="validate-all-platform-docs-specs" tier="green" mode="read-only" expect_exit=0 timeout_sec=15 service="platform-engramory"}
-uv run engramory docs lint --target docs/doc-tools --require-frontmatter --verify-registry
+engramory docs lint --target docs/doc-tools --require-frontmatter --verify-registry
 ```

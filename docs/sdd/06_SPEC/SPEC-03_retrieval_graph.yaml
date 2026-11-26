@@ -14,49 +14,52 @@ doc_id: SPEC-03
 title: "Retrieval & Graph"
 
 document_control:
-  status: Draft
-  version: "1.0"
+  status: Approved
+  version: "1.1"
   date_created: "2026-06-22T00:00:00"
-  last_updated: "2026-06-22T00:00:00"
+  last_updated: "2026-11-22T00:00:00"
   author: "Engramory team"
-  component: "RetrievalService"
-  tdd_ready_score: "[Pending]/100"
+  component: "Repository + AccessSurface Retrieval & Graph"
+  tdd_ready_score: "95/100"
 
 component_overview:
   description: |
-    Scoped retrieval of knowledge + distilled memory for an agent turn, combining vector
-    similarity and optional graph traversal (behind GraphPort). Ranks results, attaches
-    provenance/citations, and fails closed on store loss.
+    Scoped retrieval of knowledge + distilled memory implemented across
+    `AccessSurface` (`memory_search`, `knowledge_search`, `graph_neighbors`,
+    `context_slice`, `blast_radius`) and `Repository` (`get_memories`,
+    `search_kb_sections`, `find_neighbors` / `find_ancestors` / `find_descendants`),
+    pairing indexable PostgreSQL 18 HNSW + `ts_lex` GIN ranking with optional
+    `GraphPort` (Neo4j) or PostgreSQL recursive CTE graph traversal and fail-closed
+    `StoreUnavailable` handling.
   architecture_decision: "@adr: ADR-03"
   diagram:
     tags: ["@diagram: c4-l3", "@diagram: dfd-l3"]
     mermaid: |
       flowchart LR
-        AccessSurface --> RetrievalService
-        RetrievalService --> VectorPort
-        RetrievalService --> GraphPort
-        RetrievalService --> MemoryStore
+        AccessSurface --> Repository
+        AccessSurface --> VectorPort
+        AccessSurface --> GraphPort
   language: "Python"
   dependencies:
     - { name: "GraphPort (SPEC-06)", version: "internal", purpose: "Relationship traversal" }
 
 interfaces:
   exports:
-    - name: "retrieve"
+    - name: "memory_search"
       type: "async function"
-      signature: "async def retrieve(scope: Scope, query: str, k: int = 8, include_advisory: bool = False, token_budget: int | None = None, brain_variant: str | None = None, specialization: str | None = None, include_knowledge: bool = False) -> list[MemoryHit]"
-      description: "Scoped hybrid retrieval (vector + lexical + optional graph + optional L0 knowledge fusion), filtered by brain_variant and specialization when supplied, ranked, with provenance."
+      signature: "async def memory_search(ctx: ActorContext, query: str, *, scope: str = 'agent', tenant_id: str | None = None, domain_id: str | None = None, brain_variant: str | None = None, specialization: str | None = None, k: int = 8, token_budget: int | None = 2000, expand_graph: bool = False, include_knowledge: bool = False) -> list[MemoryHit]"
+      description: "Scoped hybrid memory retrieval backed by `Repository.get_memories` (indexable HNSW cosine + GIN `ts_lex` + escaped `ILIKE` ranking), optional `GraphPort` neighborhood expansion, and optional L0 knowledge fusion."
       errors: ["StoreUnavailable: fail closed", "AuthzError"]
-    - name: "traverse"
+    - name: "graph_neighbors"
       type: "async function"
-      signature: "async def traverse(scope: Scope, entity: EntityId, hops: int) -> list[EntityId]"
-      description: "Bounded relationship traversal via GraphPort."
-      errors: ["StoreUnavailable"]
-      note: "Graph traversal is optional for MVP: it rides on @bdd: BDD.01.03.a100 (no dedicated EARS/BDD trace) and earns its own bounded-traversal scenario once GraphPort has a real backend."
+      signature: "async def graph_neighbors(ctx: ActorContext, *, id: str, rel: str | None = None, depth: int = 1, scope: str = 'project', domain_id: str | None = None) -> Sequence[Mapping[str, Any]]"
+      description: "Bounded scope/tenant/domain-filtered relationship traversal via GraphPort with PostgreSQL recursive CTE fallback."
+      errors: ["AuthzError", "StoreUnavailable"]
+      note: "Graph traversal rides on @bdd: BDD.01.03.a100 with project/domain/scope predicates on every hop."
     - name: "knowledge_search"
       type: "async function"
-      signature: "async def knowledge_search(ctx: ActorContext, query: str, *, domain_id: str | None = None, query_vec: Sequence[float] | None = None, scope: str | None = None, limit: int = 5, modality: str | None = None, expand_graph: bool = False, graph_depth: int = 1) -> list[KBSection]"
-      description: "3-leg hybrid RRF knowledge search (pgvector cosine HNSW + ts_lex GIN BM25 + optional Neo4j/PG CTE GraphRAG neighborhood expansion across DOCUMENT, SECTION, MEDIA_BLOB, CONCEPT, and SDD nodes)."
+      signature: "async def knowledge_search(ctx: ActorContext, query: str, *, domain_id: str | None = None, query_vec: Sequence[float] | None = None, scope: str | None = None, modality: str | None = None, expand_graph: bool = False, graph_depth: int = 1, limit: int = 5) -> list[KBSection]"
+      description: "3-leg hybrid RRF (rrf_k=60) knowledge search bounded to MAX_K=100 (pgvector HNSW + ts_lex GIN BM25 + optional Neo4j/PG CTE GraphRAG neighborhood expansion across DOCUMENT, SECTION, MEDIA_BLOB, CONCEPT, and SDD nodes)."
       errors: ["AuthzError", "StoreUnavailable"]
 
 data_models:
@@ -66,16 +69,16 @@ data_models:
       fields:
         - { name: "memory_id", type: "MemoryId", required: true, description: "Result id" }
         - { name: "summary", type: "str", required: true, description: "Distilled text" }
-        - { name: "score", type: "float", required: true, description: "Fused rank score" }
-        - { name: "provenance", type: "dict", required: true, description: "Source trace" }
+        - { name: "score", type: "float", required: true, description: "Ranked retrieval score" }
+        - { name: "provenance", type: "Mapping[str, Any]", required: true, description: "Deeply frozen source trace" }
         - { name: "retrieval_id", type: "RetrievalId", required: true, description: "memory_retrievals row id (migration 0003) — pass to memory_feedback" }
         - { name: "token_count", type: "int", required: true, description: "summary token count, for budget accounting" }
 
 behavior:
   validation_rules:
-    - { rule: "Results restricted to caller scope; advisory-only memories excluded by default", source: "@ears: EARS.01.03.a100" }
+    - { rule: "Results restricted to caller scope; quarantined memories excluded by default unless internal ops inspect include_quarantined=True", source: "@ears: EARS.01.03.a100" }
   state_transitions:
-    - { from: "Query", to: "Ranked results", trigger: "vector+graph fusion", source: "@bdd: BDD.01.03.a100" }
+    - { from: "Query", to: "Ranked results", trigger: "HNSW + lexical/RRF fusion", source: "@bdd: BDD.01.03.a100" }
   error_handling:
     - { condition: "Canonical store unavailable", response: "Fail closed (no stale/unscoped data); retryable error within 500 ms", source: "@bdd: BDD.01.03.b800" }
     - { condition: "Out-of-scope target", response: "Deny, return no data, audit", source: "@bdd: BDD.01.03.e500" }
@@ -83,17 +86,19 @@ behavior:
 implementation_notes:
   constraints: ["Retrieval p95 within @threshold:PRD.01.perf.retrieval_p95", "Graph optional behind GraphPort"]
   patterns:
-    - "Rank fusion: weighted Reciprocal Rank Fusion over three legs — vector cosine (w=0.5), lexical ts_rank over memories.ts_lex (w=0.3), recency (w=0.2); score = sum(w_leg / (60 + rank_leg)); graph signal, when GraphPort has a backend, joins as a fourth leg"
-    - "Post-fusion multipliers: confidence (0..1) x scope proximity (agent 1.0, project 0.9, domain 0.8, space 0.7) x source_trust (human 1.0, tool 0.9, agent 0.8)"
-    - "Default filter: status = 'active' AND valid_to IS NULL (partial index idx_memories_tenant_live, migration 0003); include_advisory=true adds status='advisory', never quarantined/superseded"
-    - "Every returned hit writes a memory_retrievals row and carries its retrieval_id; token_budget (default @threshold:PRD.01.perf.context_token_budget ) truncates by cumulative summary tokens"
-  performance_considerations: ["Cap graph hops; cache hot scopes"]
+    - "L2 memories ranking (`Repository.get_memories`): indexable two-leg HNSW vector (`ORDER BY embedding <=> qv LIMIT pool`) and `memories.ts_lex` / escaped `ILIKE` candidate CTEs fused with `1 / (1 + cosine_dist) + min(1.0, ts_rank_cd(ts_lex, websearch_to_tsquery('english', q))) + (0.25 if ILIKE else 0.0)` and `valid_from DESC` tie-break"
+    - "L0 knowledge ranking (`Repository.search_kb_sections`): 3-leg hybrid RRF (`rrf_k = 60`) combining pgvector HNSW leg (`kb_sections` direct `ORDER BY embedding <=> qv`), `ts_lex` GIN + escaped `ILIKE` leg, and optional GraphPort/CTE hop expansion"
+    - "Default filter: status = 'active' AND valid_to IS NULL (partial index idx_memories_tenant_live, migration 0003); include_quarantined=False by default"
+    - "Every returned `memory_search` hit writes a `memory_retrievals` row and carries its `retrieval_id` (while `agent_brain_compare` skips retrieval logging); `token_budget` (default @threshold:PRD.01.perf.context_token_budget ) filters by cumulative summary tokens (`continue` past oversized hits)"
+  performance_considerations: ["Cap graph hops and knowledge_search limit (MAX_K=100); pooled connections + HNSW candidate CTEs"]
 
 tdd_contracts:
   tdd_document: "@tdd: TDD-03"
   test_files:
-    - { path: "tests/unit/test_ranking.py", covers: "fusion + advisory exclusion" }
-    - { path: "tests/e2e/test_retrieval_latency.py", covers: "BDD.01.03.a100 p95" }
+    - { path: "tests/e2e/test_retrieval.py", covers: "BDD.01.03.a100 scoped retrieval fusion & budget behavior" }
+    - { path: "tests/test_multimodal_extraction_and_graphrag.py", covers: "3-leg RRF search_kb_sections + GraphRAG expansion" }
+    - { path: "tests/integration/test_graph_integration.py", covers: "PostgreSQL recursive CTE + Neo4j graph traversal" }
+    - { path: "tests/security/test_wave_p1_integrity_runtime.py", covers: "H12 ts_lex / domain_id / budget skip regression" }
 
 traceability:
   tags: ["@spec: SPEC-03"]

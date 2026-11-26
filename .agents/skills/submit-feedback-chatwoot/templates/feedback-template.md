@@ -1,7 +1,7 @@
 # Engineering Feedback & Defect Report Template
 
 > **Purpose:** Single-standard structured defect and improvement payload for ingestion via Chatwoot API.
-> When submitted, `aidoc-flow-support-desk` transforms this report directly into an actionable GitHub Issue and GitHub Projects v2 card for autonomous resolution by `operations-assistant`.
+> When submitted, `aiops-agent-support` transforms this report directly into an actionable GitHub Issue and GitHub Projects v2 card for autonomous orchestration by `aiops-agent-pm` and implementation by `aiops-agent-dev`.
 
 ---
 

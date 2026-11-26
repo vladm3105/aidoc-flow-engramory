@@ -46,22 +46,29 @@ BEGIN
     END IF;
 END $$;
 
--- 3. Restore v_ambient_memory_active view projection
-CREATE OR REPLACE VIEW v_ambient_memory_active AS
-SELECT
-    m.id,
-    m.tenant_id,
-    m.project_id,
-    m.scope,
-    m.type AS memory_type,
-    COALESCE(m.summary, m.content_raw) AS content,
-    m.content_raw,
-    m.embedding,
-    m.embedding_model,
-    m.embedding_dims,
-    m.source_trust,
-    m.confidence,
-    m.created_at
-FROM memories m
-WHERE m.status = 'active'
-  AND m.valid_to IS NULL;
+-- 3. Restore v_ambient_memory_active view projection only if missing (avoid clobbering 0011+ views)
+DO $$
+BEGIN
+    IF to_regclass('public.v_ambient_memory_active') IS NULL THEN
+        EXECUTE $v$
+            CREATE VIEW v_ambient_memory_active AS
+            SELECT
+                m.id,
+                m.tenant_id,
+                m.project_id,
+                m.scope,
+                m.type AS memory_type,
+                COALESCE(m.summary, m.content_raw) AS content,
+                m.content_raw,
+                m.embedding,
+                m.embedding_model,
+                m.embedding_dims,
+                m.source_trust,
+                m.confidence,
+                m.created_at
+            FROM memories m
+            WHERE m.status = 'active'
+              AND m.valid_to IS NULL
+        $v$;
+    END IF;
+END $$;
