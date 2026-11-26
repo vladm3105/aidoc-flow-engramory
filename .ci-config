@@ -27,7 +27,7 @@ PROMOTION_REMOTE=github
 # The promotion PR still needs every required check; main and releases stay human (PLAN-007).
 PROMOTION_AUTONOMOUS="staging main"
 # Issue tracker forge: github|gitea. Default: GitHub in split mode, otherwise the active forge (G1).
-ISSUE_FORGE=
+ISSUE_FORGE=paperclip
 # Split forge mirror identity (PLAN-007 G4/G9): the GitHub App id that alone may push the GitHub copy of
 # dev (the key file comes from the environment, MIRROR_APP_KEY_FILE), and the Gitea account that alone
 # may push the Gitea copies of the promotion branches (task mirror --pull).

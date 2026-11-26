@@ -242,14 +242,19 @@ def test_h14_protected_ci_governance_and_workflows() -> None:
     ):
         assert not (REPO_ROOT / removed).exists(), f"Legacy file must be removed: {removed}"
 
-    standards_drift = _read(".github/workflows/standards-drift.yml")
-    assert 'SHA="' in standards_drift
-    assert "sha256sum -c -" in standards_drift
-
     for retired_gh in (
         ".github/workflows/quick-gates.yml",
         ".github/workflows/audit-trail.yml",
         ".github/workflows/bot-signoff.yml",
+        ".github/workflows/ai-review.yml",
+        ".github/workflows/auto-merge-ai-prs.yml",
+        ".github/workflows/ci.yml",
+        ".github/workflows/composition.yml",
+        ".github/workflows/docs-sync.yml",
+        ".github/workflows/labeler.yml",
+        ".github/workflows/nightly-audit.yml",
+        ".github/workflows/secret-scan.yml",
+        ".github/workflows/standards-drift.yml",
     ):
         assert not (REPO_ROOT / retired_gh).exists(), f"Retired GH workflow: {retired_gh}"
 
@@ -264,30 +269,16 @@ def test_h14_protected_ci_governance_and_workflows() -> None:
     assert "workflow_run" in gh_auto_merge
 
     branch_promo = _read(".github/workflows/branch-promotion.yml")
-    assert 'PROMOTION_TARGETS: "staging main"' in branch_promo
-
-    ci_yml = _read(".github/workflows/ci.yml")
-    assert "uv sync --locked" in ci_yml
-    assert "jdx/mise-action@" in ci_yml
+    assert "PROMOTION_TARGETS:" in branch_promo and "staging main" in branch_promo
 
     verify_yml = _read(".github/workflows/verify.yml")
     assert "branches: [staging, main]" in verify_yml
+    assert "branches: [dev]" not in verify_yml
     assert ("TO" + "DO") not in verify_yml
 
-    nightly_yml = _read(".github/workflows/nightly-audit.yml")
-    assert "vars.TRUFFLEHOG_VERIFY == 'true'" in nightly_yml
-    assert "TRUFLEHOG" not in nightly_yml
-
-    pinned_sha = "@845964a439747001b5e3febbeebde4aa5a551d20"
-    for caller in (
-        ".github/workflows/ai-review.yml",
-        ".github/workflows/auto-merge-ai-prs.yml",
-        ".github/workflows/composition.yml",
-        ".github/workflows/docs-sync.yml",
-        ".github/workflows/labeler.yml",
-        ".github/workflows/secret-scan.yml",
-    ):
-        assert pinned_sha in _read(caller), f"Unpinned reusable caller: {caller}"
+    nightly_yml = _read(".gitea/workflows/nightly-audit.yml")
+    assert "schedule:" in nightly_yml
+    assert "task audit" in nightly_yml
 
 
 # ── M3: Harness lockfile, Astro Starlight portal, portal_builder & UTS ────
