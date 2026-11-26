@@ -437,6 +437,23 @@ def _build_security_gate_headers(bearer_token: str | None = None) -> dict[str, s
     return headers
 
 
+def _assert_secure_credential_transport(
+    target_url: str,
+    uds_path: str | None,
+    headers: Mapping[str, str],
+) -> None:
+    """Reject sending Bearer credentials over plaintext HTTP TCP; require HTTPS or UDS."""
+    if "Authorization" not in headers:
+        return
+    if uds_path is not None:
+        return
+    if urllib.parse.urlparse(target_url).scheme.lower() != "https":
+        raise ValueError(
+            "Plaintext HTTP TCP is prohibited when sending Security Gate Bearer credentials; "
+            "use https:// or unix:// socket"
+        )
+
+
 def check_token_revocation(
     claims: TokenClaims,
     security_gate_url: str | None = None,
@@ -455,6 +472,8 @@ def check_token_revocation(
 
     if security_gate_url:
         target_url, uds_path = validate_security_gate_url(security_gate_url)
+        headers = _build_security_gate_headers(bearer_token)
+        _assert_secure_credential_transport(target_url, uds_path, headers)
         cache_key = f"{uds_path or ''}|{target_url}"
         cached = cache.get(cache_key) if cache is not None else None
         if cached is not None:
@@ -462,7 +481,6 @@ def check_token_revocation(
             return
         try:
             transport = httpx.HTTPTransport(uds=uds_path) if uds_path else None
-            headers = _build_security_gate_headers(bearer_token)
             with httpx.Client(timeout=2.0, follow_redirects=False, transport=transport) as client:
                 resp = client.get(target_url, headers=headers)
             revoked_set = _parse_revocation_response(resp)
@@ -495,6 +513,8 @@ async def check_token_revocation_async(
 
     if security_gate_url:
         target_url, uds_path = validate_security_gate_url(security_gate_url)
+        headers = _build_security_gate_headers(bearer_token)
+        _assert_secure_credential_transport(target_url, uds_path, headers)
         cache_key = f"{uds_path or ''}|{target_url}"
         cached = cache.get(cache_key) if cache is not None else None
         if cached is not None:
@@ -502,7 +522,6 @@ async def check_token_revocation_async(
             return
         try:
             transport = httpx.AsyncHTTPTransport(uds=uds_path) if uds_path else None
-            headers = _build_security_gate_headers(bearer_token)
             async with httpx.AsyncClient(
                 timeout=2.0, follow_redirects=False, transport=transport
             ) as client:
