@@ -20,6 +20,7 @@ from engramory.access.jwt_auth import (
     JWKSValidator,
     TokenClaims,
     check_token_revocation,
+    check_token_revocation_async,
     claims_to_actor_context,
 )
 
@@ -426,3 +427,63 @@ def test_wave_p3_token_claims_immutability_actor_and_jwt_rejections(
         )
         with pytest.raises(AuthenticationError):
             validator.validate_token(bad_exp)
+
+
+@pytest.mark.asyncio
+async def test_security_gate_revocation_bearer_header_handling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Polling Security Gate attaches Authorization Bearer only when a token is provided."""
+    import asyncio
+    from unittest.mock import MagicMock
+
+    claims = TokenClaims(
+        sub="agent-dev-01",
+        iss="https://auth-stage.aiops-flow.io/application/o/engramory/",
+        aud="engramory",
+        exp=9999999999,
+        raw_claims={"jti": "jti-ok"},
+    )
+
+    ok_resp = MagicMock()
+    ok_resp.status_code = 200
+    ok_resp.content = b'{"revocations": [], "count": 0}'
+
+    # 1. Sync + env var with "Bearer " prefix stripped case-insensitively
+    monkeypatch.setenv("SECURITY_GATE_TOKEN", "bearer gate-env-secret")
+    captured_sync: list[dict[str, str]] = []
+
+    def fake_sync_get(_self, url: str, headers: dict[str, str] | None = None):
+        captured_sync.append(dict(headers or {}))
+        return ok_resp
+
+    with patch("httpx.Client.get", new=fake_sync_get):
+        check_token_revocation(claims, security_gate_url="http://127.0.0.1:8095")
+    assert captured_sync[-1]["Authorization"] == "Bearer gate-env-secret"
+    assert captured_sync[-1]["User-Agent"] == "Engramory-Auth/1.0"
+
+    # 2. Async + explicit bearer_token kwarg overrides env
+    captured_async: list[dict[str, str]] = []
+
+    async def fake_async_get(_self, url: str, headers: dict[str, str] | None = None):
+        captured_async.append(dict(headers or {}))
+        return ok_resp
+
+    with patch("httpx.AsyncClient.get", new=fake_async_get):
+        await check_token_revocation_async(
+            claims,
+            security_gate_url="http://127.0.0.1:8095",
+            bearer_token="explicit-gate-secret",
+        )
+    assert captured_async[-1]["Authorization"] == "Bearer explicit-gate-secret"
+
+    # 3. Unset/blank omits Authorization header
+    monkeypatch.setenv("SECURITY_GATE_TOKEN", "   ")
+    with patch("httpx.Client.get", new=fake_sync_get):
+        check_token_revocation(claims, security_gate_url="http://127.0.0.1:8095")
+    assert "Authorization" not in captured_sync[-1]
+
+    with patch("httpx.AsyncClient.get", new=fake_async_get):
+        await check_token_revocation_async(claims, security_gate_url="http://127.0.0.1:8095")
+    assert "Authorization" not in captured_async[-1]
+    assert asyncio.iscoroutinefunction(check_token_revocation_async)

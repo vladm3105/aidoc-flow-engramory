@@ -425,6 +425,18 @@ def _parse_revocation_response(resp: httpx.Response) -> frozenset[str]:
     return frozenset(revoked_targets)
 
 
+def _build_security_gate_headers(bearer_token: str | None = None) -> dict[str, str]:
+    """Build Security Gate headers with optional service Bearer token (never user JWT)."""
+    headers: dict[str, str] = {"User-Agent": "Engramory-Auth/1.0"}
+    raw = bearer_token if bearer_token is not None else os.environ.get("SECURITY_GATE_TOKEN", "")
+    clean = raw.strip()
+    if clean[:7].lower() == "bearer ":
+        clean = clean[7:].strip()
+    if clean:
+        headers["Authorization"] = f"Bearer {clean}"
+    return headers
+
+
 def check_token_revocation(
     claims: TokenClaims,
     security_gate_url: str | None = None,
@@ -432,6 +444,7 @@ def check_token_revocation(
     revoked_identifiers: set[str] | None = None,
     fail_closed: bool | None = None,
     cache: RevocationCache | None = None,
+    bearer_token: str | None = None,
 ) -> None:
     """Synchronously check if token jti or agent_id has been revoked by platform kill-switch."""
     eff_fail_closed = _resolve_fail_closed(fail_closed)
@@ -449,8 +462,9 @@ def check_token_revocation(
             return
         try:
             transport = httpx.HTTPTransport(uds=uds_path) if uds_path else None
+            headers = _build_security_gate_headers(bearer_token)
             with httpx.Client(timeout=2.0, follow_redirects=False, transport=transport) as client:
-                resp = client.get(target_url, headers={"User-Agent": "Engramory-Auth/1.0"})
+                resp = client.get(target_url, headers=headers)
             revoked_set = _parse_revocation_response(resp)
             if cache is not None:
                 cache.set(cache_key, revoked_set)
@@ -470,6 +484,7 @@ async def check_token_revocation_async(
     revoked_identifiers: set[str] | None = None,
     fail_closed: bool | None = None,
     cache: RevocationCache | None = None,
+    bearer_token: str | None = None,
 ) -> None:
     """Asynchronously check if token jti or agent_id has been revoked by platform kill-switch."""
     eff_fail_closed = _resolve_fail_closed(fail_closed)
@@ -487,10 +502,11 @@ async def check_token_revocation_async(
             return
         try:
             transport = httpx.AsyncHTTPTransport(uds=uds_path) if uds_path else None
+            headers = _build_security_gate_headers(bearer_token)
             async with httpx.AsyncClient(
                 timeout=2.0, follow_redirects=False, transport=transport
             ) as client:
-                resp = await client.get(target_url, headers={"User-Agent": "Engramory-Auth/1.0"})
+                resp = await client.get(target_url, headers=headers)
             revoked_set = _parse_revocation_response(resp)
             if cache is not None:
                 cache.set(cache_key, revoked_set)
